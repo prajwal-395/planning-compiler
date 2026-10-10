@@ -29,6 +29,9 @@ expression: "String::from_utf8(output.stdout).unwrap()"
         "low": 4.0
       },
       "selected": false,
+      "sources": [
+        "ci"
+      ],
       "stale": 0
     }
   ],

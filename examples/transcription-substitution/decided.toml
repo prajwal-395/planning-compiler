@@ -1,0 +1,116 @@
+ir_version = 0
+
+[plan]
+id = "transcription-substitution-decided"
+title = "Transcriber substitution study, decided (synthetic)"
+description = "Synthetic post-ruling state: the hybrid is accepted, WhisperX stays as fallback, and the confidence gap is made LOUD with a confidence_notice task. All figures invented; no real Ren data."
+
+[objective]
+root_task = "ship-reels"
+weights = { duration_minutes = 1.0 }
+
+[[objective.acceptance]]
+kind = "manual"
+description = "Captain rules the hybrid close enough and keeps WhisperX as fallback."
+
+[[artifact]]
+name = "transcript"
+fields = ["words", "timings", "segment_confidence"]
+
+[[artifact]]
+name = "confidence-notice"
+fields = ["notice"]
+
+[[artifact]]
+name = "reel"
+fields = ["cut"]
+
+[[task]]
+id = "ship-reels"
+title = "Ship the reels"
+state = "decomposed"
+
+# Narrowed to what the selected hybrid actually emits. WhisperX
+# over-produces segment_confidence, which E008 permits: a capability may
+# deliver more than the task promises. The narrowing itself is the decision
+# `pc diff plan.toml decided.toml` surfaces.
+[[task]]
+id = "transcribe-footage"
+title = "Transcribe footage"
+state = "resolved"
+produces = [{ artifact = "transcript", fields = ["words", "timings"] }]
+
+# No longer consumes segment_confidence: the confidence gap is made LOUD
+# through the notice below instead of the selector prompt.
+[[task]]
+id = "select-lines"
+title = "Select lines"
+state = "open"
+consumes = [
+  { artifact = "transcript", fields = ["words"] },
+  { artifact = "confidence-notice", fields = ["notice"] },
+]
+
+# Open work left by the ruling: someone still has to wire the notice in.
+[[task]]
+id = "emit-confidence-notice"
+title = "Emit confidence notice"
+state = "open"
+consumes = [{ artifact = "transcript", fields = ["words"] }]
+produces = [{ artifact = "confidence-notice", fields = ["notice"] }]
+
+[[method]]
+id = "reels-pipeline"
+task = "ship-reels"
+kind = "decompose"
+subtasks = ["transcribe-footage", "emit-confidence-notice", "select-lines"]
+order_edges = [
+  { from = "transcribe-footage", to = "emit-confidence-notice" },
+  { from = "emit-confidence-notice", to = "select-lines" },
+  { from = "transcribe-footage", to = "select-lines" },
+]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-whisperx"
+task = "transcribe-footage"
+kind = "invoke"
+capability = "whisperx@3"
+status = "accepted"
+provenance = "human:test"
+assumptions = ["Kept as fallback; fallback triggers when the hybrid emits nothing usable."]
+
+[[method]]
+id = "via-hybrid"
+task = "transcribe-footage"
+kind = "invoke"
+capability = "voz-hybrid@1"
+status = "accepted"
+provenance = "agent:claude"
+assumptions = [
+  "Far faster and close enough: every accuracy figure is a distance from WhisperX output, never more accurate.",
+  "Hybrid accuracy is measured as distance from the incumbent, not as absolute accuracy.",
+  "WhisperX stays as fallback; fallback triggers when the hybrid emits nothing usable.",
+  "The hybrid emits no segment_confidence; the confidence gap is made LOUD with a confidence_notice.",
+]
+
+[[capability]]
+id = "whisperx@3"
+kind = "tool"
+version = "3"
+produces = [{ artifact = "transcript", fields = ["words", "timings", "segment_confidence"] }]
+estimates = [
+  { metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.10, high = 0.20, provenance = "declared" },
+]
+
+[[capability]]
+id = "voz-hybrid@1"
+kind = "tool"
+version = "1"
+produces = [{ artifact = "transcript", fields = ["words", "timings"] }]
+estimates = [
+  { metric = "duration_minutes", low = 13.0, likely = 15.0, high = 19.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.10, high = 0.20, provenance = "declared" },
+]

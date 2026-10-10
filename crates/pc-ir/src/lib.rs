@@ -17,7 +17,15 @@ pub const IR_VERSION: u32 = 0;
 
 /// Metrics v0 understands. There is deliberately no human-time metric:
 /// people are out of scope for v0 (see `docs/ir.md`).
-pub const KNOWN_METRICS: &[&str] = &["duration_minutes", "money_usd", "failure_risk"];
+/// `accuracy_distance_from_incumbent` is a relative figure (how far output
+/// lands from the incumbent's), never an absolute risk or accuracy, so it
+/// stays its own metric rather than folding into `failure_risk`.
+pub const KNOWN_METRICS: &[&str] = &[
+    "duration_minutes",
+    "money_usd",
+    "failure_risk",
+    "accuracy_distance_from_incumbent",
+];
 
 /// Canonical unit for a known metric, the only unit P1 accepts for it.
 #[must_use]
@@ -25,7 +33,7 @@ pub fn canonical_unit(metric: &str) -> Option<&'static str> {
     match metric {
         "duration_minutes" => Some("minutes"),
         "money_usd" => Some("usd"),
-        "failure_risk" => Some("ratio"),
+        "failure_risk" | "accuracy_distance_from_incumbent" => Some("ratio"),
         _ => None,
     }
 }

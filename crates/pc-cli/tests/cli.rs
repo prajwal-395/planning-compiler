@@ -212,7 +212,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     // makespan: two observations, none stale, agreeing with the guess.
     let text = explain("capability:cargo-test@1");
     assert!(
-        text.contains("provenance cargo-test@1 duration_minutes: predicted 2.000/5.000/15.000 vs measured 3.000/3.500/4.000 (n=2)"),
+        text.contains("provenance cargo-test@1 duration_minutes: predicted 2.000/5.000/15.000 vs measured 3.000/3.500/4.000 (n=2, sources: ci)"),
         "{text}"
     );
 }
@@ -388,6 +388,383 @@ fn evidence_provenance_golden() {
         "evidence-provenance-explain-json",
         String::from_utf8(output.stdout).unwrap()
     );
+}
+
+/// Step 6: `pc frontier` ranks open tasks, pending proposals and blocked
+/// alternatives on the transcription fixture, pinned by snapshot.
+#[test]
+fn frontier_golden() {
+    let mut cmd = Command::cargo_bin("pc").unwrap();
+    cmd.current_dir(workspace_root());
+    let output = cmd
+        .arg("frontier")
+        .arg("examples/transcription-substitution/plan.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    insta::assert_snapshot!("frontier", String::from_utf8(output.stdout).unwrap());
+
+    // `--json` carries scores and kinds.
+    let json = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("frontier")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let items = report["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    let scores: Vec<f64> = items
+        .iter()
+        .map(|item| item["score"].as_f64().unwrap())
+        .collect();
+    let mut ranked = scores.clone();
+    ranked.sort_by(|a, b| b.total_cmp(a));
+    assert_eq!(scores, ranked);
+    let kinds: Vec<&str> = items
+        .iter()
+        .map(|item| item["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"open-task"));
+    assert!(kinds.contains(&"proposal"));
+    assert!(kinds.contains(&"blocked-alternative"));
+
+    // The frontier is deterministic: two runs give byte-identical JSON.
+    let again = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("frontier")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(json.stdout, again.stdout);
+}
+
+/// Step 6, criterion (a): `pc impact` with the naive accept flags the lost
+/// `segment_confidence` output and names its consumer, without editing files.
+#[test]
+fn impact_flags_dropped_output_with_consumers() {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("impact")
+        .arg("examples/transcription-substitution/changes/accept-hybrid.json")
+        .arg("examples/transcription-substitution/plan.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "the diagnostics are the finding, not a failure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("applied: accepted method:via-hybrid"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("affected tasks: select-lines, ship-reels, transcribe-footage"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "contract method:via-hybrid: would drop transcript.segment_confidence (consumed by task:select-lines)"
+        ),
+        "{stdout}"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("error[E008]"), "{stderr}");
+    assert!(stderr.contains("transcript.segment_confidence"), "{stderr}");
+
+    // The JSON report carries the same contract note structurally.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("impact")
+        .arg("examples/transcription-substitution/changes/accept-hybrid.json")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["clean"], false);
+    assert_eq!(
+        report["applied"],
+        serde_json::json!(["accepted method:via-hybrid"])
+    );
+    assert_eq!(
+        report["affected_tasks"],
+        serde_json::json!(["select-lines", "ship-reels", "transcribe-footage"])
+    );
+    let notes = report["contract_notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["method"], "via-hybrid");
+    assert_eq!(
+        notes[0]["missing_outputs"],
+        serde_json::json!(["transcript.segment_confidence"])
+    );
+    assert_eq!(notes[0]["consumers"], serde_json::json!(["select-lines"]));
+}
+
+/// Step 6: `pc impact` refuses changes that name nothing or recommit work.
+#[test]
+fn impact_rejects_bad_changes() {
+    let dir = scratch_dir("impact-bad");
+    let change = dir.join("change.json");
+    let run = |body: &str| {
+        std::fs::write(&change, body).unwrap();
+        Command::cargo_bin("pc")
+            .unwrap()
+            .current_dir(workspace_root())
+            .arg("impact")
+            .arg(&change)
+            .arg("examples/transcription-substitution/plan.toml")
+            .output()
+            .unwrap()
+    };
+    let output = run(r#"{"accept_method": ["ghost"]}"#);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("invalid change: change names unknown method `ghost`")
+    );
+    let output = run(r#"{"accept_method": ["via-whisperx"]}"#);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("only proposed or derived methods can be accepted")
+    );
+    let output = run(r#"{"accept_method": "via-hybrid"}"#);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("cannot parse")
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 6: `pc impact` keeps accuracy distance apart from failure risk and
+/// labels it as a distance from the incumbent in the totals movement.
+#[test]
+fn impact_labels_accuracy_distance() {
+    let dir = scratch_dir("impact-distance");
+    std::fs::copy(
+        workspace_root().join("examples/transcription-substitution/decided.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let evidence: Vec<String> = [
+        ("duration_minutes", 3.0, "minutes"),
+        ("duration_minutes", 4.0, "minutes"),
+        ("duration_minutes", 5.0, "minutes"),
+        ("accuracy_distance_from_incumbent", 0.08, "ratio"),
+        ("accuracy_distance_from_incumbent", 0.12, "ratio"),
+    ]
+    .iter()
+    .map(|(metric, value, unit)| {
+        format!(
+            r#"{{"subject":"capability:voz-hybrid@1","metric":"{metric}","value":{value},"unit":"{unit}","time":"2026-09-11T00:00:00Z","source":"distance-from-incumbent","artifact_hash":null}}"#
+        )
+    })
+    .collect();
+    let change = dir.join("change.json");
+    std::fs::write(
+        &change,
+        format!(r#"{{"add_evidence": [{}]}}"#, evidence.join(",")),
+    )
+    .unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("impact")
+        .arg(&change)
+        .arg(dir.join("plan.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("selection transcribe-footage: via-whisperx -> via-hybrid"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "accuracy_distance_from_incumbent (distance from the incumbent, not absolute accuracy): expected 0.000 -> 0.100 (+0.100)"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("failure_risk"), "{text}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 6: `pc diff` between the before and decided plans shows the status
+/// flip, the selection flip and the makespan movement, pinned by snapshot.
+#[test]
+fn diff_before_after_decision() {
+    let mut cmd = Command::cargo_bin("pc").unwrap();
+    cmd.current_dir(workspace_root());
+    let output = cmd
+        .arg("diff")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("examples/transcription-substitution/decided.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("method status via-hybrid: proposed -> accepted"),
+        "{text}"
+    );
+    assert!(
+        text.contains("selection transcribe-footage: via-whisperx -> via-hybrid"),
+        "{text}"
+    );
+    assert!(
+        text.contains("makespan: 12.000 -> 4.000 minutes (-8.000)"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "accuracy_distance_from_incumbent (distance from the incumbent, not absolute accuracy): expected 0.000 -> 0.100 (+0.100)"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("failure_risk"), "{text}");
+    insta::assert_snapshot!("transcription-diff", text);
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("diff")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("examples/transcription-substitution/decided.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["method_status_changes"],
+        serde_json::json!([{"method": "via-hybrid", "before": "proposed", "after": "accepted"}])
+    );
+    assert_eq!(report["makespan_before"], serde_json::json!(12.0));
+    assert_eq!(report["makespan_after"], serde_json::json!(4.0));
+    assert_eq!(report["makespan_delta"], serde_json::json!(-8.0));
+
+    // Identical plans report no differences.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("diff")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("examples/transcription-substitution/plan.toml")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("no differences")
+    );
+}
+
+/// Step 6 proof target: the synthetic transcription-substitution fixture
+/// passes report criteria (a)-(c).
+#[test]
+fn transcription_substitution_criteria() {
+    // (b) P6 prefers the hybrid on recorded duration evidence: the decided
+    // plan compiles to via-hybrid with evidence, and falls back to
+    // via-whisperx on declared guesses alone.
+    let explain = |target: &str, plan: &std::path::Path| {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg("explain")
+            .arg(target)
+            .arg(plan)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let decided = workspace_root().join("examples/transcription-substitution/decided.toml");
+    let text = explain("task:transcribe-footage", &decided);
+    assert!(text.contains("uses method:via-hybrid"), "{text}");
+
+    // The bare decided plan without its evidence log still prefers the
+    // incumbent on declared guesses, so the flip above is evidence-driven.
+    let bare_dir = scratch_dir("decided-bare");
+    std::fs::copy(&decided, bare_dir.join("plan.toml")).unwrap();
+    let bare = explain("task:transcribe-footage", &bare_dir.join("plan.toml"));
+    assert!(bare.contains("uses method:via-whisperx"), "{bare}");
+    std::fs::remove_dir_all(&bare_dir).unwrap();
+
+    // (b) continued: hybrid accuracy is labelled as distance from the
+    // incumbent, never as absolute accuracy.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("explain")
+        .arg("capability:voz-hybrid@1")
+        .arg(&decided)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let provenance = value["provenance"].as_array().unwrap();
+    let distance = provenance
+        .iter()
+        .find(|row| row["metric"] == "accuracy_distance_from_incumbent")
+        .expect("accuracy distance provenance");
+    assert_eq!(distance["observations"], 2);
+    assert_eq!(
+        distance["sources"],
+        serde_json::json!(["distance-from-incumbent"])
+    );
+    let risk = provenance
+        .iter()
+        .find(|row| row["metric"] == "failure_risk")
+        .expect("failure_risk provenance");
+    assert_eq!(risk["basis"], "declared", "{risk}");
+    assert_eq!(risk["observations"], 0, "{risk}");
+    let text = explain("method:via-hybrid", &decided);
+    assert!(
+        text.contains("measured as distance from the incumbent, not as absolute accuracy"),
+        "{text}"
+    );
+
+    // (c) Every trade-off the #1179 ruling names is present in pc explain:
+    // speed, distance from WhisperX, fallback triggers, confidence gap.
+    for phrase in [
+        "Far faster",
+        "distance from WhisperX",
+        "fallback triggers",
+        "confidence gap is made LOUD",
+    ] {
+        assert!(text.contains(phrase), "missing `{phrase}` in:\n{text}");
+    }
 }
 
 /// A scratch plan directory for `pc record` tests, under the system temp

@@ -1,0 +1,14 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: text
+---
+diff: examples/transcription-substitution/plan.toml vs examples/transcription-substitution/decided.toml
+tasks added: emit-confidence-notice
+tasks changed: select-lines, transcribe-footage
+method status via-hybrid: proposed -> accepted
+method content changed: reels-pipeline
+method content changed: via-whisperx
+selection transcribe-footage: via-whisperx -> via-hybrid
+makespan: 12.000 -> 4.000 minutes (-8.000)
+accuracy_distance_from_incumbent (distance from the incumbent, not absolute accuracy): expected 0.000 -> 0.100 (+0.100)
+duration_minutes: expected 12.000 -> 4.000 (-8.000)

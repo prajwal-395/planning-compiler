@@ -16,7 +16,8 @@ struct Cli {
     command: Commands,
 }
 
-/// Available commands. Later-step commands are added with their passes.
+/// Available commands. Step-6 commands rank the frontier and preview and
+/// compare plans; the step-7 proposal loop arrives later.
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run passes P1-P5 over a plan file or directory.
@@ -68,6 +69,46 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    /// Rank unresolved work (P8): open tasks, pending proposals,
+    /// unmeasured critical-path cost and blocked alternatives.
+    Frontier {
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the ranked frontier as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Maximum exact P6 solve time in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        selection_time_budget_ms: u64,
+    },
+    /// Preview a hypothetical change (P9) without editing any files.
+    Impact {
+        /// JSON file holding the change (accept_method, add_evidence).
+        change: PathBuf,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the impact report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Maximum exact P6 solve time in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        selection_time_budget_ms: u64,
+    },
+    /// Compare two plans (P9): structure, selection, totals and diagnostics.
+    Diff {
+        /// First plan file or directory.
+        a: PathBuf,
+        /// Second plan file or directory.
+        b: PathBuf,
+        /// Emit the diff report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Maximum exact P6 solve time in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        selection_time_budget_ms: u64,
+    },
 }
 
 fn main() {
@@ -87,6 +128,23 @@ fn main() {
             selection_time_budget_ms,
         } => run_explain(&path, &target, json, selection_time_budget_ms),
         Commands::Record { evidence, path } => run_record(&evidence, &path),
+        Commands::Frontier {
+            path,
+            json,
+            selection_time_budget_ms,
+        } => run_frontier(&path, json, selection_time_budget_ms),
+        Commands::Impact {
+            change,
+            path,
+            json,
+            selection_time_budget_ms,
+        } => run_impact(&change, &path, json, selection_time_budget_ms),
+        Commands::Diff {
+            a,
+            b,
+            json,
+            selection_time_budget_ms,
+        } => run_diff(&a, &b, json, selection_time_budget_ms),
     }
 }
 
@@ -182,7 +240,8 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
             continue;
         };
         println!(
-            "{metric}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{})",
+            "{}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{})",
+            metric_label(metric),
             range.low,
             range.likely,
             range.high,
@@ -295,9 +354,14 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
                     } else {
                         String::new()
                     };
+                    let sources = if row.sources.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", sources: {}", row.sources.join(", "))
+                    };
                     format!(
-                        "{:.3}/{:.3}/{:.3} (n={}{})",
-                        m.low, m.likely, m.high, row.observations, stale
+                        "{:.3}/{:.3}/{:.3} (n={}{stale}{sources})",
+                        m.low, m.likely, m.high, row.observations,
                     )
                 });
             let contradicts = if row.contradicts_declared {
@@ -456,5 +520,321 @@ fn run_schema(out: Option<&std::path::Path>) {
         }
     } else {
         print!("{text}");
+    }
+}
+
+/// Human label for a totals metric: relative metrics name their basis so
+/// they never read as absolute figures.
+fn metric_label(metric: &str) -> String {
+    if metric == "accuracy_distance_from_incumbent" {
+        format!("{metric} (distance from the incumbent, not absolute accuracy)")
+    } else {
+        metric.to_string()
+    }
+}
+
+/// Handler for `pc frontier`.
+fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
+    let (loaded, _) = load_checked(path);
+    let compiled = match pc_core::compile_with_budget(
+        &loaded.doc,
+        std::time::Duration::from_millis(selection_time_budget_ms),
+    ) {
+        Ok(compiled) => compiled,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let report = pc_core::frontier(&loaded.doc, &compiled);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "frontier: {} item{} ({})",
+        report.items.len(),
+        if report.items.len() == 1 { "" } else { "s" },
+        loaded.display_path,
+    );
+    for item in &report.items {
+        println!(
+            "{:.3} {} [{}]{}: {}",
+            item.score,
+            item.subject,
+            item.kind,
+            if item.critical { " (critical)" } else { "" },
+            item.reason,
+        );
+    }
+}
+
+/// Handler for `pc impact`.
+fn run_impact(
+    change_path: &std::path::Path,
+    path: &std::path::Path,
+    json: bool,
+    selection_time_budget_ms: u64,
+) {
+    let (loaded, _) = load_checked(path);
+    let text = match std::fs::read_to_string(change_path) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error: cannot read `{}`: {e}", change_path.display());
+            std::process::exit(1);
+        }
+    };
+    let change: pc_core::Change = match serde_json::from_str(&text) {
+        Ok(change) => change,
+        Err(e) => {
+            eprintln!(
+                "error: cannot parse `{}` as a change: {e}",
+                change_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let report = match pc_core::impact(
+        &loaded.doc,
+        &change,
+        &loaded.display_path,
+        &loaded.text,
+        std::time::Duration::from_millis(selection_time_budget_ms),
+    ) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("error: invalid change: {e}");
+            std::process::exit(1);
+        }
+    };
+    if report.clean && report.revised.is_none() {
+        eprintln!(
+            "error: {}",
+            report
+                .revised_error
+                .as_deref()
+                .unwrap_or("recompilation failed")
+        );
+        std::process::exit(1);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "impact: {} on {}",
+        change_path.display(),
+        loaded.display_path
+    );
+    for note in &report.applied {
+        println!("applied: {note}");
+    }
+    if report.affected_tasks.is_empty() {
+        println!("affected tasks: none");
+    } else {
+        println!("affected tasks: {}", report.affected_tasks.join(", "));
+    }
+    for diag in &report.diagnostics {
+        eprintln!("{}", pc_core::render_human(diag));
+    }
+    for note in &report.contract_notes {
+        let mut missing = note.missing_outputs.clone();
+        missing.extend(note.missing_inputs.iter().cloned());
+        let consumers = if note.consumers.is_empty() {
+            "no live task consumes them".to_string()
+        } else {
+            format!(
+                "consumed by {}",
+                note.consumers
+                    .iter()
+                    .map(|c| format!("task:{c}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        println!(
+            "contract method:{}: would drop {} ({consumers})",
+            note.method,
+            missing.join(", "),
+        );
+    }
+    for change in &report.selection_changes {
+        println!(
+            "selection {}: {} -> {}",
+            change.task,
+            change.before.as_deref().unwrap_or("(unneeded)"),
+            change.after.as_deref().unwrap_or("(unneeded)"),
+        );
+    }
+    for delta in &report.totals_delta {
+        if delta.delta == 0.0 {
+            continue;
+        }
+        println!(
+            "{}: expected {:.3} -> {:.3} ({:+.3})",
+            metric_label(&delta.metric),
+            delta.before,
+            delta.after,
+            delta.delta,
+        );
+    }
+    if let Some(delta) = report.makespan_delta {
+        if delta == 0.0 {
+            return;
+        }
+        let (before, after) = report
+            .baseline
+            .as_ref()
+            .zip(report.revised.as_ref())
+            .map(|(a, b)| (a.makespan_minutes, b.makespan_minutes))
+            .unwrap_or((0.0, 0.0));
+        println!("makespan: {before:.3} -> {after:.3} minutes ({delta:+.3})");
+    }
+}
+
+/// Load one diff side: parse errors exit 1, but diagnostics are data and
+/// stay in the report so failing plans can still be compared.
+fn load_side(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passes::Report) {
+    let loaded = match pc_store::load(path) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("error[E000]: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut doc = loaded.doc.clone();
+    let evidence_log = loaded
+        .evidence_file
+        .as_deref()
+        .map(|file| pc_core::passes::EvidenceLog {
+            file,
+            lines: &loaded.evidence_lines,
+        });
+    let report = pc_core::passes::check(&loaded.display_path, &loaded.text, &mut doc, evidence_log);
+    let mut loaded = loaded;
+    loaded.doc = doc;
+    (loaded, report)
+}
+
+/// Handler for `pc diff`.
+fn run_diff(a: &std::path::Path, b: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
+    let budget = std::time::Duration::from_millis(selection_time_budget_ms);
+    let (loaded_a, report_a) = load_side(a);
+    let (loaded_b, report_b) = load_side(b);
+    let compile_side = |loaded: &pc_store::LoadedPlan, clean: bool| {
+        if !clean {
+            return None;
+        }
+        match pc_core::compile_with_budget(&loaded.doc, budget) {
+            Ok(compiled) => Some(compiled),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    };
+    let compiled_a = compile_side(&loaded_a, report_a.ok());
+    let compiled_b = compile_side(&loaded_b, report_b.ok());
+    let report = pc_core::diff(
+        &loaded_a.doc,
+        compiled_a.as_ref(),
+        &report_a.diagnostics,
+        &loaded_b.doc,
+        compiled_b.as_ref(),
+        &report_b.diagnostics,
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "diff: {} vs {}",
+        loaded_a.display_path, loaded_b.display_path
+    );
+    let mut empty = true;
+    let mut section = |label: &str, values: &[String]| {
+        if !values.is_empty() {
+            empty = false;
+            println!("{label}: {}", values.join(", "));
+        }
+    };
+    section("tasks added", &report.tasks_added);
+    section("tasks removed", &report.tasks_removed);
+    section("tasks changed", &report.tasks_changed);
+    section("capabilities added", &report.capabilities_added);
+    section("capabilities removed", &report.capabilities_removed);
+    section("capabilities changed", &report.capabilities_changed);
+    section("methods added", &report.methods_added);
+    section("methods removed", &report.methods_removed);
+    for change in &report.method_status_changes {
+        empty = false;
+        println!(
+            "method status {}: {} -> {}",
+            change.method, change.before, change.after,
+        );
+    }
+    for change in &report.method_content_changes {
+        empty = false;
+        println!("method content changed: {}", change.method);
+    }
+    for change in &report.selection_changes {
+        empty = false;
+        println!(
+            "selection {}: {} -> {}",
+            change.task,
+            change.before.as_deref().unwrap_or("(unneeded)"),
+            change.after.as_deref().unwrap_or("(unneeded)"),
+        );
+    }
+    if let (Some(before), Some(after), Some(delta)) = (
+        report.makespan_before,
+        report.makespan_after,
+        report.makespan_delta,
+    ) {
+        // Zero movement is not a difference: identical plans (and
+        // coincidentally equal makespans) report nothing here.
+        if delta != 0.0 {
+            empty = false;
+            println!("makespan: {before:.3} -> {after:.3} minutes ({delta:+.3})");
+        }
+    }
+    for delta in &report.totals_delta {
+        if delta.delta == 0.0 {
+            continue;
+        }
+        empty = false;
+        println!(
+            "{}: expected {:.3} -> {:.3} ({:+.3})",
+            metric_label(&delta.metric),
+            delta.before,
+            delta.after,
+            delta.delta,
+        );
+    }
+    for diag in &report.diagnostics_added {
+        empty = false;
+        println!(
+            "diagnostic added: {}",
+            pc_core::render_human(diag).replace('\n', " ")
+        );
+    }
+    for diag in &report.diagnostics_removed {
+        empty = false;
+        println!(
+            "diagnostic removed: {}",
+            pc_core::render_human(diag).replace('\n', " ")
+        );
+    }
+    if empty {
+        println!("no differences");
     }
 }

@@ -33,8 +33,10 @@ use serde::{Deserialize, Serialize};
 /// the same capability and metric count as stale.
 pub const STALE_AFTER_DAYS: i64 = 90;
 
-/// One attributed observation: its timestamp (when it parses) and value.
-type Observation = (Option<chrono::DateTime<chrono::FixedOffset>>, f64);
+/// One attributed observation: its timestamp (when it parses), value and
+/// source. Sources travel into profiles so provenance can name the
+/// measurement basis (for example a distance from an incumbent).
+type Observation = (Option<chrono::DateTime<chrono::FixedOffset>>, f64, String);
 
 /// Observations grouped by `(capability, metric)`, in sorted order.
 type ObservationGroups = BTreeMap<(String, String), Vec<Observation>>;
@@ -104,6 +106,9 @@ pub struct CapabilityProfile {
     pub effective: Option<EffectiveEstimate>,
     /// True when the measured median falls outside declared `[low, high]`.
     pub contradicts_declared: bool,
+    /// Sorted unique evidence sources behind `measured` (empty when
+    /// declared-only).
+    pub sources: Vec<String>,
 }
 
 /// `task:<id>` evidence P5 could not attribute: the task's accepted invoke
@@ -237,10 +242,11 @@ pub fn estimate(doc: &PlanDoc) -> EstimateReport {
             }
         }
         for cap in targets {
-            groups
-                .entry((cap, ev.metric.clone()))
-                .or_default()
-                .push((time, ev.value));
+            groups.entry((cap, ev.metric.clone())).or_default().push((
+                time,
+                ev.value,
+                ev.source.clone(),
+            ));
         }
     }
     let mut keys: BTreeSet<(String, String)> = groups.keys().cloned().collect();
@@ -273,17 +279,17 @@ pub fn estimate(doc: &PlanDoc) -> EstimateReport {
         let measured = groups
             .get(&(capability.clone(), metric.clone()))
             .map(|records| {
-                let mut values: Vec<f64> = records.iter().map(|(_, v)| *v).collect();
+                let mut values: Vec<f64> = records.iter().map(|(_, v, _)| *v).collect();
                 values.sort_by(f64::total_cmp);
                 let likely = median(&values);
                 let (low, high) = (values[0], values[values.len() - 1]);
-                let newest = records.iter().filter_map(|(t, _)| *t).max();
+                let newest = records.iter().filter_map(|(t, _, _)| *t).max();
                 let stale = match newest {
                     Some(max) => {
                         let cutoff = max - chrono::Duration::days(STALE_AFTER_DAYS);
                         records
                             .iter()
-                            .filter(|(t, _)| t.is_some_and(|t| t < cutoff))
+                            .filter(|(t, _, _)| t.is_some_and(|t| t < cutoff))
                             .count() as u64
                     }
                     None => 0,
@@ -320,6 +326,18 @@ pub fn estimate(doc: &PlanDoc) -> EstimateReport {
             }),
             (None, None) => None,
         };
+        let sources: Vec<String> = groups
+            .get(&(capability.clone(), metric.clone()))
+            .map(|records| {
+                records
+                    .iter()
+                    .map(|(_, _, source)| source.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
         profiles.push(CapabilityProfile {
             capability,
             metric,
@@ -327,6 +345,7 @@ pub fn estimate(doc: &PlanDoc) -> EstimateReport {
             measured,
             effective,
             contradicts_declared,
+            sources,
         });
     }
     let names = |set: Option<&BTreeSet<&str>>| -> Vec<String> {

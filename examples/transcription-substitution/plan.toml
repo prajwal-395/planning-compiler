@@ -1,0 +1,97 @@
+ir_version = 0
+
+[plan]
+id = "transcription-substitution"
+title = "Transcriber substitution study (synthetic)"
+description = "Synthetic version of Ren's WhisperX-to-hybrid switch (report 3.5). Before-state: WhisperX accepted, hybrid proposed. All figures invented; no real Ren data."
+
+[objective]
+root_task = "ship-reels"
+weights = { duration_minutes = 1.0 }
+
+[[objective.acceptance]]
+kind = "manual"
+description = "Captain rules the hybrid close enough and keeps WhisperX as fallback."
+
+[[artifact]]
+name = "transcript"
+fields = ["words", "timings", "segment_confidence"]
+
+[[artifact]]
+name = "reel"
+fields = ["cut"]
+
+[[task]]
+id = "ship-reels"
+title = "Ship the reels"
+state = "decomposed"
+
+[[task]]
+id = "transcribe-footage"
+title = "Transcribe footage"
+state = "resolved"
+produces = [{ artifact = "transcript", fields = ["words", "timings", "segment_confidence"] }]
+
+[[task]]
+id = "select-lines"
+title = "Select lines"
+state = "open"
+consumes = [{ artifact = "transcript", fields = ["words", "segment_confidence"] }]
+
+[[method]]
+id = "reels-pipeline"
+task = "ship-reels"
+kind = "decompose"
+subtasks = ["transcribe-footage", "select-lines"]
+order_edges = [{ from = "transcribe-footage", to = "select-lines" }]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-whisperx"
+task = "transcribe-footage"
+kind = "invoke"
+capability = "whisperx@3"
+status = "accepted"
+provenance = "human:test"
+
+# The proposed substitution. Its assumptions record the four trade-offs from
+# the #1179 ruling: speed, distance from the incumbent, fallback triggers,
+# and the confidence gap made LOUD.
+[[method]]
+id = "via-hybrid"
+task = "transcribe-footage"
+kind = "invoke"
+capability = "voz-hybrid@1"
+status = "proposed"
+provenance = "agent:claude"
+assumptions = [
+  "Far faster and close enough: every accuracy figure is a distance from WhisperX output, never more accurate.",
+  "Hybrid accuracy is measured as distance from the incumbent, not as absolute accuracy.",
+  "WhisperX stays as fallback; fallback triggers when the hybrid emits nothing usable.",
+  "The hybrid emits no segment_confidence; the confidence gap is made LOUD with a confidence_notice.",
+]
+
+[[capability]]
+id = "whisperx@3"
+kind = "tool"
+version = "3"
+produces = [{ artifact = "transcript", fields = ["words", "timings", "segment_confidence"] }]
+estimates = [
+  { metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.10, high = 0.20, provenance = "declared" },
+]
+
+# On declared guesses alone the hybrid looks worse (expected 15.333 vs
+# 12.333 minutes), so the recorded duration evidence has to move the
+# decision. It produces no segment_confidence: accepting via-hybrid as
+# written must fail P2 with E008 naming select-lines as the consumer.
+[[capability]]
+id = "voz-hybrid@1"
+kind = "tool"
+version = "1"
+produces = [{ artifact = "transcript", fields = ["words", "timings"] }]
+estimates = [
+  { metric = "duration_minutes", low = 13.0, likely = 15.0, high = 19.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.10, high = 0.20, provenance = "declared" },
+]

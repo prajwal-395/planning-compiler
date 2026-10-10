@@ -1,0 +1,8 @@
+{"subject":"capability:whisperx@3","metric":"duration_minutes","value":11.0,"unit":"minutes","time":"2026-09-10T00:00:00Z","source":"reel-eval","artifact_hash":null}
+{"subject":"capability:whisperx@3","metric":"duration_minutes","value":12.0,"unit":"minutes","time":"2026-09-11T00:00:00Z","source":"reel-eval","artifact_hash":null}
+{"subject":"capability:whisperx@3","metric":"duration_minutes","value":13.0,"unit":"minutes","time":"2026-09-12T00:00:00Z","source":"reel-eval","artifact_hash":null}
+{"subject":"capability:voz-hybrid@1","metric":"duration_minutes","value":3.0,"unit":"minutes","time":"2026-09-10T00:00:00Z","source":"reel-eval","artifact_hash":null}
+{"subject":"capability:voz-hybrid@1","metric":"duration_minutes","value":4.0,"unit":"minutes","time":"2026-09-11T00:00:00Z","source":"reel-eval","artifact_hash":null}
+{"subject":"capability:voz-hybrid@1","metric":"duration_minutes","value":5.0,"unit":"minutes","time":"2026-09-12T00:00:00Z","source":"reel-eval","artifact_hash":null}
+{"subject":"capability:voz-hybrid@1","metric":"accuracy_distance_from_incumbent","value":0.08,"unit":"ratio","time":"2026-09-11T00:00:00Z","source":"distance-from-incumbent","artifact_hash":null}
+{"subject":"capability:voz-hybrid@1","metric":"accuracy_distance_from_incumbent","value":0.12,"unit":"ratio","time":"2026-09-12T00:00:00Z","source":"distance-from-incumbent","artifact_hash":null}

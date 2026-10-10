@@ -87,6 +87,11 @@ pub struct ProvenanceRow {
     pub basis: String,
     /// True when a selected method invokes this capability.
     pub selected: bool,
+    /// Sorted unique evidence sources behind `measured` (empty when
+    /// declared-only). Names the measurement basis, for example evidence
+    /// recorded as a distance from an incumbent rather than an absolute
+    /// accuracy figure.
+    pub sources: Vec<String>,
 }
 
 /// Roll-ups and CPM timing for the reachable accepted plan.
@@ -120,6 +125,9 @@ pub struct CompiledPlan {
     pub selection_status: String,
     /// P6 time budget in milliseconds.
     pub selection_time_budget_ms: u64,
+    /// Chosen method per needed task: the P6 selection P8 and P9 read
+    /// without re-solving.
+    pub selection: BTreeMap<String, String>,
 }
 
 /// One stable explanation record from compilation.
@@ -650,6 +658,7 @@ pub fn compile_with_budget(
                 "declared".to_string()
             },
             selected,
+            sources: profile.sources.clone(),
         });
     }
     for row in &provenance {
@@ -702,6 +711,7 @@ pub fn compile_with_budget(
         trace,
         selection_status: selection_status(&selection.optimality),
         selection_time_budget_ms: selection.time_budget.as_millis() as u64,
+        selection: selection.methods,
     })
 }
 

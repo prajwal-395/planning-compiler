@@ -5,13 +5,16 @@ objectives, tasks with alternative methods, capabilities with typed
 contracts and estimates, recorded evidence - and the compiler validates it,
 chooses how to do it, and explains every decision.
 
-**Status: steps 0-5.** Workspace skeleton, IR v0, `pc check` (passes P1-P5:
+**Status: steps 0-6.** Workspace skeleton, IR v0, `pc check` (passes P1-P5:
 validation, capability matching, shared-subtask merging, evidence
-estimation), method selection (P6) over evidence-folded estimates, and
+estimation), method selection (P6) over evidence-folded estimates,
 selected-plan analysis with `pc compile` and `pc explain` (P7) including
-predicted-versus-measured columns and `pc record`. See
+predicted-versus-measured columns and `pc record`, and frontier ranking
+(P8) with change preview and plan comparison (P9). See
 `docs/` for semantics and the sequenced plan. The `self-plan`
-fixture (`examples/self-plan`) is this project's own implementation plan.
+fixture (`examples/self-plan`) is this project's own implementation plan;
+`examples/transcription-substitution` is the synthetic substitution study
+(report 3.5, criteria (a)-(c)).
 
 ## Scope boundary
 
@@ -26,8 +29,7 @@ v0 specifically does not:
   model-free),
 - execute anything or track task status/assignment,
 - model people (`docs/adr/0003-no-human-executors.md`),
-- schedule resource capacity (`frontier`, `impact`, `propose`,
-  and `context` arrive in steps 6-7).
+- schedule resource capacity (`propose` and `context` arrive in step 7).
 
 State is text files in the repo (`docs/adr/0002-text-files.md`). The repo
 is private and unlicensed pending a later decision
@@ -37,12 +39,13 @@ is private and unlicensed pending a later decision
 
 ```
 crates/pc-ir/     IR types, TOML+JSON serde, JSON Schema
-crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, diagnostics
+crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, P8 frontier, P9 impact/diff, diagnostics
 crates/pc-select/ P6 exact ILP method selection with greedy fallback
 crates/pc-store/  plan loader, evidence JSONL append/read
-crates/pc-cli/    pc binary (check, compile, explain, record, schema)
+crates/pc-cli/    pc binary (check, compile, explain, record, frontier, impact, diff, schema)
 schema/           generated JSON Schema (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
+examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
 docs/             ir.md, passes.md, adr/
 ```
@@ -57,6 +60,9 @@ pc check [path] --json   # full report: diagnostics, counts, trace
 pc compile [path]  # effective totals with predicted-vs-measured columns
 pc explain <id> [path]   # per-decision trail plus capability provenance
 pc record <evidence.json> [path]  # append one observation to evidence.jsonl
+pc frontier [path]  # rank unresolved work (P8)
+pc impact <change.json> [path]  # preview a hypothetical change (P9)
+pc diff <a> <b>    # compare two plans: structure, selection, totals (P9)
 pc schema [--out file]   # emit the canonical JSON Schema
 ```
 

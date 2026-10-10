@@ -1,6 +1,6 @@
 # Contributing
 
-Steps 0-5 rules. The repo is private and unlicensed (see
+Steps 0-6 rules. The repo is private and unlicensed (see
 `docs/adr/0001-license-deferred.md`); do not publish to crates.io.
 
 ## Loop

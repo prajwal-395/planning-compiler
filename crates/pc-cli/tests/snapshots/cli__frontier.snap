@@ -1,0 +1,9 @@
+---
+source: crates/pc-cli/tests/cli.rs
+assertion_line: 409
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+frontier: 3 items (examples/transcription-substitution/plan.toml)
+0.667 method:via-hybrid [proposal] (critical): proposed by agent:claude for task:transcribe-footage; awaiting accept or reject
+0.667 method:via-hybrid [blocked-alternative] (critical): accepting it would drop transcript.segment_confidence (consumed by select-lines)
+0.667 task:select-lines [open-task] (critical): no accepted method; on the selected path from the root (required by ship-reels)

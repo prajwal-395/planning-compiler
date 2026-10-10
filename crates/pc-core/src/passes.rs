@@ -623,7 +623,10 @@ fn check_order_cycles(ctx: &mut Ctx) {
 
 /// Compare two contracts field by field: every `(artifact, field)` in
 /// `need` must appear in `have`. Returns the missing entries.
-fn missing_fields(need: &[ContractItem], have: &[ContractItem]) -> Vec<String> {
+///
+/// Shared with P9 (impact and frontier), which preview contract failures for
+/// proposed methods P2 deliberately does not check.
+pub(crate) fn missing_fields(need: &[ContractItem], have: &[ContractItem]) -> Vec<String> {
     let mut have_map: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for item in have {
         have_map
@@ -836,8 +839,8 @@ fn check_estimates(ctx: &mut Ctx) {
             ));
         } else if e.low < 0.0 {
             bad = Some("estimates must be non-negative".to_string());
-        } else if e.metric == "failure_risk" && e.high > 1.0 {
-            bad = Some("failure_risk estimates must lie in [0, 1]".to_string());
+        } else if canonical_unit(&e.metric) == Some("ratio") && e.high > 1.0 {
+            bad = Some(format!("{} estimates must lie in [0, 1]", e.metric));
         } else if e.provenance == pc_ir::EstimateProvenance::Measured
             && e.observations.unwrap_or(0) == 0
         {

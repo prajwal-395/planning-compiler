@@ -62,13 +62,19 @@ without an accepted method remain visible as unresolved.
 
 ## Metrics
 
-v0 knows three metrics, each with a canonical unit:
+v0 knows four metrics, each with a canonical unit:
 
 | metric | unit | range |
 |---|---|---|
 | `duration_minutes` | `minutes` | `>= 0` |
 | `money_usd` | `usd` | `>= 0` |
 | `failure_risk` | `ratio` | `[0, 1]` |
+| `accuracy_distance_from_incumbent` | `ratio` | `[0, 1]` |
+
+`accuracy_distance_from_incumbent` measures how far a capability's output
+lands from the incumbent's, never absolute accuracy. It is kept apart from
+`failure_risk` in profiles and totals, and `pc compile`, `pc impact` and
+`pc diff` label it as a distance from the incumbent.
 
 There is no `human_minutes`: people are out of scope for v0. Objective
 weights may only name known metrics and must be finite and non-negative.

@@ -173,10 +173,61 @@ failure risk combines independent task risks as `1 - product(1 - risk)`.
 `pc explain` lists each selected method's assumptions and each executable
 task's slack and critical status.
 
-## Deferred (steps 6-8)
+## P8: frontier (step 6)
+
+`pc frontier` ranks unresolved work over a checked, compiled plan
+so people and agents can "see the frontier" (report C10). It never edits the
+plan: kinds are `open-task` (reachable work with no accepted method),
+`proposal` (a proposed method awaiting accept or reject), `blocked-alternative`
+(a proposed or derived invoke that fails typed contract matching, so
+accepting it would be E008) and `unmeasured-critical` (a critical leaf
+whose duration rests on declared guesses).
+
+Every entry scores `share * uncertainty * criticality`: `share` is an
+expected-cost fraction when estimates exist, otherwise the structural share
+`(1 + transitive dependents) / tasks`; `uncertainty` is `1.0` for every v0
+entry (frontier work is unmeasured by construction); `criticality` is `1.0`
+on the selected path from the objective root and `0.5` otherwise. Entries
+sort by score descending, then subject ascending. Only tasks reachable from
+the root through non-rejected methods, and not done or dropped, are ranked;
+the walk never descends below a done or dropped task, matching compile, and
+this holds for open tasks, proposals and blocked alternatives alike.
+`--json` emits the ranked report. A blocked entry names the dropped fields and the live tasks consuming them.
+
+## P9: impact/diff (step 6)
+
+`pc impact <change.json> [path]` previews a hypothetical change without
+editing any files. The change document takes two optional keys
+(`accept_method`, `add_evidence`; unknown fields are refused) and applies them to an in-memory copy, which is then
+re-checked and, when clean, recompiled with P5-P7 under
+`--selection-time-budget-ms`. The report carries the applied operations,
+the affected tasks (seed tasks plus their transitive ancestors and
+descendants through non-rejected decompose edges, one dataflow hop to
+producers and consumers of their fields), the fresh diagnostics, contract notes naming dropped fields and
+their consumers, and the selection, totals and makespan movements when both
+sides compile. Totals movements label `accuracy_distance_from_incumbent` as
+a distance from the incumbent, never absolute accuracy. A change that introduces diagnostics still exits 0: the
+diagnostics ARE the finding. Unknown methods and committing an already
+accepted or rejected method are usage errors (exit 1), as is a clean plan
+that then fails P6/P7.
+
+`pc diff <a> <b>` compares two plan files or directories: tasks,
+capabilities and methods added, removed or changed (methods split into
+pure status flips and deeper content changes), each side's makespan when
+that side compiles, selection flips, makespan and expected-value movements
+per metric when both sides compile,
+and diagnostics added or removed (compared by code, subject and message so
+the same mistake in two files counts once), with the same distance label.
+Sides that fail check still
+diff structurally; only an unreadable plan or a P6/P7 failure exits 1.
+
+`pc explain` is unchanged apart from provenance: measured rows now name
+their sorted unique evidence sources beside the observation count, so a
+measurement basis such as "distance from the incumbent" is visible wherever
+the numbers are.
+
+## Deferred (steps 7-8)
 
 | Pass | Ships in |
 |---|---|
-| P8 frontier (ranking) | step 6 |
-| P9 impact/diff | step 6 |
 | proposal loop, context slices | step 7 |
