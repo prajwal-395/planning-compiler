@@ -42,6 +42,9 @@ enum Commands {
         /// Emit the full compiled plan as JSON.
         #[arg(long)]
         json: bool,
+        /// Maximum exact P6 solve time in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        selection_time_budget_ms: u64,
     },
     /// Explain a task, method, or capability in the accepted plan.
     Explain {
@@ -53,6 +56,9 @@ enum Commands {
         /// Emit matching explanation records as JSON.
         #[arg(long)]
         json: bool,
+        /// Maximum exact P6 solve time in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        selection_time_budget_ms: u64,
     },
 }
 
@@ -61,8 +67,17 @@ fn main() {
     match cli.command {
         Commands::Check { path, json } => run_check(&path, json),
         Commands::Schema { out } => run_schema(out.as_deref()),
-        Commands::Compile { path, json } => run_compile(&path, json),
-        Commands::Explain { target, path, json } => run_explain(&path, &target, json),
+        Commands::Compile {
+            path,
+            json,
+            selection_time_budget_ms,
+        } => run_compile(&path, json, selection_time_budget_ms),
+        Commands::Explain {
+            target,
+            path,
+            json,
+            selection_time_budget_ms,
+        } => run_explain(&path, &target, json, selection_time_budget_ms),
     }
 }
 
@@ -92,9 +107,12 @@ fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passe
     (loaded, report)
 }
 
-fn run_compile(path: &std::path::Path, json: bool) {
+fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
     let (loaded, _) = load_checked(path);
-    let result = match pc_core::compile(&loaded.doc) {
+    let result = match pc_core::compile_with_budget(
+        &loaded.doc,
+        std::time::Duration::from_millis(selection_time_budget_ms),
+    ) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("error: {e}");
@@ -111,6 +129,10 @@ fn run_compile(path: &std::path::Path, json: bool) {
     println!(
         "compiled: {} ({}); makespan {:.3} minutes; parallel width {}",
         result.root_task, loaded.display_path, result.makespan_minutes, result.parallel_width
+    );
+    println!(
+        "selection: {} ({} ms budget)",
+        result.selection_status, result.selection_time_budget_ms
     );
     for (metric, range) in result.totals {
         println!(
@@ -144,9 +166,12 @@ fn run_compile(path: &std::path::Path, json: bool) {
     }
 }
 
-fn run_explain(path: &std::path::Path, target: &str, json: bool) {
+fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_budget_ms: u64) {
     let (loaded, _) = load_checked(path);
-    let result = match pc_core::compile(&loaded.doc) {
+    let result = match pc_core::compile_with_budget(
+        &loaded.doc,
+        std::time::Duration::from_millis(selection_time_budget_ms),
+    ) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("error: {e}");

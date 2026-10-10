@@ -137,6 +137,144 @@ fn textbook_cpm_forward_backward_and_parallel_width() {
 }
 
 #[test]
+fn p6_selects_cheapest_feasible_alternative_and_reports_optimality() {
+    let mut plan = doc(
+        vec![task("root", TaskState::Resolved)],
+        vec![
+            invoke("slow", "root", "slow-cap"),
+            invoke("fast", "root", "fast-cap"),
+        ],
+        vec![cap("slow-cap", 20.0), cap("fast-cap", 5.0)],
+    );
+    for capability in &mut plan.capability {
+        capability.estimates.push(Estimate {
+            metric: "money_usd".into(),
+            low: if capability.id == "fast-cap" {
+                3.0
+            } else {
+                8.0
+            },
+            likely: if capability.id == "fast-cap" {
+                3.0
+            } else {
+                8.0
+            },
+            high: if capability.id == "fast-cap" {
+                3.0
+            } else {
+                8.0
+            },
+            provenance: EstimateProvenance::Declared,
+            observations: None,
+            window: None,
+        });
+    }
+    plan.objective.weights.insert("money_usd".into(), 1.0);
+    plan.objective.budget_usd = Some(5.0);
+    let compiled = compile(&plan).unwrap();
+    assert_eq!(compiled.selection_status, "optimal");
+    assert_eq!(compiled.selection_time_budget_ms, 2000);
+    assert!(
+        compiled
+            .trace
+            .iter()
+            .any(|row| row.subject == "task:root" && row.reason == "uses method:fast")
+    );
+    assert!(
+        compiled
+            .trace
+            .iter()
+            .any(|row| row.subject == "method:slow" && row.decision == "not selected")
+    );
+    assert_eq!(compiled.makespan_minutes, 5.0);
+}
+
+fn money(capability: &mut Capability, usd: f64) {
+    capability.estimates.push(Estimate {
+        metric: "money_usd".into(),
+        low: usd,
+        likely: usd,
+        high: usd,
+        provenance: EstimateProvenance::Declared,
+        observations: None,
+        window: None,
+    });
+}
+
+#[test]
+fn p6_ignores_done_subtask_costs_and_missing_estimates_under_budget() {
+    let mut a_cap = cap("a-cap", 1.0);
+    money(&mut a_cap, 100.0);
+    let mut b_cap = cap("b-cap", 2.0);
+    money(&mut b_cap, 10.0);
+    let mut plan = doc(
+        vec![
+            task("root", TaskState::Resolved),
+            task("a", TaskState::Done),
+            task("b", TaskState::Resolved),
+            task("c", TaskState::Dropped),
+        ],
+        vec![
+            decompose("root-method", "root", &["a", "b", "c"], &[]),
+            invoke("a-method", "a", "a-cap"),
+            invoke("b-method", "b", "b-cap"),
+            invoke("c-method", "c", "c-cap"),
+        ],
+        vec![a_cap, b_cap, cap("c-cap", 3.0)],
+    );
+    plan.objective.budget_usd = Some(50.0);
+    let compiled = compile(&plan).unwrap();
+    assert_eq!(compiled.totals["money_usd"].expected, 10.0);
+    assert!(
+        compiled
+            .trace
+            .iter()
+            .all(|row| row.decision != "not selected")
+    );
+}
+
+#[test]
+fn p6_reports_ineligible_alternatives_and_omits_unneeded_tasks() {
+    let mut priced = cap("priced-cap", 5.0);
+    money(&mut priced, 3.0);
+    let mut pricier = cap("pricier-cap", 5.0);
+    money(&mut pricier, 4.0);
+    let mut plan = doc(
+        vec![
+            task("root", TaskState::Resolved),
+            task("unused", TaskState::Resolved),
+        ],
+        vec![
+            invoke("priced", "root", "priced-cap"),
+            invoke("unpriced", "root", "unpriced-cap"),
+            decompose("detour", "root", &["unused"], &[]),
+            invoke("unused-a", "unused", "unpriced-cap"),
+            invoke("unused-b", "unused", "pricier-cap"),
+        ],
+        vec![priced, pricier, cap("unpriced-cap", 1.0)],
+    );
+    plan.objective.weights.insert("money_usd".into(), 1.0);
+    plan.objective.budget_usd = Some(5.0);
+    let compiled = compile(&plan).unwrap();
+    let not_selected: Vec<_> = compiled
+        .trace
+        .iter()
+        .filter(|row| row.decision == "not selected")
+        .map(|row| (row.subject.as_str(), row.reason.as_str()))
+        .collect();
+    assert_eq!(
+        not_selected,
+        vec![
+            (
+                "method:unpriced",
+                "ineligible: missing money_usd estimate under budget_usd"
+            ),
+            ("method:detour", "P6 selected method:priced for task:root"),
+        ]
+    );
+}
+
+#[test]
 fn trace_explains_assumptions_and_per_task_slack() {
     let mut root = decompose("root-method", "root", &["a", "b"], &[]);
     root.assumptions = vec!["a and b run in parallel".into()];

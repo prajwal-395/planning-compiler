@@ -5,6 +5,10 @@
 //! and rejected methods are outside this pass.
 
 use pc_ir::{Estimate, MethodKind, MethodStatus, PlanDoc};
+use pc_select::{
+    Constraints as SelectionConstraints, Method as SelectionMethod, Optimality,
+    Task as SelectionTask,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -59,6 +63,10 @@ pub struct CompiledPlan {
     pub unresolved_tasks: Vec<String>,
     /// Accepted method choices and analysis decisions for `pc explain`.
     pub trace: Vec<CompileTrace>,
+    /// P6 optimality status for the selected methods.
+    pub selection_status: String,
+    /// P6 time budget in milliseconds.
+    pub selection_time_budget_ms: u64,
 }
 
 /// One stable explanation record from compilation.
@@ -75,17 +83,20 @@ pub struct CompileTrace {
 /// Compilation errors that remain after P1-P2 validation.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CompileError {
-    /// More than one accepted method exists for a reachable task.
-    #[error("task `{task}` has multiple accepted methods; step 2 does not select alternatives")]
-    Ambiguous {
-        /// Task with multiple accepted methods.
-        task: String,
-    },
     /// Order edges across methods sharing subtasks form a precedence cycle.
     #[error("tasks {} form a precedence cycle across methods", .tasks.join(", "))]
     PrecedenceCycle {
         /// Executable tasks on or behind the cycle, in lexical order.
         tasks: Vec<String>,
+    },
+    /// P6 found no method selection satisfying hard constraints.
+    #[error("no feasible method selection satisfies the hard constraints")]
+    SelectionInfeasible,
+    /// P6 failed to solve the method-selection problem.
+    #[error("method selection failed: {message}")]
+    SelectionFailed {
+        /// Solver diagnostic.
+        message: String,
     },
 }
 
@@ -134,9 +145,6 @@ impl<'a> Walk<'a> {
             return Ok(Vec::new());
         }
         let accepted = self.methods.get(id).map(Vec::as_slice).unwrap_or_default();
-        if accepted.len() > 1 {
-            return Err(CompileError::Ambiguous { task: id.into() });
-        }
         let Some(method) = accepted.first().copied() else {
             self.unresolved.insert(id.to_owned());
             self.trace.push(CompileTrace {
@@ -246,14 +254,144 @@ fn finish_leaves<'m>(
 
 /// Analyze the accepted plan rooted at the objective task.
 pub fn compile(doc: &PlanDoc) -> Result<CompiledPlan, CompileError> {
-    let mut methods: BTreeMap<&str, Vec<_>> = BTreeMap::new();
-    for m in doc
+    compile_with_budget(doc, std::time::Duration::from_secs(2))
+}
+
+/// Analyze the selected plan, allowing callers to configure P6's time limit.
+pub fn compile_with_budget(
+    doc: &PlanDoc,
+    selection_budget: std::time::Duration,
+) -> Result<CompiledPlan, CompileError> {
+    let accepted: Vec<_> = doc
         .method
         .iter()
         .filter(|m| m.status == MethodStatus::Accepted)
-    {
-        methods.entry(m.task.as_str()).or_default().push(m);
+        .collect();
+    let mut selection_tasks = Vec::with_capacity(doc.task.len());
+    for task in &doc.task {
+        let skipped = matches!(
+            task.state,
+            pc_ir::TaskState::Done | pc_ir::TaskState::Dropped
+        );
+        let mut methods: Vec<_> = accepted
+            .iter()
+            .filter(|m| !skipped && m.task == task.id)
+            .map(|m| {
+                let costs = m
+                    .capability
+                    .as_deref()
+                    .and_then(|id| doc.capability.iter().find(|c| c.id == id))
+                    .map(|cap| {
+                        cap.estimates
+                            .iter()
+                            .map(|e| (e.metric.clone(), (e.low + 4.0 * e.likely + e.high) / 6.0))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                SelectionMethod {
+                    id: m.id.clone(),
+                    costs,
+                    children: m.subtasks.clone(),
+                }
+            })
+            .collect();
+        methods.sort_by(|a: &SelectionMethod, b| a.id.cmp(&b.id));
+        for method in &mut methods {
+            method.children.sort();
+            method.children.dedup();
+        }
+        selection_tasks.push(SelectionTask {
+            id: task.id.clone(),
+            methods,
+        });
     }
+    selection_tasks.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut constraints = SelectionConstraints {
+        weights: doc.objective.weights.clone(),
+        ..SelectionConstraints::default()
+    };
+    if let Some(budget) = doc.objective.budget_usd {
+        constraints.limits.insert("money_usd".into(), budget);
+    }
+    if let Some(floor) = doc.objective.quality_floor.filter(|floor| *floor > 0.0) {
+        constraints
+            .limits
+            .insert("quality_loss".into(), -floor.ln());
+    }
+    let mut ineligible: BTreeMap<(String, String), Vec<&str>> = BTreeMap::new();
+    for selection_task in &mut selection_tasks {
+        for method in &mut selection_task.methods {
+            let Some(source) = doc
+                .method
+                .iter()
+                .find(|candidate| candidate.id == method.id)
+            else {
+                continue;
+            };
+            if source.kind != MethodKind::Invoke {
+                continue;
+            }
+            if let Some(capability) = source
+                .capability
+                .as_deref()
+                .and_then(|id| doc.capability.iter().find(|cap| cap.id == id))
+            {
+                if doc.objective.budget_usd.is_some()
+                    && !capability
+                        .estimates
+                        .iter()
+                        .any(|estimate| estimate.metric == "money_usd")
+                {
+                    ineligible
+                        .entry((selection_task.id.clone(), method.id.clone()))
+                        .or_default()
+                        .push("missing money_usd estimate under budget_usd");
+                }
+                if doc.objective.quality_floor.is_some_and(|floor| floor > 0.0) {
+                    if let Some(risk) = method.costs.get("failure_risk").copied() {
+                        method.costs.insert(
+                            "quality_loss".into(),
+                            if risk >= 1.0 {
+                                1_000_000.0
+                            } else {
+                                -(1.0 - risk).ln()
+                            },
+                        );
+                    } else {
+                        ineligible
+                            .entry((selection_task.id.clone(), method.id.clone()))
+                            .or_default()
+                            .push("missing failure_risk estimate under quality_floor");
+                    }
+                }
+            }
+        }
+    }
+    constraints
+        .forbidden_methods
+        .extend(ineligible.keys().cloned());
+    let selection = pc_select::select(
+        &selection_tasks,
+        &doc.objective.root_task,
+        &constraints,
+        selection_budget,
+    )
+    .map_err(|error| match error {
+        pc_select::SelectError::Infeasible => CompileError::SelectionInfeasible,
+        other => CompileError::SelectionFailed {
+            message: other.to_string(),
+        },
+    })?;
+    let methods: BTreeMap<&str, Vec<_>> = selection
+        .methods
+        .iter()
+        .filter_map(|(task, method)| {
+            doc.method
+                .iter()
+                .find(|m| m.id == *method)
+                .map(|m| (task.as_str(), vec![m]))
+        })
+        .collect();
     let mut walk = Walk {
         tasks: doc.task.iter().map(|t| (t.id.as_str(), t)).collect(),
         methods,
@@ -272,6 +410,35 @@ pub fn compile(doc: &PlanDoc) -> Result<CompiledPlan, CompileError> {
         mut trace,
         ..
     } = walk;
+    trace.push(CompileTrace {
+        subject: "plan".into(),
+        decision: selection_status(&selection.optimality),
+        reason: format!(
+            "P6 weighted objective {:.6}; {:?} time budget",
+            selection.objective, selection.time_budget
+        ),
+    });
+    for method in doc
+        .method
+        .iter()
+        .filter(|m| m.status == MethodStatus::Accepted)
+    {
+        let Some(chosen) = selection.methods.get(&method.task) else {
+            continue;
+        };
+        if *chosen == method.id {
+            continue;
+        }
+        let reason = match ineligible.get(&(method.task.clone(), method.id.clone())) {
+            Some(reasons) => format!("ineligible: {}", reasons.join("; ")),
+            None => format!("P6 selected method:{chosen} for task:{}", method.task),
+        };
+        trace.push(CompileTrace {
+            subject: format!("method:{}", method.id),
+            decision: "not selected".into(),
+            reason,
+        });
+    }
     let mut totals = BTreeMap::new();
     let metrics: BTreeSet<_> = nodes
         .iter()
@@ -342,7 +509,20 @@ pub fn compile(doc: &PlanDoc) -> Result<CompiledPlan, CompileError> {
         timings,
         unresolved_tasks: unresolved.into_iter().collect(),
         trace,
+        selection_status: selection_status(&selection.optimality),
+        selection_time_budget_ms: selection.time_budget.as_millis() as u64,
     })
+}
+
+fn selection_status(status: &Optimality) -> String {
+    match status {
+        Optimality::Optimal => "optimal".into(),
+        Optimality::BestFound {
+            gap_percent: Some(gap),
+        } => format!("best-found (gap {gap:.2}%)"),
+        Optimality::BestFound { gap_percent: None } => "best-found (gap unavailable)".into(),
+        Optimality::GreedyOnly => "greedy-only".into(),
+    }
 }
 
 fn range(e: &Estimate) -> EstimateRange {

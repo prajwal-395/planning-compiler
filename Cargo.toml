@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/pc-ir",
     "crates/pc-core",
+    "crates/pc-select",
     "crates/pc-store",
     "crates/pc-cli",
 ]
@@ -27,6 +28,7 @@ unreachable_pub = "warn"
 [workspace.dependencies]
 pc-ir = { path = "crates/pc-ir", version = "0.1.0" }
 pc-core = { path = "crates/pc-core", version = "0.1.0" }
+pc-select = { path = "crates/pc-select", version = "0.1.0" }
 pc-store = { path = "crates/pc-store", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
@@ -34,6 +36,7 @@ serde_json = "1.0"
 toml = { version = "0.8", features = ["parse", "display"] }
 schemars = "0.8"
 petgraph = "0.8"
+good_lp = { version = "1.15", default-features = false, features = ["microlp"] }
 clap = { version = "4.5", features = ["derive"] }
 thiserror = "2.0"
 
@@ -41,3 +44,4 @@ assert_cmd = "2.0"
 insta = "1.41"
 proptest = "1.7"
 predicates = "3.1"
+criterion = "0.5"

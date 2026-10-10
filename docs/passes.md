@@ -1,10 +1,10 @@
 # Pass contracts
 
 Every pass is deterministic: same inputs, byte-identical output. Every
-check emits a trace event; `explain` renders the accepted-plan decisions.
-`compile` rejects a reachable task with multiple accepted methods because
-alternative selection is step 3. It also rejects order edges that, through
-subtasks shared between methods, form a precedence cycle.
+check emits a trace event; `explain` renders selected-plan decisions.
+`compile` runs P6 over accepted alternatives before P7. It also rejects order
+edges that, through shared subtasks between selected methods, form a
+precedence cycle.
 
 ## P1: load/resolve (`ResolvePass`)
 
@@ -45,26 +45,52 @@ Scope notes:
 - One unit test per code lives in `crates/pc-core/tests/diagnostics.rs`;
   one CLI fixture per code lives in `tests/fixtures/invalid-E*.toml`.
 
-## P7: schedule-analyze (step 2)
+## P6: select (step 3)
 
-`pc compile` traverses from the objective root through accepted methods only.
+`compile` considers accepted methods reachable from the objective root.
+Proposed, derived and rejected methods are outside selection, and `done` or
+`dropped` tasks are leaves, matching P7's skip rule. The objective is
+the weighted sum of each method's PERT expected metric costs. Hard limits are
+applied to total `money_usd` when `budget_usd` is set. A quality floor is
+enforced as an independent-success constraint: sum `-ln(1-risk)` must not
+exceed `-ln(quality_floor)`. Invocations missing a required money or risk
+estimate are ineligible under the corresponding hard constraint. `deadline`
+remains a post-analysis constraint.
+
+The pure-Rust `pc-select` crate builds a 0/1 ILP with a needed-task variable
+and a chosen-method variable per alternative. A chosen method activates its
+children. Each needed task chooses exactly one method, and shared descendants
+are charged once. The default time budget is 2,000 ms; `pc compile` and
+`pc explain` accept `--selection-time-budget-ms`. The ILP reports `optimal`
+when proof completes and `best-found (gap x%)` when it finds an incumbent
+before its time limit. If the time limit ends with no incumbent, or with an
+incumbent worse than greedy, a feasible greedy result is reported as
+`greedy-only`. A proven-infeasible selection is a compile error, and so is a
+time limit with neither an incumbent nor a feasible greedy result. A task is
+needed only when the root or a chosen parent method requires it. Greedy
+selection uses recursive tree cost and stable method-id tie breaking.
+Unchosen alternatives of needed tasks are traced as `not selected`, naming the
+chosen method or the missing estimate that made them ineligible.
+
+## P7: schedule-analyze (step 2+)
+
+`pc compile` traverses from the objective root through selected accepted methods.
 It preserves three-point estimates, uses PERT expected durations for CPM,
 reports earliest/latest times, slack, critical tasks, parallel width (tasks
 with zero expected duration are not counted), and the
 low/likely/high makespan. Unresolved tasks are listed with zero rolled work;
 this pass never chooses among methods. Money sums across invoked work and
 failure risk combines independent task risks as `1 - product(1 - risk)`.
-`pc explain` lists each accepted method's assumptions and each executable
+`pc explain` lists each selected method's assumptions and each executable
 task's slack and critical status.
 
-## Deferred (steps 3-8)
+## Deferred (steps 4-8)
 
 | Pass | Ships in |
 |---|---|
 | P3 match (derived invoke proposals) | step 4 |
 | P4 share (content-hash dedup) | step 4 |
 | P5 estimate (evidence folding) | step 5 |
-| P6 select (greedy + exact ILP, time budget) | step 3 |
 | P8 frontier (ranking) | step 6 |
 | P9 impact/diff | step 6 |
 | proposal loop, context slices, record | steps 5-7 |

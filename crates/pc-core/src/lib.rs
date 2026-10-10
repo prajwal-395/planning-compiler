@@ -9,6 +9,9 @@ pub mod compile;
 pub mod diagnostic;
 pub mod passes;
 
-pub use compile::{CompileError, CompileTrace, CompiledPlan, EstimateRange, TaskTiming, compile};
+pub use compile::{
+    CompileError, CompileTrace, CompiledPlan, EstimateRange, TaskTiming, compile,
+    compile_with_budget,
+};
 pub use diagnostic::{Diagnostic, render_human};
 pub use passes::{Counts, Ctx, Pass, Report, ResolvePass, TraceEvent, ValidatePass, check};

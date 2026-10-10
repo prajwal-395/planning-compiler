@@ -162,7 +162,11 @@ id = "cargo-test@1"
 kind = "tool"
 version = "1"
 produces = [{ artifact = "check-report", fields = ["diagnostics", "counts"] }]
-estimates = [{ metric = "duration_minutes", low = 2.0, likely = 5.0, high = 15.0, provenance = "declared" }]
+estimates = [
+  { metric = "duration_minutes", low = 2.0, likely = 5.0, high = 15.0, provenance = "declared" },
+  { metric = "money_usd", low = 0.0, likely = 0.0, high = 0.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.01, likely = 0.01, high = 0.01, provenance = "declared" },
+]
 resources = ["ci-minutes"]
 
 [[evidence]]

@@ -9,10 +9,11 @@ traditions behind this project so contributors from each can orient:
 | **Method** (one way to achieve a task) | method | AND node |
 | **Plan** (one method chosen per needed task) | solution tree | solution graph |
 
-(Selection, the "extraction" column, arrives in step 3.)
+P6 chooses one accepted method per needed task, counting a shared descendant
+once. Proposed, derived and rejected methods are not selectable in this step.
 
-`pc compile` analyzes the reachable accepted methods without choosing between
-alternatives. Proposed, derived, and rejected methods are excluded. Invocation
+`pc compile` selects among reachable accepted methods before analyzing the
+chosen alternatives. Proposed, derived, and rejected methods are excluded. Invocation
 estimates roll up by metric: duration uses the longest precedence path, money
 adds across invoked tasks, and failure risk combines as `1 - product(1 - risk)`.
 Each reported range retains low, likely, and high values; capability durations
