@@ -292,7 +292,7 @@
           "type": "string"
         },
         {
-          "description": "Derived from evidence (estimators arrive in step 5).",
+          "description": "Derived from evidence (P5 estimators).",
           "enum": [
             "measured"
           ],
@@ -302,7 +302,7 @@
     },
     "Evidence": {
       "additionalProperties": false,
-      "description": "One append-only observation about a capability, method or task.\n\nEstimators that fold evidence into profiles arrive in step 5. P1/P2 only check that the subject exists and units are consistent.",
+      "description": "One append-only observation about a capability, method or task.\n\nP1/P2 check that the subject exists and units are consistent; P5 folds it into capability profiles (see `docs/passes.md`).",
       "properties": {
         "artifact_hash": {
           "description": "Optional content hash of the backing artifact.",
@@ -707,7 +707,7 @@
     },
     "evidence": {
       "default": [],
-      "description": "Recorded observations. Estimators arrive in step 5; P1 only validates references and units. Defaults to empty.",
+      "description": "Recorded observations, folded into measured profiles by P5 without editing declared estimates. Defaults to empty.",
       "items": {
         "$ref": "#/definitions/Evidence"
       },

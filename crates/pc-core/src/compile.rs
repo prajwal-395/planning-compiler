@@ -2,9 +2,11 @@
 //!
 //! Step 2 deliberately does not choose between alternatives. A task is
 //! compiled only when it has exactly one accepted method; proposed, derived,
-//! and rejected methods are outside this pass.
+//! and rejected methods are outside this pass. Capability costs come from
+//! the P5 effective estimates, so recorded evidence moves selection;
+//! every total carries its predicted-versus-measured basis.
 
-use pc_ir::{Estimate, MethodKind, MethodStatus, PlanDoc};
+use pc_ir::{MethodKind, MethodStatus, PlanDoc};
 use pc_select::{
     Constraints as SelectionConstraints, Method as SelectionMethod, Optimality,
     Task as SelectionTask,
@@ -45,13 +47,64 @@ pub struct TaskTiming {
     pub critical: bool,
 }
 
+/// Predicted-versus-measured summary for one metric: what the plan costs on
+/// declared guesses beside what it costs with evidence folded in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricBasis {
+    /// Roll-up over declared estimates only: the prediction.
+    pub predicted: EstimateRange,
+    /// Roll-up over effective (measured where available) estimates: the
+    /// number P6 optimized. Always equals `totals[metric]`.
+    pub effective: EstimateRange,
+    /// Selected leaf tasks with measured data for this metric.
+    pub measured_nodes: usize,
+    /// Selected leaf tasks contributing to this metric at all.
+    pub total_nodes: usize,
+}
+
+/// One provenance row: declared guesses beside measured evidence for a
+/// capability and metric. This is the provenance report `pc compile --json`
+/// carries and `pc explain capability:<id>` renders.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProvenanceRow {
+    /// Capability id.
+    pub capability: String,
+    /// One known metric.
+    pub metric: String,
+    /// Declared triple, when the plan states one.
+    pub predicted: Option<EstimateRange>,
+    /// Measured triple, when attributed evidence exists.
+    pub measured: Option<EstimateRange>,
+    /// Observation count behind `measured` (zero when declared-only).
+    pub observations: u64,
+    /// Stale observations behind `measured`.
+    pub stale: u64,
+    /// True when the measured median falls outside declared `[low, high]`.
+    pub contradicts_declared: bool,
+    /// The numbers selection and roll-ups used.
+    pub effective: EstimateRange,
+    /// `"declared"` or `"measured(n)"`.
+    pub basis: String,
+    /// True when a selected method invokes this capability.
+    pub selected: bool,
+}
+
 /// Roll-ups and CPM timing for the reachable accepted plan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledPlan {
     /// Root task id.
     pub root_task: String,
-    /// Roll-up ranges by metric, with keys in lexical order.
+    /// Effective roll-up ranges by metric, with keys in lexical order.
     pub totals: BTreeMap<String, EstimateRange>,
+    /// Predicted-versus-measured basis behind each metric in `totals`.
+    pub basis: BTreeMap<String, MetricBasis>,
+    /// Per-capability provenance: declared guesses beside measured
+    /// evidence. Sorted by `(capability, metric)`.
+    pub provenance: Vec<ProvenanceRow>,
+    /// `task:<id>` evidence P5 ignored because the task's accepted invoke
+    /// methods call no capability or more than one. Sorted by
+    /// `(task, metric)`.
+    pub unattributed_tasks: Vec<crate::estimate::UnattributedTaskEvidence>,
     /// Expected duration in minutes, equal to the CPM makespan.
     pub makespan_minutes: f64,
     /// Maximum number of simultaneously executable leaf tasks. Tasks with
@@ -103,14 +156,19 @@ pub enum CompileError {
 #[derive(Clone)]
 struct Node {
     task: String,
+    capability: String,
     estimates: BTreeMap<String, EstimateRange>,
+    predicted: BTreeMap<String, EstimateRange>,
     duration: EstimateRange,
+    predicted_duration: EstimateRange,
 }
 
 struct Walk<'a> {
     tasks: BTreeMap<&'a str, &'a pc_ir::Task>,
     methods: BTreeMap<&'a str, Vec<&'a pc_ir::Method>>,
-    caps: BTreeMap<&'a str, &'a pc_ir::Capability>,
+    effective: BTreeMap<String, BTreeMap<String, EstimateRange>>,
+    predicted: BTreeMap<String, BTreeMap<String, EstimateRange>>,
+    measured: BTreeSet<(String, String)>,
     nodes: Vec<Node>,
     edges: BTreeSet<(usize, usize)>,
     unresolved: BTreeSet<String>,
@@ -173,23 +231,28 @@ impl<'a> Walk<'a> {
         }
         match method.kind {
             MethodKind::Invoke => {
-                let estimates = method
-                    .capability
-                    .as_deref()
-                    .and_then(|c| self.caps.get(c).copied())
-                    .map(|c| {
-                        c.estimates
-                            .iter()
-                            .map(|e| (e.metric.clone(), range(e)))
-                            .collect::<BTreeMap<_, _>>()
-                    })
+                let capability_id = method.capability.as_deref().unwrap_or_default();
+                let estimates = self
+                    .effective
+                    .get(capability_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let predicted = self
+                    .predicted
+                    .get(capability_id)
+                    .cloned()
                     .unwrap_or_default();
                 let duration = estimates.get("duration_minutes").copied().unwrap_or(zero());
+                let predicted_duration =
+                    predicted.get("duration_minutes").copied().unwrap_or(zero());
                 let n = self.nodes.len();
                 self.nodes.push(Node {
                     task: task.id.clone(),
+                    capability: capability_id.to_string(),
                     estimates,
+                    predicted,
                     duration,
+                    predicted_duration,
                 });
                 if let Some(capability) = method.capability.as_deref() {
                     self.trace.push(CompileTrace {
@@ -267,6 +330,11 @@ pub fn compile_with_budget(
         .iter()
         .filter(|m| m.status == MethodStatus::Accepted)
         .collect();
+    // P5 folds evidence into effective estimates before selection, so
+    // appending evidence can flip the chosen methods. Declared guesses alone
+    // no longer decide.
+    let estimated = crate::estimate::estimate(doc);
+    let eff = estimated.effective_map();
     let mut selection_tasks = Vec::with_capacity(doc.task.len());
     for task in &doc.task {
         let skipped = matches!(
@@ -280,11 +348,10 @@ pub fn compile_with_budget(
                 let costs = m
                     .capability
                     .as_deref()
-                    .and_then(|id| doc.capability.iter().find(|c| c.id == id))
-                    .map(|cap| {
-                        cap.estimates
-                            .iter()
-                            .map(|e| (e.metric.clone(), (e.low + 4.0 * e.likely + e.high) / 6.0))
+                    .map(|id| {
+                        eff.iter()
+                            .filter(|((cap, _), _)| cap == id)
+                            .map(|((_, metric), e)| (metric.clone(), e.expected))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -331,38 +398,37 @@ pub fn compile_with_budget(
             if source.kind != MethodKind::Invoke {
                 continue;
             }
-            if let Some(capability) = source
-                .capability
-                .as_deref()
-                .and_then(|id| doc.capability.iter().find(|cap| cap.id == id))
+            let Some(capability) = source.capability.as_deref() else {
+                continue;
+            };
+            // Presence is effective presence: measured evidence alone makes
+            // a capability eligible under a hard constraint.
+            if doc.objective.budget_usd.is_some()
+                && !eff.contains_key(&(capability.to_string(), "money_usd".to_string()))
             {
-                if doc.objective.budget_usd.is_some()
-                    && !capability
-                        .estimates
-                        .iter()
-                        .any(|estimate| estimate.metric == "money_usd")
+                ineligible
+                    .entry((selection_task.id.clone(), method.id.clone()))
+                    .or_default()
+                    .push("missing money_usd estimate under budget_usd");
+            }
+            if doc.objective.quality_floor.is_some_and(|floor| floor > 0.0) {
+                if let Some(risk) = eff
+                    .get(&(capability.to_string(), "failure_risk".to_string()))
+                    .map(|e| e.expected)
                 {
+                    method.costs.insert(
+                        "quality_loss".into(),
+                        if risk >= 1.0 {
+                            1_000_000.0
+                        } else {
+                            -(1.0 - risk).ln()
+                        },
+                    );
+                } else {
                     ineligible
                         .entry((selection_task.id.clone(), method.id.clone()))
                         .or_default()
-                        .push("missing money_usd estimate under budget_usd");
-                }
-                if doc.objective.quality_floor.is_some_and(|floor| floor > 0.0) {
-                    if let Some(risk) = method.costs.get("failure_risk").copied() {
-                        method.costs.insert(
-                            "quality_loss".into(),
-                            if risk >= 1.0 {
-                                1_000_000.0
-                            } else {
-                                -(1.0 - risk).ln()
-                            },
-                        );
-                    } else {
-                        ineligible
-                            .entry((selection_task.id.clone(), method.id.clone()))
-                            .or_default()
-                            .push("missing failure_risk estimate under quality_floor");
-                    }
+                        .push("missing failure_risk estimate under quality_floor");
                 }
             }
         }
@@ -395,7 +461,39 @@ pub fn compile_with_budget(
     let mut walk = Walk {
         tasks: doc.task.iter().map(|t| (t.id.as_str(), t)).collect(),
         methods,
-        caps: doc.capability.iter().map(|c| (c.id.as_str(), c)).collect(),
+        effective: {
+            let mut map: BTreeMap<String, BTreeMap<String, EstimateRange>> = BTreeMap::new();
+            for ((cap, metric), e) in &eff {
+                map.entry(cap.clone()).or_default().insert(
+                    metric.clone(),
+                    EstimateRange {
+                        low: e.low,
+                        likely: e.likely,
+                        high: e.high,
+                        expected: e.expected,
+                    },
+                );
+            }
+            map
+        },
+        predicted: {
+            let mut map: BTreeMap<String, BTreeMap<String, EstimateRange>> = BTreeMap::new();
+            for profile in &estimated.profiles {
+                if let Some(d) = &profile.declared {
+                    map.entry(profile.capability.clone()).or_default().insert(
+                        profile.metric.clone(),
+                        EstimateRange {
+                            low: d.low,
+                            likely: d.likely,
+                            high: d.high,
+                            expected: (d.low + 4.0 * d.likely + d.high) / 6.0,
+                        },
+                    );
+                }
+            }
+            map
+        },
+        measured: estimated.measured_set(),
         nodes: Vec::new(),
         edges: BTreeSet::new(),
         unresolved: BTreeSet::new(),
@@ -408,6 +506,7 @@ pub fn compile_with_budget(
         edges,
         unresolved,
         mut trace,
+        measured,
         ..
     } = walk;
     trace.push(CompileTrace {
@@ -439,43 +538,44 @@ pub fn compile_with_budget(
             reason,
         });
     }
-    let mut totals = BTreeMap::new();
-    let metrics: BTreeSet<_> = nodes
-        .iter()
-        .flat_map(|n| n.estimates.keys())
-        .filter(|m| *m != "duration_minutes")
-        .collect();
-    for metric in metrics {
-        let vals: Vec<_> = nodes
-            .iter()
-            .filter_map(|n| n.estimates.get(metric).copied())
-            .collect();
-        let combine = |field: fn(&EstimateRange) -> f64| {
-            if metric == "failure_risk" {
-                1.0 - vals.iter().map(|v| 1.0 - field(v)).product::<f64>()
-            } else {
-                vals.iter().map(field).sum()
-            }
-        };
-        let (low, likely, high) = (
-            combine(|v| v.low),
-            combine(|v| v.likely),
-            combine(|v| v.high),
-        );
-        totals.insert(
-            metric.clone(),
-            EstimateRange {
-                low,
-                likely,
-                high,
-                expected: (low + 4.0 * likely + high) / 6.0,
-            },
-        );
-    }
+    // Effective roll-ups drive the plan; predicted (declared-only) roll-ups
+    // stay beside them so every total says how much of it rests on guesses.
+    let mut totals = rollup(&nodes, |n| &n.estimates);
+    let predicted_totals = rollup(&nodes, |n| &n.predicted);
     let (duration, timings, width) = cpm(&nodes, &edges)?;
     let makespan = duration.expected;
     if !nodes.is_empty() {
         totals.insert("duration_minutes".into(), duration);
+    }
+    // Same graph, declared durations: only the makespan is kept, as the
+    // predicted column beside the effective makespan.
+    let (predicted_duration, _, _) = cpm_with(&nodes, &edges, |n| &n.predicted_duration)?;
+    let mut predicted_full = predicted_totals;
+    if !nodes.is_empty() {
+        predicted_full.insert("duration_minutes".into(), predicted_duration);
+    }
+    let mut basis = BTreeMap::new();
+    for metric in totals.keys() {
+        let total_nodes = nodes
+            .iter()
+            .filter(|n| n.estimates.contains_key(metric))
+            .count();
+        let measured_nodes = nodes
+            .iter()
+            .filter(|n| {
+                n.estimates.contains_key(metric)
+                    && measured.contains(&(n.capability.clone(), metric.clone()))
+            })
+            .count();
+        basis.insert(
+            metric.clone(),
+            MetricBasis {
+                predicted: predicted_full.get(metric).copied().unwrap_or(zero()),
+                effective: totals[metric],
+                measured_nodes,
+                total_nodes,
+            },
+        );
     }
     for (task, timing) in &timings {
         trace.push(CompileTrace {
@@ -501,9 +601,100 @@ pub fn compile_with_budget(
         decision: "analyzed".into(),
         reason: format!("P7 CPM makespan {makespan:.3} minutes; parallel width {width}"),
     });
+    // Provenance report: every measured profile plus every used
+    // capability's metrics, sorted by (capability, metric) as estimated.
+    let selected_caps: BTreeSet<String> = selection
+        .methods
+        .values()
+        .filter_map(|method_id| {
+            doc.method
+                .iter()
+                .find(|m| &m.id == method_id)
+                .and_then(|m| m.capability.clone())
+        })
+        .collect();
+    let mut provenance = Vec::new();
+    for profile in &estimated.profiles {
+        let selected = selected_caps.contains(&profile.capability);
+        if profile.measured.is_none() && !selected {
+            continue;
+        }
+        let observations = profile.measured.map_or(0, |m| m.observations);
+        provenance.push(ProvenanceRow {
+            capability: profile.capability.clone(),
+            metric: profile.metric.clone(),
+            predicted: profile.declared.map(|d| EstimateRange {
+                low: d.low,
+                likely: d.likely,
+                high: d.high,
+                expected: (d.low + 4.0 * d.likely + d.high) / 6.0,
+            }),
+            measured: profile.measured.map(|m| EstimateRange {
+                low: m.low,
+                likely: m.likely,
+                high: m.high,
+                expected: m.expected,
+            }),
+            observations,
+            stale: profile.measured.map_or(0, |m| m.stale),
+            contradicts_declared: profile.contradicts_declared,
+            effective: profile.effective.map_or(zero(), |e| EstimateRange {
+                low: e.low,
+                likely: e.likely,
+                high: e.high,
+                expected: e.expected,
+            }),
+            basis: if profile.measured.is_some() {
+                format!("measured({observations})")
+            } else {
+                "declared".to_string()
+            },
+            selected,
+        });
+    }
+    for row in &provenance {
+        let Some(measured) = &row.measured else {
+            continue;
+        };
+        let subject = format!("capability:{}", row.capability);
+        trace.push(CompileTrace {
+            subject: subject.clone(),
+            decision: "measured".to_string(),
+            reason: format!(
+                "P5 median {:.3} over {} observations for `{}` (min {:.3}, max {:.3})",
+                measured.likely, row.observations, row.metric, measured.low, measured.high,
+            ),
+        });
+        if row.stale > 0 {
+            trace.push(CompileTrace {
+                subject: subject.clone(),
+                decision: "stale".to_string(),
+                reason: format!(
+                    "P5 found {} of {} observations for `{}` older than {} days before the newest",
+                    row.stale,
+                    row.observations,
+                    row.metric,
+                    crate::estimate::STALE_AFTER_DAYS,
+                ),
+            });
+        }
+        if row.contradicts_declared {
+            trace.push(CompileTrace {
+                subject,
+                decision: "contradicts".to_string(),
+                reason: format!(
+                    "P5 measured median {:.3} for `{}` falls outside the declared range",
+                    measured.likely, row.metric,
+                ),
+            });
+        }
+    }
     Ok(CompiledPlan {
         root_task: doc.objective.root_task.clone(),
         totals,
+        basis,
+        provenance,
+        unattributed_tasks: estimated.unattributed_tasks,
         makespan_minutes: makespan,
         parallel_width: width,
         timings,
@@ -525,13 +716,47 @@ fn selection_status(status: &Optimality) -> String {
     }
 }
 
-fn range(e: &Estimate) -> EstimateRange {
-    EstimateRange {
-        low: e.low,
-        likely: e.likely,
-        high: e.high,
-        expected: (e.low + 4.0 * e.likely + e.high) / 6.0,
+/// Roll up one estimate map per node across the selected leaves, skipping
+/// `duration_minutes` (which takes the CPM makespan instead). Money sums
+/// and failure risk combines independent task risks.
+fn rollup(
+    nodes: &[Node],
+    pick: impl Fn(&Node) -> &BTreeMap<String, EstimateRange>,
+) -> BTreeMap<String, EstimateRange> {
+    let mut totals = BTreeMap::new();
+    let metrics: BTreeSet<_> = nodes
+        .iter()
+        .flat_map(|n| pick(n).keys())
+        .filter(|m| *m != "duration_minutes")
+        .collect();
+    for metric in metrics {
+        let vals: Vec<_> = nodes
+            .iter()
+            .filter_map(|n| pick(n).get(metric).copied())
+            .collect();
+        let combine = |field: fn(&EstimateRange) -> f64| {
+            if metric == "failure_risk" {
+                1.0 - vals.iter().map(|v| 1.0 - field(v)).product::<f64>()
+            } else {
+                vals.iter().map(field).sum()
+            }
+        };
+        let (low, likely, high) = (
+            combine(|v| v.low),
+            combine(|v| v.likely),
+            combine(|v| v.high),
+        );
+        totals.insert(
+            metric.clone(),
+            EstimateRange {
+                low,
+                likely,
+                high,
+                expected: (low + 4.0 * likely + high) / 6.0,
+            },
+        );
     }
+    totals
 }
 fn zero() -> EstimateRange {
     EstimateRange {
@@ -545,6 +770,14 @@ fn zero() -> EstimateRange {
 fn cpm(
     nodes: &[Node],
     edges: &BTreeSet<(usize, usize)>,
+) -> Result<(EstimateRange, BTreeMap<String, TaskTiming>, usize), CompileError> {
+    cpm_with(nodes, edges, |n| &n.duration)
+}
+
+fn cpm_with(
+    nodes: &[Node],
+    edges: &BTreeSet<(usize, usize)>,
+    pick: impl Fn(&Node) -> &EstimateRange,
 ) -> Result<(EstimateRange, BTreeMap<String, TaskTiming>, usize), CompileError> {
     let n = nodes.len();
     let mut pred = vec![Vec::new(); n];
@@ -581,7 +814,7 @@ fn cpm(
         let mut ef = vec![0.0; n];
         for &i in &order {
             es[i] = pred[i].iter().map(|p| ef[*p]).fold(0.0, f64::max);
-            ef[i] = es[i] + duration(&nodes[i].duration);
+            ef[i] = es[i] + duration(pick(&nodes[i]));
         }
         let span = ef.iter().copied().fold(0.0, f64::max);
         (es, ef, span)
@@ -604,7 +837,7 @@ fn cpm(
         } else {
             succ[i].iter().map(|s| ls[*s]).fold(f64::INFINITY, f64::min)
         };
-        ls[i] = lf[i] - nodes[i].duration.expected;
+        ls[i] = lf[i] - pick(&nodes[i]).expected;
     }
     let mut timing = BTreeMap::new();
     for i in 0..n {

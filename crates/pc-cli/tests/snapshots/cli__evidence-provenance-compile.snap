@@ -1,0 +1,9 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+compiled: job (evidence-flip/plan.toml); makespan 10.000 minutes; parallel width 1
+selection: optimal (2000 ms budget)
+duration_minutes: low 9.000, likely 10.000, high 11.000, expected 10.000 (predicted 10.000; measured 1/1)
+critical tasks: job
+slack job: 0.000 minutes (critical)

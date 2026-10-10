@@ -1,0 +1,6 @@
+{"subject":"capability:fast@1","metric":"duration_minutes","value":28.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}
+{"subject":"capability:fast@1","metric":"duration_minutes","value":30.0,"unit":"minutes","time":"2026-10-08T01:00:00Z","source":"ci","artifact_hash":null}
+{"subject":"capability:fast@1","metric":"duration_minutes","value":32.0,"unit":"minutes","time":"2026-10-08T02:00:00Z","source":"ci","artifact_hash":null}
+{"subject":"capability:slow@1","metric":"duration_minutes","value":9.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}
+{"subject":"capability:slow@1","metric":"duration_minutes","value":10.0,"unit":"minutes","time":"2026-10-08T01:00:00Z","source":"ci","artifact_hash":null}
+{"subject":"capability:slow@1","metric":"duration_minutes","value":11.0,"unit":"minutes","time":"2026-10-08T02:00:00Z","source":"ci","artifact_hash":null}

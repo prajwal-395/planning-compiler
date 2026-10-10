@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+capability:fast@1: measured (P5 median 30.000 over 3 observations for `duration_minutes` (min 28.000, max 32.000))
+capability:fast@1: contradicts (P5 measured median 30.000 for `duration_minutes` falls outside the declared range)
+provenance fast@1 duration_minutes: predicted 4.000/5.000/6.000 vs measured 28.000/30.000/32.000 (n=3) [contradicts declared]

@@ -790,6 +790,7 @@ dependencies = [
 name = "pc-store"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "pc-ir",
  "serde",
  "serde_json",

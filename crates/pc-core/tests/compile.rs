@@ -481,3 +481,39 @@ fn compilation_is_independent_of_input_order_and_ignores_proposals() {
     let second = serde_json::to_vec(&compile(&shuffled).unwrap()).unwrap();
     assert_eq!(first, second);
 }
+
+#[test]
+fn compile_surfaces_unattributed_task_evidence() {
+    let mut plan = doc(
+        vec![task("root", TaskState::Resolved)],
+        vec![invoke("via-a", "root", "a"), invoke("via-b", "root", "b")],
+        vec![cap("a", 1.0), cap("b", 2.0)],
+    );
+    for (subject, time) in [
+        ("task:root", "2026-10-01T00:00:00Z"),
+        ("task:root", "2026-10-02T00:00:00Z"),
+    ] {
+        plan.evidence.push(pc_ir::Evidence {
+            subject: subject.into(),
+            metric: "duration_minutes".into(),
+            value: 30.0,
+            unit: "minutes".into(),
+            time: time.into(),
+            source: "test".into(),
+            artifact_hash: None,
+        });
+    }
+    let compiled = compile(&plan).unwrap();
+    assert_eq!(
+        compiled.unattributed_tasks,
+        [pc_core::UnattributedTaskEvidence {
+            task: "root".into(),
+            metric: "duration_minutes".into(),
+            observations: 2,
+            capabilities: vec!["a".into(), "b".into()],
+            methods: vec!["via-a".into(), "via-b".into()],
+        }]
+    );
+    assert!(compiled.provenance.iter().all(|row| row.measured.is_none()));
+    assert_eq!(compiled.totals["duration_minutes"].expected, 1.0);
+}

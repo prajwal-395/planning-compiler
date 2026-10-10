@@ -55,8 +55,8 @@ pub struct PlanDoc {
     /// Executors with typed contracts and three-point estimates.
     #[serde(default)]
     pub capability: Vec<Capability>,
-    /// Recorded observations. Estimators arrive in step 5; P1 only
-    /// validates references and units. Defaults to empty.
+    /// Recorded observations, folded into measured profiles by P5
+    /// without editing declared estimates. Defaults to empty.
     #[serde(default)]
     pub evidence: Vec<Evidence>,
 }
@@ -331,14 +331,14 @@ pub struct Estimate {
 pub enum EstimateProvenance {
     /// A guess written by a person or agent.
     Declared,
-    /// Derived from evidence (estimators arrive in step 5).
+    /// Derived from evidence (P5 estimators).
     Measured,
 }
 
 /// One append-only observation about a capability, method or task.
 ///
-/// Estimators that fold evidence into profiles arrive in step 5.
-/// P1/P2 only check that the subject exists and units are consistent.
+/// P1/P2 check that the subject exists and units are consistent; P5
+/// folds it into capability profiles (see `docs/passes.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {

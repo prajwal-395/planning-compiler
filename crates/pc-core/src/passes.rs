@@ -1,4 +1,5 @@
-//! Passes P1 (load/resolve), P2 (validate), P3 (match) and P4 (share).
+//! Passes P1 (load/resolve), P2 (validate), P3 (match), P4 (share) and P5
+//! (estimate).
 //!
 //! P1 parses the document (done by `pc-store`), rejects a wrong
 //! `ir_version` (E000), indexes entities, reports duplicate ids (E001) and
@@ -84,7 +85,7 @@ impl Report {
     }
 }
 
-/// A compiler pass in the P1-P9 pipeline. P1-P4 live here; P6-P7 run over
+/// A compiler pass in the P1-P9 pipeline. P1-P5 live here; P6-P7 run over
 /// the passed document in `compile`, and contributors add later passes as
 /// new implementors without touching the manager. See `docs/passes.md` for
 /// each pass's contract.
@@ -1003,11 +1004,14 @@ fn check_evidence(ctx: &mut Ctx) {
                 subject.clone(),
             );
         }
-        if !ev.value.is_finite() {
+        if !ev.value.is_finite() || ev.value < 0.0 {
             ctx.error_in(
                 "P2-validate",
                 "E014",
-                format!("evidence for `{}` has non-finite value", ev.subject),
+                format!(
+                    "evidence for `{}` must have a finite, non-negative value",
+                    ev.subject
+                ),
                 anchor,
                 subject,
             );
@@ -1717,13 +1721,87 @@ fn dedup_merged_methods(ctx: &mut Ctx, rewritten: &BTreeSet<String>) -> BTreeMap
     removed
 }
 
-/// Run P1-P4 over a parsed document and build the sorted report.
+/// P5: estimate the effective capability profiles from evidence.
+///
+/// Folds evidence into per-capability profiles (see [`crate::estimate`])
+/// and reports one `measured` trace event per capability and metric with
+/// observations, plus `stale` and `contradicts` events. P5 never edits the
+/// document: declared estimates stay as written, and selection and roll-ups
+/// read the effective numbers. It runs after P4, so evidence recorded
+/// against a merged-away task already names the surviving task. Like P3 and
+/// P4 it runs only over clean plans.
+pub struct EstimatePass;
+
+impl Pass for EstimatePass {
+    fn name(&self) -> &'static str {
+        "P5-estimate"
+    }
+
+    fn run(&self, ctx: &mut Ctx) {
+        if !ctx.diagnostics.is_empty() {
+            return;
+        }
+        let report = crate::estimate::estimate(ctx.doc);
+        for profile in &report.profiles {
+            let Some(measured) = &profile.measured else {
+                continue;
+            };
+            let subject = format!("capability:{}", profile.capability);
+            let unit = canonical_unit(&profile.metric).unwrap_or("");
+            ctx.trace.push(TraceEvent {
+                pass: self.name().to_string(),
+                subject: subject.clone(),
+                decision: "measured".to_string(),
+                reason: format!(
+                    "median {:.3} {unit} over {} observations for `{}` (min {:.3}, max {:.3})",
+                    measured.likely,
+                    measured.observations,
+                    profile.metric,
+                    measured.low,
+                    measured.high,
+                ),
+            });
+            if measured.stale > 0 {
+                ctx.trace.push(TraceEvent {
+                    pass: self.name().to_string(),
+                    subject: subject.clone(),
+                    decision: "stale".to_string(),
+                    reason: format!(
+                        "{} of {} observations for `{}` are older than {} days before the newest",
+                        measured.stale,
+                        measured.observations,
+                        profile.metric,
+                        crate::estimate::STALE_AFTER_DAYS,
+                    ),
+                });
+            }
+            if profile.contradicts_declared {
+                let declared = profile.declared.unwrap_or(crate::estimate::DeclaredTriple {
+                    low: f64::NAN,
+                    likely: f64::NAN,
+                    high: f64::NAN,
+                });
+                ctx.trace.push(TraceEvent {
+                    pass: self.name().to_string(),
+                    subject,
+                    decision: "contradicts".to_string(),
+                    reason: format!(
+                        "measured median {:.3} for `{}` falls outside declared [{:.3}, {:.3}]",
+                        measured.likely, profile.metric, declared.low, declared.high,
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Run P1-P5 over a parsed document and build the sorted report.
 ///
 /// `file` is the display path used in diagnostics and `text` the raw source
 /// used for line lookup. `evidence_log` anchors records loaded from a JSONL
 /// log. Evidence unit case is canonicalized in place, P3 appends `derived`
-/// proposals and P4 rewrites shared tasks in place, so callers pass a
-/// mutable copy when the file must stay pristine.
+/// proposals, P4 rewrites shared tasks in place and P5 reports the measured
+/// profiles, so callers pass a mutable copy when the file must stay pristine.
 pub fn check(
     file: &str,
     text: &str,
@@ -1748,6 +1826,7 @@ pub fn check(
         Box::new(ValidatePass),
         Box::new(MatchPass),
         Box::new(SharePass),
+        Box::new(EstimatePass),
     ];
     for pass in &passes {
         pass.run(&mut ctx);

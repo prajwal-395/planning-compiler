@@ -32,7 +32,7 @@ Parse (in `pc-store`), then:
 | E011 | invalid estimate | finite, `low <= likely <= high`, non-negative, risk in `[0,1]`, `measured` cites observations |
 | E012 | undefined resource | capability resources name declared resources |
 | E013 | method shape | `invoke` names a capability and no subtasks/edges; `decompose` names no capability and at least one subtask; order endpoints are subtasks of the same method |
-| E014 | invalid evidence | subject exists (`capability:`/`method:`/`task:`), timestamp is RFC 3339, value is finite (units are checked in P1) |
+| E014 | invalid evidence | subject exists (`capability:`/`method:`/`task:`), timestamp is RFC 3339, value is finite and non-negative (units are checked in P1) |
 | E015 | invalid objective | weights name known metrics and are finite/non-negative; budget non-negative; floor in `[0,1]`; criteria carry their kind's fields |
 
 Scope notes:
@@ -90,16 +90,58 @@ through the canonical task's leaves, or any cycle at all if the canonical
 task may be leafless; P4 runs only over clean plans. `pc compile` and
 `pc explain` run over the shared document, so P6 sees the merged graph.
 
+## P5: estimate (step 5)
+
+`pc check` folds evidence into per-capability profiles and reports one
+`measured` trace event per capability and metric with observations, plus
+`stale` and `contradicts` events. Evidence never edits declared estimates:
+each profile keeps the declared triple beside the measured triple
+(min/median/max over attributed observations), and selection (P6) and
+roll-ups run on the *effective* numbers (measured when present, declared
+otherwise).
+
+Attribution is by subject: `capability:<id>` measures directly,
+`method:<id>` measures the capability its invoke method calls, and
+`task:<id>` measures the one capability the task's accepted invoke methods
+call. When a task's accepted invoke methods call more than one capability,
+the record cannot say which alternative ran, so it counts as unattributed;
+record such observations against `method:<id>` or `capability:<id>`
+instead. `pc record` still appends an ambiguous `task:<id>` record but warns,
+naming those subjects, and `pc compile` (text and `unattributed_tasks` in
+JSON) lists every ignored `task:<id>` observation by task and metric, as
+does `pc explain` for that task or any capability it could have measured.
+P5 runs after P4, so evidence recorded against a merged-away task
+already names the surviving task and counts toward the same capability.
+
+Statistics are deterministic with no wall-clock input: values sort
+ascending, the median is the middle value (mean of the two middles for even
+counts), spread is min/max, staleness is older than 90 days before the
+newest observation for the same capability and metric, and contradiction
+means the measured median falls outside declared `[low, high]`. The v0
+window is all records. `pc record <evidence.json> [path]` appends one
+validated observation to the sibling `evidence.jsonl`, refusing anything
+`pc check` would flag.
+
+`pc compile` and `pc explain` show predicted versus measured: per-metric
+lines carry the declared-only prediction beside the effective total with a
+measured/total node count, `pc explain capability:<id>` renders the
+provenance report (predicted triple vs measured triple, observation and
+stale counts, contradiction flag), and `--json` carries the same rows:
+`pc compile --json` adds the per-metric basis, and `pc explain --json` emits
+an object with the decision `rows`, the capability's `provenance` rows
+(empty for non-capability targets), and the matching `unattributed_tasks`.
+
 ## P6: select (step 3)
 
 `compile` considers accepted methods reachable from the objective root.
 Proposed, derived and rejected methods are outside selection, and `done` or
 `dropped` tasks are leaves, matching P7's skip rule. The objective is
-the weighted sum of each method's PERT expected metric costs. Hard limits are
+the weighted sum of each method's P5 effective PERT expected metric costs,
+so recorded evidence moves selection. Hard limits are
 applied to total `money_usd` when `budget_usd` is set. A quality floor is
 enforced as an independent-success constraint: sum `-ln(1-risk)` must not
 exceed `-ln(quality_floor)`. Invocations missing a required money or risk
-estimate are ineligible under the corresponding hard constraint. `deadline`
+estimate in either declared or measured form are ineligible under the corresponding hard constraint. `deadline`
 remains a post-analysis constraint.
 
 The pure-Rust `pc-select` crate builds a 0/1 ILP with a needed-task variable
@@ -123,17 +165,18 @@ chosen method or the missing estimate that made them ineligible.
 It preserves three-point estimates, uses PERT expected durations for CPM,
 reports earliest/latest times, slack, critical tasks, parallel width (tasks
 with zero expected duration are not counted), and the
-low/likely/high makespan. Unresolved tasks are listed with zero rolled work;
+low/likely/high makespan. Roll-ups and durations run on the P5 effective
+estimates, with the declared-only prediction beside each total.
+Unresolved tasks are listed with zero rolled work;
 this pass never chooses among methods. Money sums across invoked work and
 failure risk combines independent task risks as `1 - product(1 - risk)`.
 `pc explain` lists each selected method's assumptions and each executable
 task's slack and critical status.
 
-## Deferred (steps 5-8)
+## Deferred (steps 6-8)
 
 | Pass | Ships in |
 |---|---|
-| P5 estimate (evidence folding) | step 5 |
 | P8 frontier (ranking) | step 6 |
 | P9 impact/diff | step 6 |
-| proposal loop, context slices, record | steps 5-7 |
+| proposal loop, context slices | step 7 |

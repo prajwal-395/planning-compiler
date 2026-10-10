@@ -52,10 +52,13 @@ without an accepted method remain visible as unresolved.
 - **Evidence.** An append-only observation: `subject`
   (`capability:<id>`, `method:<id>` or `task:<id>`), `metric`, `value`,
   `unit`, RFC 3339 `time`, `source`, optional `artifact_hash`. Evidence
-  never edits declared estimates in v0; estimators arrive in step 5. P1
+  never edits declared estimates: P5 derives measured triples from it
+  (see `passes.md`) and selection and roll-ups run on the effective
+  numbers. P1
   accepts only the metric's canonical unit (case-insensitive, never
   empty) and canonicalizes its case; P2 checks subjects, timestamps and
-  values.
+  values. `pc record` appends one validated observation to the sibling
+  `evidence.jsonl`.
 
 ## Metrics
 

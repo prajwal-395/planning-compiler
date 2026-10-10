@@ -1,0 +1,45 @@
+ir_version = 0
+
+[plan]
+id = "evidence-flip"
+title = "Evidence flips method selection"
+
+[objective]
+root_task = "job"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "job"
+title = "Do the job"
+state = "resolved"
+
+# On declared guesses alone, via-fast (expected 5 minutes) beats via-slow
+# (expected 10). The sibling evidence.jsonl measures fast at 28-32 minutes
+# and slow at 9-11, so with evidence folded in P6 must pick via-slow.
+[[method]]
+id = "via-fast"
+task = "job"
+kind = "invoke"
+capability = "fast@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-slow"
+task = "job"
+kind = "invoke"
+capability = "slow@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "fast@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0, provenance = "declared" }]
+
+[[capability]]
+id = "slow@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 8.0, likely = 10.0, high = 12.0, provenance = "declared" }]

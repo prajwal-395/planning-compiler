@@ -19,7 +19,7 @@ struct Cli {
 /// Available commands. Later-step commands are added with their passes.
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run passes P1-P4 over a plan file or directory.
+    /// Run passes P1-P5 over a plan file or directory.
     Check {
         /// Plan file or directory. Defaults to the current directory.
         #[arg(default_value = ".")]
@@ -60,6 +60,14 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         selection_time_budget_ms: u64,
     },
+    /// Append one evidence observation to the plan's evidence log.
+    Record {
+        /// JSON file holding one evidence object.
+        evidence: PathBuf,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 fn main() {
@@ -78,6 +86,7 @@ fn main() {
             json,
             selection_time_budget_ms,
         } => run_explain(&path, &target, json, selection_time_budget_ms),
+        Commands::Record { evidence, path } => run_record(&evidence, &path),
     }
 }
 
@@ -111,6 +120,36 @@ fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passe
     (loaded, report)
 }
 
+/// Why P5 ignored `task:<id>` evidence, and which subjects to use instead.
+fn unattributed_reason(entry: &pc_core::UnattributedTaskEvidence) -> String {
+    if entry.capabilities.is_empty() {
+        return "its accepted invoke methods call no capability".to_string();
+    }
+    let subjects: Vec<String> = entry
+        .methods
+        .iter()
+        .map(|m| format!("method:{m}"))
+        .chain(entry.capabilities.iter().map(|c| format!("capability:{c}")))
+        .collect();
+    format!(
+        "its accepted invoke methods call {} capabilities; record against one of {} instead",
+        entry.capabilities.len(),
+        subjects.join(", "),
+    )
+}
+
+/// One text line for ignored `task:<id>` evidence in compile and explain.
+fn unattributed_line(entry: &pc_core::UnattributedTaskEvidence) -> String {
+    format!(
+        "unattributed task:{} {}: {} observation{} ignored ({})",
+        entry.task,
+        entry.metric,
+        entry.observations,
+        if entry.observations == 1 { "" } else { "s" },
+        unattributed_reason(entry),
+    )
+}
+
 fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
     let (loaded, _) = load_checked(path);
     let result = match pc_core::compile_with_budget(
@@ -138,10 +177,19 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
         "selection: {} ({} ms budget)",
         result.selection_status, result.selection_time_budget_ms
     );
-    for (metric, range) in result.totals {
+    for (metric, range) in &result.totals {
+        let Some(column) = result.basis.get(metric) else {
+            continue;
+        };
         println!(
-            "{metric}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3}",
-            range.low, range.likely, range.high, range.expected
+            "{metric}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{})",
+            range.low,
+            range.likely,
+            range.high,
+            range.expected,
+            column.predicted.expected,
+            column.measured_nodes,
+            column.total_nodes,
         );
     }
     let mut timed: Vec<_> = result.timings.iter().collect();
@@ -168,6 +216,9 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
     if !result.unresolved_tasks.is_empty() {
         println!("unresolved: {}", result.unresolved_tasks.join(", "));
     }
+    for entry in &result.unattributed_tasks {
+        println!("{}", unattributed_line(entry));
+    }
 }
 
 fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_budget_ms: u64) {
@@ -189,25 +240,152 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
     };
     let rows: Vec<_> = result
         .trace
-        .into_iter()
+        .iter()
         .filter(|row| row.subject == target)
+        .cloned()
         .collect();
-    if rows.is_empty() {
+    // Capability targets also render the P5 provenance report: declared
+    // guesses beside measured evidence, one row per metric.
+    let provenance: Vec<_> = match target.strip_prefix("capability:") {
+        Some(capability) => result
+            .provenance
+            .iter()
+            .filter(|row| row.capability == capability)
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
+    let unattributed: Vec<_> = result
+        .unattributed_tasks
+        .iter()
+        .filter(|entry| match target.split_once(':') {
+            Some(("task", id)) => entry.task == id,
+            Some(("capability", id)) => entry.capabilities.iter().any(|c| c == id),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    if rows.is_empty() && provenance.is_empty() && unattributed.is_empty() {
         eprintln!("error: no explanation for `{target}` in reachable accepted plan");
         std::process::exit(1);
     }
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&rows).unwrap_or_default()
+            serde_json::to_string_pretty(&serde_json::json!({
+                "rows": rows,
+                "provenance": provenance,
+                "unattributed_tasks": unattributed,
+            }))
+            .unwrap_or_default()
         );
     } else {
         for row in rows {
             println!("{}: {} ({})", row.subject, row.decision, row.reason);
         }
+        for row in provenance {
+            let predicted = row.predicted.map_or("none".to_string(), |p| {
+                format!("{:.3}/{:.3}/{:.3}", p.low, p.likely, p.high)
+            });
+            let measured = row
+                .measured
+                .map_or("no measured evidence".to_string(), |m| {
+                    let stale = if row.stale > 0 {
+                        format!(", {} stale", row.stale)
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{:.3}/{:.3}/{:.3} (n={}{})",
+                        m.low, m.likely, m.high, row.observations, stale
+                    )
+                });
+            let contradicts = if row.contradicts_declared {
+                " [contradicts declared]"
+            } else {
+                ""
+            };
+            println!(
+                "provenance {} {}: predicted {predicted} vs measured {measured}{contradicts}",
+                row.capability, row.metric,
+            );
+        }
+        for entry in &unattributed {
+            println!("{}", unattributed_line(entry));
+        }
     }
 }
 
+/// Handler for `pc record`.
+fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
+    let text = match std::fs::read_to_string(evidence_path) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!(
+                "error[E014]: cannot read `{}`: {e}",
+                evidence_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let record = match pc_store::parse_evidence_record(&text) {
+        Ok(record) => record,
+        Err(e) => {
+            let code = if matches!(e, pc_store::EvidenceRecordError::UnknownMetric(_)) {
+                "E010"
+            } else {
+                "E014"
+            };
+            eprintln!("error[{code}]: {e}");
+            std::process::exit(1);
+        }
+    };
+    let loaded = match pc_store::load(path) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("error[E000]: {e}");
+            std::process::exit(1);
+        }
+    };
+    if !pc_store::evidence_subject_exists(&loaded.doc, &record.subject) {
+        eprintln!(
+            "error[E014]: evidence subject `{}` names nothing: use capability:<id>, method:<id> or task:<id>",
+            record.subject
+        );
+        std::process::exit(1);
+    }
+    let plan_file = std::path::PathBuf::from(&loaded.display_path);
+    match pc_store::append_evidence(&plan_file, &record) {
+        Ok((log, line)) => {
+            println!(
+                "recorded {} {}={}{} to {}:{line}",
+                record.subject,
+                record.metric,
+                record.value,
+                record.unit,
+                log.display(),
+            );
+            let mut probe = loaded.doc;
+            probe.evidence = vec![record];
+            let report =
+                pc_core::passes::check(&loaded.display_path, &loaded.text, &mut probe, None);
+            if !report.ok() {
+                return;
+            }
+            for entry in pc_core::estimate(&probe).unattributed_tasks {
+                eprintln!(
+                    "warning: P5 will not attribute task:{} evidence ({})",
+                    entry.task,
+                    unattributed_reason(&entry),
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("error[E014]: {e}");
+            std::process::exit(1);
+        }
+    }
+}
 /// Handler for `pc check`.
 fn run_check(path: &std::path::Path, json: bool) {
     let loaded = match pc_store::load(path) {

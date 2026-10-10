@@ -1,0 +1,48 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+{
+  "provenance": [
+    {
+      "basis": "measured(3)",
+      "capability": "fast@1",
+      "contradicts_declared": true,
+      "effective": {
+        "expected": 30.0,
+        "high": 32.0,
+        "likely": 30.0,
+        "low": 28.0
+      },
+      "measured": {
+        "expected": 30.0,
+        "high": 32.0,
+        "likely": 30.0,
+        "low": 28.0
+      },
+      "metric": "duration_minutes",
+      "observations": 3,
+      "predicted": {
+        "expected": 5.0,
+        "high": 6.0,
+        "likely": 5.0,
+        "low": 4.0
+      },
+      "selected": false,
+      "stale": 0
+    }
+  ],
+  "rows": [
+    {
+      "decision": "measured",
+      "reason": "P5 median 30.000 over 3 observations for `duration_minutes` (min 28.000, max 32.000)",
+      "subject": "capability:fast@1"
+    },
+    {
+      "decision": "contradicts",
+      "reason": "P5 measured median 30.000 for `duration_minutes` falls outside the declared range",
+      "subject": "capability:fast@1"
+    }
+  ],
+  "unattributed_tasks": []
+}

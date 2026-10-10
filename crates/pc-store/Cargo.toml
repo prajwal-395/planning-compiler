@@ -10,6 +10,7 @@ pc-ir.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+chrono = "0.4"
 
 [lints]
 workspace = true

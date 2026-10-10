@@ -5,9 +5,11 @@ objectives, tasks with alternative methods, capabilities with typed
 contracts and estimates, recorded evidence - and the compiler validates it,
 chooses how to do it, and explains every decision.
 
-**Status: steps 0-4.** Workspace skeleton, IR v0, `pc check` (passes P1-P4:
-validation, capability matching, shared-subtask merging), method selection
-(P6), and selected-plan analysis with `pc compile` and `pc explain` (P7). See
+**Status: steps 0-5.** Workspace skeleton, IR v0, `pc check` (passes P1-P5:
+validation, capability matching, shared-subtask merging, evidence
+estimation), method selection (P6) over evidence-folded estimates, and
+selected-plan analysis with `pc compile` and `pc explain` (P7) including
+predicted-versus-measured columns and `pc record`. See
 `docs/` for semantics and the sequenced plan. The `self-plan`
 fixture (`examples/self-plan`) is this project's own implementation plan.
 
@@ -24,8 +26,8 @@ v0 specifically does not:
   model-free),
 - execute anything or track task status/assignment,
 - model people (`docs/adr/0003-no-human-executors.md`),
-- schedule resource capacity (`frontier`, `impact`, `propose`, `record`,
-  and `context` arrive in steps 5-7).
+- schedule resource capacity (`frontier`, `impact`, `propose`,
+  and `context` arrive in steps 6-7).
 
 State is text files in the repo (`docs/adr/0002-text-files.md`). The repo
 is private and unlicensed pending a later decision
@@ -35,10 +37,10 @@ is private and unlicensed pending a later decision
 
 ```
 crates/pc-ir/     IR types, TOML+JSON serde, JSON Schema
-crates/pc-core/   Passes P1-P4, P6 selection input, roll-ups, P7 CPM, diagnostics
+crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, diagnostics
 crates/pc-select/ P6 exact ILP method selection with greedy fallback
-crates/pc-store/  plan loader, evidence JSONL
-crates/pc-cli/    pc binary (check, compile, explain, schema)
+crates/pc-store/  plan loader, evidence JSONL append/read
+crates/pc-cli/    pc binary (check, compile, explain, record, schema)
 schema/           generated JSON Schema (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
@@ -50,8 +52,11 @@ Adapters (`pc-adapter-*`) arrive after the MVP.
 ## Use
 
 ```sh
-pc check [path]    # run P1-P4; exit 0 clean, 1 diagnostics, 2 usage
+pc check [path]    # run P1-P5; exit 0 clean, 1 diagnostics, 2 usage
 pc check [path] --json   # full report: diagnostics, counts, trace
+pc compile [path]  # effective totals with predicted-vs-measured columns
+pc explain <id> [path]   # per-decision trail plus capability provenance
+pc record <evidence.json> [path]  # append one observation to evidence.jsonl
 pc schema [--out file]   # emit the canonical JSON Schema
 ```
 
