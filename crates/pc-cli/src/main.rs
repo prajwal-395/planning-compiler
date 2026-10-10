@@ -1,4 +1,4 @@
-//! `pc`: the planning-compiler CLI (steps 0-1: `check`, `schema`).
+//! `pc`: the planning-compiler CLI.
 //!
 //! Exit codes follow the workspace contract: `0` means the plan checks
 //! clean, `1` means diagnostics were found, `2` means the invocation itself
@@ -16,8 +16,7 @@ struct Cli {
     command: Commands,
 }
 
-/// v0 subcommands. `compile`, `frontier`, `explain`, `impact`, `propose`,
-/// `record` and `context` arrive in later steps and are out of scope here.
+/// Available commands. Later-step commands are added with their passes.
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run passes P1-P2 over a plan file or directory.
@@ -35,6 +34,26 @@ enum Commands {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Roll up accepted methods and analyze the critical path.
+    Compile {
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the full compiled plan as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explain a task, method, or capability in the accepted plan.
+    Explain {
+        /// Entity id, optionally prefixed with task:, method:, or capability:.
+        target: String,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit matching explanation records as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -42,6 +61,121 @@ fn main() {
     match cli.command {
         Commands::Check { path, json } => run_check(&path, json),
         Commands::Schema { out } => run_schema(out.as_deref()),
+        Commands::Compile { path, json } => run_compile(&path, json),
+        Commands::Explain { target, path, json } => run_explain(&path, &target, json),
+    }
+}
+
+fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passes::Report) {
+    let loaded = match pc_store::load(path) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("error[E000]: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut doc = loaded.doc.clone();
+    let evidence_log = loaded
+        .evidence_file
+        .as_deref()
+        .map(|file| pc_core::passes::EvidenceLog {
+            file,
+            lines: &loaded.evidence_lines,
+        });
+    let report = pc_core::passes::check(&loaded.display_path, &loaded.text, &mut doc, evidence_log);
+    if !report.ok() {
+        for diag in &report.diagnostics {
+            eprintln!("{}", pc_core::render_human(diag));
+        }
+        std::process::exit(1);
+    }
+    (loaded, report)
+}
+
+fn run_compile(path: &std::path::Path, json: bool) {
+    let (loaded, _) = load_checked(path);
+    let result = match pc_core::compile(&loaded.doc) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "compiled: {} ({}); makespan {:.3} minutes; parallel width {}",
+        result.root_task, loaded.display_path, result.makespan_minutes, result.parallel_width
+    );
+    for (metric, range) in result.totals {
+        println!(
+            "{metric}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3}",
+            range.low, range.likely, range.high, range.expected
+        );
+    }
+    let mut timed: Vec<_> = result.timings.iter().collect();
+    timed.sort_by(|a, b| {
+        a.1.earliest_start
+            .total_cmp(&b.1.earliest_start)
+            .then_with(|| a.0.cmp(b.0))
+    });
+    let critical: Vec<_> = timed
+        .iter()
+        .filter(|(_, timing)| timing.critical)
+        .map(|(task, _)| task.as_str())
+        .collect();
+    if !critical.is_empty() {
+        println!("critical tasks: {}", critical.join(", "));
+    }
+    for (task, timing) in timed {
+        println!(
+            "slack {task}: {:.3} minutes{}",
+            timing.slack,
+            if timing.critical { " (critical)" } else { "" }
+        );
+    }
+    if !result.unresolved_tasks.is_empty() {
+        println!("unresolved: {}", result.unresolved_tasks.join(", "));
+    }
+}
+
+fn run_explain(path: &std::path::Path, target: &str, json: bool) {
+    let (loaded, _) = load_checked(path);
+    let result = match pc_core::compile(&loaded.doc) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let target = if target.contains(':') {
+        target.to_owned()
+    } else {
+        format!("task:{target}")
+    };
+    let rows: Vec<_> = result
+        .trace
+        .into_iter()
+        .filter(|row| row.subject == target)
+        .collect();
+    if rows.is_empty() {
+        eprintln!("error: no explanation for `{target}` in reachable accepted plan");
+        std::process::exit(1);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
+    } else {
+        for row in rows {
+            println!("{}: {} ({})", row.subject, row.decision, row.reason);
+        }
     }
 }
 

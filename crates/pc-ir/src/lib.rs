@@ -216,7 +216,8 @@ pub struct Method {
     pub order_edges: Vec<OrderEdge>,
     /// Capability id, for `kind = "invoke"`.
     pub capability: Option<String>,
-    /// Lifecycle: only `accepted`/`derived` methods are checked and compiled.
+    /// Lifecycle: `accepted`/`derived` methods are checked; only `accepted`
+    /// methods are compiled.
     pub status: MethodStatus,
     /// Who proposed it: `human:<name>`, `agent:<name>`, `llm:<model>`,
     /// or `pass:<name>`.

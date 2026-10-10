@@ -27,7 +27,7 @@ use crate::diagnostic::Diagnostic;
 
 /// A trace event: one pass decision about one subject.
 ///
-/// `explain` (step 2) renders these. v0 records pass boundaries plus one
+/// `pc check --json` reports these. v0 records pass boundaries plus one
 /// event per diagnostic so the trail is complete from day one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceEvent {

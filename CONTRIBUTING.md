@@ -1,6 +1,6 @@
 # Contributing
 
-Steps 0-1 rules. The repo is private and unlicensed (see
+Steps 0-2 rules. The repo is private and unlicensed (see
 `docs/adr/0001-license-deferred.md`); do not publish to crates.io.
 
 ## Loop
@@ -36,7 +36,14 @@ cargo deny --workspace check licenses advisories bans sources
 
 ## Adding a pass (steps 2+)
 
-Implement the `pc_core::Pass` trait in `pc-core` (or a new `pc-*` crate at
-a dependency boundary, e.g. solvers stay in `pc-select`), register it in
-`check`, and document its contract in `docs/passes.md`. Never copy code
-from Task Master (Commons Clause) or `bv`/`br` (rider license).
+Passes live in `pc-core` (or a new `pc-*` crate at a dependency boundary,
+e.g. solvers stay in `pc-select`) and come in two kinds:
+
+- Validation passes implement the `pc_core::Pass` trait and are registered
+  in `check`, which runs them and reports diagnostics.
+- Analysis passes, such as P7 schedule-analyze, run only on a plan that
+  passed `check` and are exposed as plain functions (P7 is
+  `pc_core::compile`, called by `pc compile` and `pc explain`).
+
+Document every pass's contract in `docs/passes.md`. Never copy code from
+Task Master (Commons Clause) or `bv`/`br` (rider license).

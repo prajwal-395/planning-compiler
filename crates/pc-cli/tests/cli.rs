@@ -82,6 +82,96 @@ fn self_plan_fixture_passes() {
     insta::assert_snapshot!("self-plan", String::from_utf8(output.stdout).unwrap());
 }
 
+#[test]
+fn self_plan_compiles_and_explains_accepted_work() {
+    let mut compile = Command::cargo_bin("pc").unwrap();
+    compile.current_dir(workspace_root());
+    compile.arg("compile").arg("examples/self-plan");
+    let output = compile.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("makespan 6.167 minutes"), "{text}");
+    assert!(text.contains("duration_minutes:"), "{text}");
+    assert!(text.contains("critical tasks: run-check\n"), "{text}");
+    assert!(
+        text.contains("slack run-check: 0.000 minutes (critical)\n"),
+        "{text}"
+    );
+
+    let mut explain = Command::cargo_bin("pc").unwrap();
+    explain.current_dir(workspace_root());
+    let output = explain
+        .arg("explain")
+        .arg("task:step-1")
+        .arg("examples/self-plan")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("uses method:check-then-gate")
+    );
+
+    let explain = |target: &str| {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .current_dir(workspace_root())
+            .arg("explain")
+            .arg(target)
+            .arg("examples/self-plan")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let text = explain("method:plan-steps");
+    assert!(
+        text.contains(
+            "method:plan-steps: assumes (Steps stay independently shippable in report section 4.2 order.)"
+        ),
+        "{text}"
+    );
+    let text = explain("run-check");
+    assert!(
+        text.contains("task:run-check: critical (slack 0.000 minutes; earliest 0.000-6.167, latest 0.000-6.167)"),
+        "{text}"
+    );
+}
+
+/// Parallel critical tasks are listed as a set, never as an invented chain.
+#[test]
+fn parallel_critical_tasks_are_not_chained() {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root().join("tests").join("fixtures"))
+        .arg("compile")
+        .arg("valid-parallel-critical.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("makespan 5.000 minutes"), "{text}");
+    assert!(text.contains("critical tasks: a, b\n"), "{text}");
+    assert!(!text.contains("->"), "{text}");
+}
+
 /// Diagnostics for `evidence.jsonl` records point at the log line.
 #[test]
 fn evidence_log_diagnostics_name_the_log() {

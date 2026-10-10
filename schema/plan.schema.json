@@ -397,7 +397,7 @@
               "$ref": "#/definitions/MethodStatus"
             }
           ],
-          "description": "Lifecycle: only `accepted`/`derived` methods are checked and compiled."
+          "description": "Lifecycle: `accepted`/`derived` methods are checked; only `accepted` methods are compiled."
         },
         "subtasks": {
           "default": [],

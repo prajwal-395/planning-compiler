@@ -1,0 +1,57 @@
+ir_version = 0
+
+[plan]
+id = "parallel-critical"
+title = "Two equal parallel tasks"
+
+[objective]
+root_task = "root"
+
+[[objective.acceptance]]
+kind = "manual"
+description = "Both halves are done."
+
+[[task]]
+id = "root"
+title = "Root"
+state = "decomposed"
+
+[[task]]
+id = "a"
+title = "Half A"
+state = "resolved"
+
+[[task]]
+id = "b"
+title = "Half B"
+state = "resolved"
+
+[[method]]
+id = "split"
+task = "root"
+kind = "decompose"
+subtasks = ["a", "b"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-a"
+task = "a"
+kind = "invoke"
+capability = "work@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-b"
+task = "b"
+kind = "invoke"
+capability = "work@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "work@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 5.0, likely = 5.0, high = 5.0, provenance = "declared" }]

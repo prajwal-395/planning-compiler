@@ -5,8 +5,9 @@ objectives, tasks with alternative methods, capabilities with typed
 contracts and estimates, recorded evidence - and the compiler validates it,
 chooses how to do it, and explains every decision.
 
-**Status: steps 0-1.** Workspace skeleton, IR v0, and `pc check` (passes
-P1-P2). See `docs/` for semantics and the sequenced plan. The `self-plan`
+**Status: steps 0-2.** Workspace skeleton, IR v0, `pc check` (passes P1-P2),
+and accepted-plan analysis with `pc compile` and `pc explain` (P7). See
+`docs/` for semantics and the sequenced plan. The `self-plan`
 fixture (`examples/self-plan`) is this project's own implementation plan.
 
 ## Scope boundary
@@ -22,8 +23,8 @@ v0 specifically does not:
   model-free),
 - execute anything or track task status/assignment,
 - model people (`docs/adr/0003-no-human-executors.md`),
-- optimize, schedule, rank or explain yet (`compile`, `frontier`,
-  `explain`, `impact`, `propose`, `record`, `context` arrive in steps 2-7).
+- choose between alternatives or schedule resource capacity (`frontier`,
+  `impact`, `propose`, `record`, and `context` arrive in steps 3-7).
 
 State is text files in the repo (`docs/adr/0002-text-files.md`). The repo
 is private and unlicensed pending a later decision
@@ -33,9 +34,9 @@ is private and unlicensed pending a later decision
 
 ```
 crates/pc-ir/     IR types, TOML+JSON serde, JSON Schema
-crates/pc-core/   Pass trait + manager, P1-P2, diagnostics, trace
+crates/pc-core/   Passes P1-P2, accepted-plan roll-ups, P7 CPM, diagnostics
 crates/pc-store/  plan loader, evidence JSONL
-crates/pc-cli/    pc binary (check, schema)
+crates/pc-cli/    pc binary (check, compile, explain, schema)
 schema/           generated JSON Schema (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic

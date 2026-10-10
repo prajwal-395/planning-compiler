@@ -1,7 +1,10 @@
 # Pass contracts
 
 Every pass is deterministic: same inputs, byte-identical output. Every
-check emits a trace event; `explain` (step 2) renders them.
+check emits a trace event; `explain` renders the accepted-plan decisions.
+`compile` rejects a reachable task with multiple accepted methods because
+alternative selection is step 3. It also rejects order edges that, through
+subtasks shared between methods, form a precedence cycle.
 
 ## P1: load/resolve (`ResolvePass`)
 
@@ -42,7 +45,19 @@ Scope notes:
 - One unit test per code lives in `crates/pc-core/tests/diagnostics.rs`;
   one CLI fixture per code lives in `tests/fixtures/invalid-E*.toml`.
 
-## Deferred (steps 2-8)
+## P7: schedule-analyze (step 2)
+
+`pc compile` traverses from the objective root through accepted methods only.
+It preserves three-point estimates, uses PERT expected durations for CPM,
+reports earliest/latest times, slack, critical tasks, parallel width (tasks
+with zero expected duration are not counted), and the
+low/likely/high makespan. Unresolved tasks are listed with zero rolled work;
+this pass never chooses among methods. Money sums across invoked work and
+failure risk combines independent task risks as `1 - product(1 - risk)`.
+`pc explain` lists each accepted method's assumptions and each executable
+task's slack and critical status.
+
+## Deferred (steps 3-8)
 
 | Pass | Ships in |
 |---|---|
@@ -50,7 +65,6 @@ Scope notes:
 | P4 share (content-hash dedup) | step 4 |
 | P5 estimate (evidence folding) | step 5 |
 | P6 select (greedy + exact ILP, time budget) | step 3 |
-| P7 schedule-analyze (CPM) | step 2 |
 | P8 frontier (ranking) | step 6 |
 | P9 impact/diff | step 6 |
 | proposal loop, context slices, record | steps 5-7 |

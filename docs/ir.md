@@ -11,6 +11,14 @@ traditions behind this project so contributors from each can orient:
 
 (Selection, the "extraction" column, arrives in step 3.)
 
+`pc compile` analyzes the reachable accepted methods without choosing between
+alternatives. Proposed, derived, and rejected methods are excluded. Invocation
+estimates roll up by metric: duration uses the longest precedence path, money
+adds across invoked tasks, and failure risk combines as `1 - product(1 - risk)`.
+Each reported range retains low, likely, and high values; capability durations
+also use PERT's `(low + 4*likely + high) / 6` expected value for CPM. Tasks
+without an accepted method remain visible as unresolved.
+
 ## Entities
 
 - **Objective.** The root task plus hard constraints (`budget_usd`,
@@ -24,7 +32,8 @@ traditions behind this project so contributors from each can orient:
   dataflow checks.
 - **Method.** `kind` is `decompose { subtasks, order_edges }` or
   `invoke { capability }`. `status` is `accepted`, `proposed`, `derived` or
-  `rejected`. Only `accepted`/`derived` methods are checked and compiled;
+  `rejected`. `accepted`/`derived` methods are checked, and only `accepted`
+  methods are compiled;
   `proposed` methods are hypotheses for the step-7 loop and `rejected`
   methods are ignored by every pass. `provenance` is `human:<name>`,
   `agent:<name>`, `llm:<model>` or `pass:<name>`; `assumptions` are listed
