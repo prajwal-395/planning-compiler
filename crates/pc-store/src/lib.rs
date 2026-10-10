@@ -37,6 +37,14 @@ pub enum LoadError {
         /// OS error text.
         message: String,
     },
+    /// The plan file could not be written.
+    #[error("cannot write `{path}`: {message}")]
+    Unwritable {
+        /// File that could not be written.
+        path: String,
+        /// OS or serializer error text.
+        message: String,
+    },
     /// The file is not valid TOML or JSON for the IR.
     #[error("cannot parse `{path}`: {message}")]
     Unparsable {
@@ -113,6 +121,32 @@ pub fn load(path: &Path) -> Result<LoadedPlan, LoadError> {
         doc,
         evidence_file,
         evidence_lines,
+    })
+}
+
+/// Write a plan document back to its file, preserving the on-disk format:
+/// `.toml` serializes as TOML, anything else as pretty JSON.
+///
+/// Used by the step-7 decision commands (`propose`, `accept`, `reject`),
+/// which edit the pristine plan and only write when the merged copy passes
+/// `check`. Pass mutations (P3 proposals, P4 merges) are never written.
+pub fn write_plan(file: &Path, doc: &PlanDoc) -> Result<(), LoadError> {
+    let display = file.display().to_string();
+    let is_toml = file.extension().is_some_and(|ext| ext == "toml");
+    let text = if is_toml {
+        pc_ir::to_toml(doc).map_err(|e| LoadError::Unwritable {
+            path: display.clone(),
+            message: e.to_string(),
+        })?
+    } else {
+        pc_ir::to_json_pretty(doc).map_err(|e| LoadError::Unwritable {
+            path: display.clone(),
+            message: e.to_string(),
+        })?
+    };
+    std::fs::write(file, text).map_err(|e| LoadError::Unwritable {
+        path: display,
+        message: e.to_string(),
     })
 }
 

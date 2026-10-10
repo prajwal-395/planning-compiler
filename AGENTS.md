@@ -1,8 +1,8 @@
-# Project agent memory
+## Notes
 
-This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
-
-- Add durable project-specific notes here as they are discovered through real work.
+- Proposal-loop commands (`pc propose`/`accept`/`reject`, in `crates/pc-core/src/propose.rs`) edit the pristine plan and only write when a probe copy of the merged plan passes `check`; pass mutations (P3 derived, P4 merges, P1 unit canonicalization) are never written back.
+- `pc context` fits sections (methods, capabilities, parents, children, evidence, frontier) while the rendering fits `chars/4` tokens under `--budget` (default 2000); text and `--json` always agree.
+- Schemas are generated: `pc schema --out schema/plan.schema.json`, `pc schema --patch --out schema/patch.schema.json`; CI fails when stale.
 
 ## Maintaining this file
 

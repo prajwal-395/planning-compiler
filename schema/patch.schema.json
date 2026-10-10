@@ -1,0 +1,461 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Capability": {
+      "additionalProperties": false,
+      "description": "An executor with a typed contract and three-point estimates.\n\n`kind` deliberately excludes people: there is no `human-role` in v0.",
+      "properties": {
+        "consumes": {
+          "default": [],
+          "description": "Typed inputs the capability needs from the invoking task.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "estimates": {
+          "default": [],
+          "description": "Three-point estimates per metric.",
+          "items": {
+            "$ref": "#/definitions/Estimate"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable capability id, e.g. `\"whisperx@3\"`.",
+          "type": "string"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilityKind"
+            }
+          ],
+          "description": "Executor flavour. People are out of scope for v0."
+        },
+        "produces": {
+          "default": [],
+          "description": "Typed outputs the capability delivers.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "default": [],
+          "description": "Resources this capability draws on.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "default": "",
+          "description": "Capability version string.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "CapabilityKind": {
+      "description": "Executor flavours v0 models. No human executors.",
+      "oneOf": [
+        {
+          "description": "A coding agent or harness.",
+          "enum": [
+            "agent"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A deterministic tool or model endpoint.",
+          "enum": [
+            "tool"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A composed workflow.",
+          "enum": [
+            "workflow"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An imported skill (contracts live in a sidecar).",
+          "enum": [
+            "skill"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An external service.",
+          "enum": [
+            "service"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ContractItem": {
+      "additionalProperties": false,
+      "description": "One typed contract entry: an artifact plus the fields used.",
+      "properties": {
+        "artifact": {
+          "description": "Artifact type name. Must be declared under `artifact`.",
+          "type": "string"
+        },
+        "fields": {
+          "description": "Fields of that artifact. Must be a subset of the declaration.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifact",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "Estimate": {
+      "additionalProperties": false,
+      "description": "A three-point estimate with provenance.",
+      "properties": {
+        "high": {
+          "description": "Pessimistic bound.",
+          "format": "double",
+          "type": "number"
+        },
+        "likely": {
+          "description": "Most likely value.",
+          "format": "double",
+          "type": "number"
+        },
+        "low": {
+          "description": "Optimistic bound.",
+          "format": "double",
+          "type": "number"
+        },
+        "metric": {
+          "description": "One of [`KNOWN_METRICS`].",
+          "type": "string"
+        },
+        "observations": {
+          "description": "Observation count, for `measured` provenance.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "provenance": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EstimateProvenance"
+            }
+          ],
+          "description": "Where the numbers came from."
+        },
+        "window": {
+          "description": "Evidence window label, e.g. `\"30d\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "high",
+        "likely",
+        "low",
+        "metric",
+        "provenance"
+      ],
+      "type": "object"
+    },
+    "EstimateProvenance": {
+      "description": "Where an estimate's numbers came from.",
+      "oneOf": [
+        {
+          "description": "A guess written by a person or agent.",
+          "enum": [
+            "declared"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Derived from evidence (P5 estimators).",
+          "enum": [
+            "measured"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "Method": {
+      "additionalProperties": false,
+      "description": "One way to achieve a task.\n\n`kind` selects the shape: `decompose` uses `subtasks`/`order_edges`, `invoke` uses `capability`. P2 reports E013 when the shape is mixed.",
+      "properties": {
+        "assumptions": {
+          "default": [],
+          "description": "Assumptions `explain` must surface (step 2).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "capability": {
+          "description": "Capability id, for `kind = \"invoke\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable method id, unique among methods.",
+          "type": "string"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MethodKind"
+            }
+          ],
+          "description": "Decomposition versus capability invocation."
+        },
+        "order_edges": {
+          "default": [],
+          "description": "Ordering constraints between subtasks, for `kind = \"decompose\"`.",
+          "items": {
+            "$ref": "#/definitions/OrderEdge"
+          },
+          "type": "array"
+        },
+        "provenance": {
+          "default": "",
+          "description": "Who proposed it: `human:<name>`, `agent:<name>`, `llm:<model>`, or `pass:<name>`.",
+          "type": "string"
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MethodStatus"
+            }
+          ],
+          "description": "Lifecycle: `accepted`/`derived` methods are checked; only `accepted` methods are compiled."
+        },
+        "subtasks": {
+          "default": [],
+          "description": "Child task ids, for `kind = \"decompose\"`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "Task this method achieves.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "status",
+        "task"
+      ],
+      "type": "object"
+    },
+    "MethodKind": {
+      "description": "Decomposition versus invocation.",
+      "oneOf": [
+        {
+          "description": "Achieve the task via subtasks.",
+          "enum": [
+            "decompose"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Achieve the task via a capability.",
+          "enum": [
+            "invoke"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "MethodStatus": {
+      "description": "Lifecycle of a method. P2 checks `accepted` and `derived` only.",
+      "oneOf": [
+        {
+          "description": "Committed to the plan.",
+          "enum": [
+            "accepted"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Awaiting `accept`/`reject` (step 7).",
+          "enum": [
+            "proposed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Generated by a compiler pass.",
+          "enum": [
+            "derived"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Explicitly refused; ignored by every pass.",
+          "enum": [
+            "rejected"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "OrderEdge": {
+      "additionalProperties": false,
+      "description": "An ordering constraint `from` -> `to` between subtasks of one method.",
+      "properties": {
+        "from": {
+          "description": "Predecessor subtask id.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Successor subtask id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "description": "A need: what must be true or produced.",
+      "properties": {
+        "consumes": {
+          "default": [],
+          "description": "Typed inputs this task needs from upstream or external inputs.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable task id.",
+          "type": "string"
+        },
+        "produces": {
+          "default": [],
+          "description": "Typed outputs this task promises downstream.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "state": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TaskState"
+            }
+          ],
+          "description": "Lifecycle state. The compiler reads `done`, never sets it."
+        },
+        "title": {
+          "description": "Human title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "title"
+      ],
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "Lifecycle states for a task.",
+      "oneOf": [
+        {
+          "description": "Not yet broken down.",
+          "enum": [
+            "open"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Has an accepted decomposition.",
+          "enum": [
+            "decomposed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Fully reduced to invocations (informational in v0).",
+          "enum": [
+            "resolved"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Observed finished. Read from imports, never set by the compiler.",
+          "enum": [
+            "done"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Explicitly abandoned.",
+          "enum": [
+            "dropped"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "An agent patch for `pc propose`: new tasks, methods and capabilities.\n\nJSON is canonical for agent patches; unknown fields are refused so a typo'd patch never silently applies. Every key is optional and defaults to empty, but a patch that adds nothing is refused by validation. Proposed methods must carry `status = \"proposed\"`: accepting them is the separate `pc accept` decision, and artifact declarations stay human-maintained, so patches cannot add artifacts or resources.",
+  "properties": {
+    "add_capability": {
+      "default": [],
+      "description": "Capabilities to add.",
+      "items": {
+        "$ref": "#/definitions/Capability"
+      },
+      "type": "array"
+    },
+    "add_method": {
+      "default": [],
+      "description": "Methods to add, each with `status = \"proposed\"`.",
+      "items": {
+        "$ref": "#/definitions/Method"
+      },
+      "type": "array"
+    },
+    "add_task": {
+      "default": [],
+      "description": "Tasks to add to the plan.",
+      "items": {
+        "$ref": "#/definitions/Task"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Patch",
+  "type": "object"
+}

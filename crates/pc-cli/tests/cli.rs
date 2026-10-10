@@ -279,6 +279,30 @@ fn committed_schema_is_fresh() {
     );
 }
 
+/// The committed patch schema is exactly what `pc schema --patch` emits.
+#[test]
+fn patch_schema_is_fresh() {
+    let committed =
+        std::fs::read_to_string(workspace_root().join("schema").join("patch.schema.json")).unwrap();
+    let emitted = serde_json::to_string_pretty(&pc_ir::patch_schema()).unwrap() + "\n";
+    assert_eq!(
+        committed, emitted,
+        "run `pc schema --patch --out schema/patch.schema.json`"
+    );
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("schema")
+        .arg("--patch")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("add_task"), "{text}");
+    assert!(text.contains("add_method"), "{text}");
+    assert!(text.contains("add_capability"), "{text}");
+}
+
 /// Step 5: appending evidence flips a selection. The fixture's declared
 /// guesses prefer via-fast; its evidence log measures fast as slow and slow
 /// as quick, so compiling the directory picks via-slow while the bare plan
@@ -781,6 +805,533 @@ fn scratch_dir(name: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// Copy the proposal-loop fixture to a scratch dir for the step-7 tests,
+/// which edit the plan file.
+fn loop_scratch(name: &str) -> PathBuf {
+    let dir = scratch_dir(name);
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("valid-proposal-loop.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    dir
+}
+
+/// Run `pc` with `dir` as the plan path and return stdout, asserting success.
+fn pc_ok(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .args(args)
+        .arg(dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "pc {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Run `pc` with `dir` as the plan path and return stderr, asserting failure.
+fn pc_fails(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .args(args)
+        .arg(dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "pc {args:?}");
+    String::from_utf8(output.stderr).unwrap()
+}
+
+/// Write a patch body to the scratch dir and return its path.
+fn write_patch(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+/// Step 7: an end-to-end script that plays an agent. Round 1 decomposes an
+/// open task (propose, recompile, accept); round 2 binds the leaves to
+/// capabilities and compiles to a fully selected plan.
+#[test]
+fn proposal_loop_agent_play() {
+    let dir = loop_scratch("agent-play");
+    let plan = dir.join("plan.toml");
+
+    // Round 1: the agent decomposes `draft` into outline-first-then-write.
+    let patch = write_patch(
+        &dir,
+        "round1.json",
+        r#"{
+          "add_task": [
+            {"id": "outline", "title": "Outline", "state": "open",
+             "produces": [{"artifact": "doc", "fields": ["notes"]}]},
+            {"id": "write", "title": "Write", "state": "open",
+             "consumes": [{"artifact": "doc", "fields": ["notes"]}],
+             "produces": [{"artifact": "doc", "fields": ["text"]}] }
+          ],
+          "add_method": [
+            {"id": "draft-plan", "task": "draft", "kind": "decompose",
+             "subtasks": ["outline", "write"],
+             "order_edges": [{"from": "outline", "to": "write"}],
+             "status": "proposed", "provenance": "agent:e2e",
+             "assumptions": ["Outline first, then write to its notes."]}
+          ]
+        }"#,
+    );
+    let proposed = pc_ok(&dir, &["propose", patch.to_str().unwrap()]);
+    assert!(
+        proposed.contains("proposed method:draft-plan\n"),
+        "{proposed}"
+    );
+    assert!(proposed.contains("proposed task:outline\n"), "{proposed}");
+    assert!(proposed.contains("proposed task:write\n"), "{proposed}");
+
+    // Recompile: selection still runs over accepted methods only, so the
+    // staged work changes nothing yet — but the plan still compiles, the
+    // frontier ranks the pending proposal, and the context already shows
+    // the proposed children.
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("unresolved: draft, review\n"),
+        "{compiled}"
+    );
+    let frontier = pc_ok(&dir, &["frontier"]);
+    assert!(frontier.contains("method:draft-plan"), "{frontier}");
+    let slice = pc_ok(&dir, &["context", "draft"]);
+    assert!(slice.contains("child outline: Outline [open]"), "{slice}");
+    assert!(slice.contains("child write: Write [open]"), "{slice}");
+
+    // Accept the decomposition. The plan stays clean: the hierarchy is
+    // acyclic and every consumed field is still produced.
+    let decided = pc_ok(&dir, &["accept", "draft-plan"]);
+    assert_eq!(decided, "accepted method:draft-plan\n");
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("unresolved: outline, review, write\n"),
+        "{compiled}"
+    );
+
+    // Round 2: bind the leaves. New capabilities arrive in the same patch as
+    // the invoke methods that call them.
+    let patch = write_patch(
+        &dir,
+        "round2.json",
+        r#"{
+          "add_capability": [
+            {"id": "noter@1", "kind": "tool", "version": "1",
+             "produces": [{"artifact": "doc", "fields": ["notes"]}],
+             "estimates": [{"metric": "duration_minutes", "low": 1.0, "likely": 2.0, "high": 3.0, "provenance": "declared"}]},
+            {"id": "reviewer@1", "kind": "tool", "version": "1",
+             "consumes": [{"artifact": "doc", "fields": ["text"]}],
+             "estimates": [{"metric": "duration_minutes", "low": 1.0, "likely": 1.0, "high": 1.0, "provenance": "declared"}]}
+          ],
+          "add_method": [
+            {"id": "outline-run", "task": "outline", "kind": "invoke", "capability": "noter@1",
+             "status": "proposed", "provenance": "agent:e2e"},
+            {"id": "write-run", "task": "write", "kind": "invoke", "capability": "writer@1",
+             "status": "proposed", "provenance": "agent:e2e"},
+            {"id": "review-run", "task": "review", "kind": "invoke", "capability": "reviewer@1",
+             "status": "proposed", "provenance": "agent:e2e"}
+          ]
+        }"#,
+    );
+    let proposed = pc_ok(&dir, &["propose", patch.to_str().unwrap()]);
+    assert!(
+        proposed.contains("proposed capability:noter@1\n"),
+        "{proposed}"
+    );
+    for method in ["outline-run", "write-run", "review-run"] {
+        assert_eq!(
+            pc_ok(&dir, &["accept", method]),
+            format!("accepted method:{method}\n")
+        );
+    }
+
+    // Fully selected: outline runs, then write (2.0 + 4.0 expected minutes),
+    // with review in parallel.
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(compiled.contains("makespan 6.000 minutes"), "{compiled}");
+    assert!(!compiled.contains("unresolved:"), "{compiled}");
+    let json = pc_ok(&dir, &["compile", "--json"]);
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["selection"]["draft"], "draft-plan");
+    assert_eq!(value["selection"]["outline"], "outline-run");
+    assert_eq!(value["selection"]["write"], "write-run");
+    assert_eq!(value["selection"]["review"], "review-run");
+
+    // The file holds exactly the staged and decided work: P3 derived ids
+    // were never written back.
+    let check = pc_ok(&dir, &["check", "--json"]);
+    let report: serde_json::Value = serde_json::from_str(&check).unwrap();
+    assert_eq!(report["counts"]["tasks"], 5);
+    assert_eq!(report["counts"]["methods"], 5);
+    assert_eq!(report["counts"]["capabilities"], 3);
+    let text = std::fs::read_to_string(&plan).unwrap();
+    assert!(!text.contains("match-"), "{text}");
+
+    insta::assert_snapshot!("proposal-loop-context", slice);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 7: `pc propose` refuses invalid patches and leaves the file
+/// byte-identical.
+#[test]
+fn propose_refuses_invalid_patches() {
+    let dir = loop_scratch("propose-bad");
+    let plan = dir.join("plan.toml");
+    let before = std::fs::read_to_string(&plan).unwrap();
+    let propose = |name: &str, body: &str| {
+        let patch = write_patch(&dir, name, body);
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg("propose")
+            .arg(&patch)
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        String::from_utf8(output.stderr).unwrap()
+    };
+
+    let stderr = propose("empty.json", "{}");
+    assert!(
+        stderr.contains("invalid patch: patch adds nothing"),
+        "{stderr}"
+    );
+    let stderr = propose(
+        "unknown-task.json",
+        r#"{"add_method": [
+            {"id": "m", "task": "ghost", "kind": "invoke", "capability": "writer@1",
+             "status": "proposed", "provenance": "agent:e2e"}
+        ]}"#,
+    );
+    assert!(
+        stderr.contains("invalid patch: method `m` names unknown task `ghost`"),
+        "{stderr}"
+    );
+    let stderr = propose(
+        "committed.json",
+        r#"{"add_method": [
+            {"id": "m", "task": "draft", "kind": "invoke", "capability": "writer@1",
+             "status": "accepted", "provenance": "agent:e2e"}
+        ]}"#,
+    );
+    assert!(stderr.contains("must be proposed in a patch"), "{stderr}");
+    let stderr = propose(
+        "unknown-field.json",
+        r#"{"add_task": [{"id": "a", "title": "A", "state": "open",
+            "produces": [{"artifact": "doc", "fields": ["ghost"]}]}]}"#,
+    );
+    assert!(
+        stderr.contains("uses unknown field `doc.ghost`"),
+        "{stderr}"
+    );
+    let stderr = propose("not-json.json", "{");
+    assert!(stderr.contains("cannot parse"), "{stderr}");
+
+    // Every refusal above wrote nothing.
+    assert_eq!(std::fs::read_to_string(&plan).unwrap(), before);
+
+    // A valid patch applies once; proposing it again collides with the plan.
+    let patch = write_patch(
+        &dir,
+        "once.json",
+        r#"{"add_task": [{"id": "solo", "title": "Solo", "state": "open"}]}"#,
+    );
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(&patch)
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(&patch)
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("task `solo` already exists in the plan"),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 7: `pc accept` and `pc reject` refuse unknown, committed and
+/// contract-breaking decisions; `reject` and derived accepts stick.
+#[test]
+fn decide_refuses_bad_decisions() {
+    let dir = loop_scratch("decide-bad");
+    let stderr = pc_fails(&dir, &["accept", "ghost"]);
+    assert!(stderr.contains("unknown method `ghost`"), "{stderr}");
+    let stderr = pc_fails(&dir, &["accept", "root-all"]);
+    assert!(
+        stderr.contains("only proposed or derived methods can be accepted"),
+        "{stderr}"
+    );
+    let stderr = pc_fails(&dir, &["reject", "root-all"]);
+    assert!(
+        stderr.contains("only proposed or derived methods can be rejected"),
+        "{stderr}"
+    );
+
+    // A P3 derived proposal materializes into the file as accepted, and the
+    // matcher does not propose it again.
+    assert_eq!(
+        pc_ok(&dir, &["accept", "match-draft-writer@1"]),
+        "accepted method:match-draft-writer@1\n"
+    );
+    let text = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
+    assert!(text.contains("match-draft-writer@1"), "{text}");
+    let explained = pc_ok(&dir, &["explain", "task:draft"]);
+    assert!(
+        explained.contains("uses method:match-draft-writer@1"),
+        "{explained}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Accepting a substitution that drops a contracted output is refused
+    // with the fresh E008 diagnostics, and the file is untouched.
+    let dir = scratch_dir("decide-lossy");
+    std::fs::copy(
+        workspace_root().join("examples/transcription-substitution/plan.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
+    let stderr = pc_fails(&dir, &["accept", "via-hybrid"]);
+    assert!(stderr.contains("error[E008]"), "{stderr}");
+    assert!(stderr.contains("transcript.segment_confidence"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("plan.toml")).unwrap(),
+        before
+    );
+
+    // Rejecting the same proposal sticks: accepting it afterwards is refused.
+    assert_eq!(
+        pc_ok(&dir, &["reject", "via-hybrid"]),
+        "rejected method:via-hybrid\n"
+    );
+    let stderr = pc_fails(&dir, &["accept", "via-hybrid"]);
+    assert!(
+        stderr.contains("only proposed or derived methods can be accepted"),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 7: a decision on a plan with a sibling evidence log never copies the
+/// log's observations into the plan file, so P5 counts each one once.
+#[test]
+fn decide_keeps_evidence_log_out_of_the_plan() {
+    let dir = scratch_dir("decide-evidence");
+    let example = workspace_root().join("examples/transcription-substitution");
+    for name in ["plan.toml", "evidence.jsonl"] {
+        std::fs::copy(example.join(name), dir.join(name)).unwrap();
+    }
+    let log = std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap();
+    let evidence = |dir: &std::path::Path| -> Vec<String> {
+        pc_ok(dir, &["context", "transcribe-footage"])
+            .lines()
+            .filter(|line| line.starts_with("evidence "))
+            .map(str::to_string)
+            .collect()
+    };
+    let whisperx = "evidence whisperx@3 duration_minutes: 11.000/12.000/13.000 (n=3)".to_string();
+    assert!(evidence(&dir).contains(&whisperx), "{:?}", evidence(&dir));
+
+    assert_eq!(
+        pc_ok(&dir, &["reject", "via-hybrid"]),
+        "rejected method:via-hybrid\n"
+    );
+    let plan = pc_ir::from_toml(&std::fs::read_to_string(dir.join("plan.toml")).unwrap()).unwrap();
+    assert!(plan.evidence.is_empty(), "{:?}", plan.evidence);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap(),
+        log
+    );
+    assert!(evidence(&dir).contains(&whisperx), "{:?}", evidence(&dir));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 7: the loop works on JSON plans too, preserving the on-disk format.
+#[test]
+fn json_plan_round_trips_propose_and_accept() {
+    let dir = scratch_dir("json-loop");
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("proposal-loop-json")
+            .join("plan.json"),
+        dir.join("plan.json"),
+    )
+    .unwrap();
+    let patch = write_patch(
+        &dir,
+        "patch.json",
+        r#"{"add_task": [{"id": "solo", "title": "Solo", "state": "open"}],
+            "add_method": [
+            {"id": "draft-plan", "task": "draft", "kind": "decompose",
+             "subtasks": ["solo"], "status": "proposed", "provenance": "agent:e2e"}
+        ]}"#,
+    );
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(&patch)
+        .arg(&dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["applied"],
+        serde_json::json!(["proposed method:draft-plan", "proposed task:solo",])
+    );
+    assert!(value["plan"].as_str().unwrap().ends_with("plan.json"));
+
+    assert_eq!(
+        pc_ok(&dir, &["accept", "draft-plan"]),
+        "accepted method:draft-plan\n"
+    );
+    let text = std::fs::read_to_string(dir.join("plan.json")).unwrap();
+    assert!(text.contains("\"id\": \"draft-plan\""), "{text}");
+    assert!(!text.contains("match-"), "{text}");
+    pc_ok(&dir, &["check"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Step 7: `pc context` renders the slice for one task and fits it to the
+/// token budget.
+#[test]
+fn context_budget_fits_and_truncates() {
+    let plan = "examples/transcription-substitution/plan.toml";
+    let run = |args: &[&str]| {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .current_dir(workspace_root())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let text = run(&["context", "transcribe-footage", plan]);
+    assert!(
+        text.contains("task transcribe-footage: Transcribe footage [resolved]"),
+        "{text}"
+    );
+    assert!(text.contains("method via-hybrid [proposed"), "{text}");
+    assert!(
+        text.contains("parent ship-reels (Ship the reels) via reels-pipeline [accepted]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("frontier method:via-hybrid [proposal]"),
+        "{text}"
+    );
+    insta::assert_snapshot!("proposal-loop-slice", text);
+
+    let json = run(&["context", "transcribe-footage", plan, "--json"]);
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["subject"], "task:transcribe-footage");
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["budget_tokens"], 2000);
+    assert_eq!(value["methods"].as_array().unwrap().len(), 2);
+    assert_eq!(value["capabilities"].as_array().unwrap().len(), 2);
+
+    // No budget limit is the same slice as the default budget.
+    let huge = run(&[
+        "context",
+        "transcribe-footage",
+        plan,
+        "--json",
+        "--budget",
+        "1000000",
+    ]);
+    let huge_value: serde_json::Value = serde_json::from_str(&huge).unwrap();
+    assert_eq!(huge_value["truncated"], false);
+    assert_eq!(huge_value["methods"], value["methods"]);
+
+    // A tiny budget keeps the focal task and drops everything else.
+    let tiny = run(&[
+        "context",
+        "transcribe-footage",
+        plan,
+        "--json",
+        "--budget",
+        "10",
+    ]);
+    let tiny_value: serde_json::Value = serde_json::from_str(&tiny).unwrap();
+    assert_eq!(tiny_value["truncated"], true);
+    assert_eq!(tiny_value["task"]["id"], "transcribe-footage");
+    assert!(tiny_value["methods"].as_array().unwrap().is_empty());
+    assert!(tiny_value["frontier"].as_array().unwrap().is_empty());
+
+    // A mid budget is a strict prefix of the full slice.
+    let mid = run(&[
+        "context",
+        "transcribe-footage",
+        plan,
+        "--json",
+        "--budget",
+        "300",
+    ]);
+    let mid_value: serde_json::Value = serde_json::from_str(&mid).unwrap();
+    assert_eq!(mid_value["truncated"], true);
+    assert!(mid_value["tokens"].as_u64().unwrap() <= 300);
+    assert!(!mid_value["methods"].as_array().unwrap().is_empty());
+
+    // Deterministic: two runs give byte-identical JSON.
+    let again = run(&[
+        "context",
+        "transcribe-footage",
+        plan,
+        "--json",
+        "--budget",
+        "300",
+    ]);
+    assert_eq!(mid, again);
+
+    // Unknown tasks fail like `pc explain` on missing targets.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("context")
+        .arg("ghost")
+        .arg(plan)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("plan declares no task `ghost`")
+    );
 }
 
 /// Step 5: `pc record` appends one validated observation to the sibling

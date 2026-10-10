@@ -1,0 +1,20 @@
+---
+source: crates/pc-cli/tests/cli.rs
+assertion_line: 976
+expression: slice
+---
+context task:draft (budget 2000 tokens, ~191 used)
+task draft: Draft [open]
+  produces: doc[text]
+  unresolved: no accepted method
+method draft-plan [proposed decompose into outline, write by agent:e2e]
+  assumes: Outline first, then write to its notes.
+method match-draft-writer@1 [derived invoke capability:writer@1 by pass:match]
+capability writer@1 [tool v1]
+  produces: doc[text]
+  duration_minutes: 2.000/4.000/6.000 declared
+parent root (Root) via root-all [accepted]
+child outline: Outline [open]
+child write: Write [open]
+frontier method:draft-plan [proposal] (critical): proposed by agent:e2e for task:draft; awaiting accept or reject
+frontier task:draft [open-task] (critical): no accepted method; on the selected path from the root (required by root)

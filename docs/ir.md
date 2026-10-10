@@ -38,7 +38,9 @@ without an accepted method remain visible as unresolved.
   `proposed` methods are hypotheses for the step-7 loop and `rejected`
   methods are ignored by every pass. `provenance` is `human:<name>`,
   `agent:<name>`, `llm:<model>` or `pass:<name>`; `assumptions` are listed
-  for `explain` (step 2) to surface.
+  for `explain` (step 2) to surface. Agents stage methods as `proposed` with
+  `pc propose` and decide them with `pc accept`/`pc reject`; the P3 matcher
+  stages `derived` proposals the same commands decide.
 - **Capability.** `kind` is `agent`, `tool`, `workflow`, `skill` or
   `service`, plus a `version`. There is deliberately **no `human-role`
   kind** (see `adr/0003-no-human-executors.md`). Each capability carries a

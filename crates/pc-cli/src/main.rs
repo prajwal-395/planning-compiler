@@ -17,7 +17,8 @@ struct Cli {
 }
 
 /// Available commands. Step-6 commands rank the frontier and preview and
-/// compare plans; the step-7 proposal loop arrives later.
+/// compare plans; the step-7 proposal loop stages agent decompositions and
+/// decides them while the core stays model-free.
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run passes P1-P5 over a plan file or directory.
@@ -34,6 +35,9 @@ enum Commands {
         /// Write to this file instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Emit the agent-patch schema (`pc propose` input) instead.
+        #[arg(long)]
+        patch: bool,
     },
     /// Roll up accepted methods and analyze the critical path.
     Compile {
@@ -109,13 +113,67 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         selection_time_budget_ms: u64,
     },
+    /// Stage an agent patch: add tasks, methods and capabilities as
+    /// proposed. The merged plan must check clean; nothing is written
+    /// otherwise.
+    Propose {
+        /// JSON file holding the patch (add_task, add_method, add_capability).
+        patch: PathBuf,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the staged operations as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Accept one pending method: flip a proposed or derived method to
+    /// accepted. Refused when the merged plan would check dirty; preview
+    /// such decisions with `pc impact` instead.
+    Accept {
+        /// Proposed or derived method id, optionally prefixed with method:.
+        method: String,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the decision as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reject one pending method: flip a proposed or derived method to
+    /// rejected.
+    Reject {
+        /// Proposed or derived method id, optionally prefixed with method:.
+        method: String,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the decision as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render the compact slice an agent needs to propose the next
+    /// decomposition of one task: contracts, neighbours, evidence summary
+    /// and frontier entries, fitted to a token budget.
+    Context {
+        /// Task id, optionally prefixed with task:.
+        task: String,
+        /// Plan file or directory. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Emit the fitted slice as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Maximum slice size in tokens (chars/4 approximation).
+        #[arg(long, default_value_t = pc_core::DEFAULT_CONTEXT_BUDGET_TOKENS)]
+        budget: u64,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Check { path, json } => run_check(&path, json),
-        Commands::Schema { out } => run_schema(out.as_deref()),
+        Commands::Schema { out, patch } => run_schema(out.as_deref(), patch),
         Commands::Compile {
             path,
             json,
@@ -145,6 +203,15 @@ fn main() {
             json,
             selection_time_budget_ms,
         } => run_diff(&a, &b, json, selection_time_budget_ms),
+        Commands::Propose { patch, path, json } => run_propose(&patch, &path, json),
+        Commands::Accept { method, path, json } => run_decide(&method, &path, json, true),
+        Commands::Reject { method, path, json } => run_decide(&method, &path, json, false),
+        Commands::Context {
+            task,
+            path,
+            json,
+            budget,
+        } => run_context(&task, &path, json, budget),
     }
 }
 
@@ -502,8 +569,12 @@ fn run_check(path: &std::path::Path, json: bool) {
 }
 
 /// Handler for `pc schema`.
-fn run_schema(out: Option<&std::path::Path>) {
-    let schema = pc_ir::plan_schema();
+fn run_schema(out: Option<&std::path::Path>, patch: bool) {
+    let schema = if patch {
+        pc_ir::patch_schema()
+    } else {
+        pc_ir::plan_schema()
+    };
     let text = serde_json::to_string_pretty(&schema).unwrap_or_default() + "\n";
     if let Some(path) = out {
         if let Some(parent) = path.parent()
@@ -837,4 +908,218 @@ fn run_diff(a: &std::path::Path, b: &std::path::Path, json: bool, selection_time
     if empty {
         println!("no differences");
     }
+}
+
+/// Load the pristine plan for the step-7 decision commands.
+///
+/// Unlike [`load_checked`], the document is returned exactly as parsed: P3
+/// derived proposals, P4 share merges and P1 unit canonicalization are pass
+/// mutations and must never be written back to the file.
+fn load_pristine(path: &std::path::Path) -> pc_store::LoadedPlan {
+    match pc_store::load(path) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("error[E000]: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Probe-check a copy of the pristine plan.
+///
+/// Returns the checked copy (carrying the P3 derived proposals `accept` and
+/// `reject` can materialize) plus its report. Step-7 edits require a clean
+/// plan first: a dirty plan means a hand edit or an older write broke it,
+/// and layering a decision on top would only hide the breakage.
+fn checked_copy(loaded: &pc_store::LoadedPlan) -> (pc_ir::PlanDoc, pc_core::passes::Report) {
+    let mut probed = loaded.doc.clone();
+    let evidence_log = loaded
+        .evidence_file
+        .as_deref()
+        .map(|file| pc_core::passes::EvidenceLog {
+            file,
+            lines: &loaded.evidence_lines,
+        });
+    let report = pc_core::passes::check(
+        &loaded.display_path,
+        &loaded.text,
+        &mut probed,
+        evidence_log,
+    );
+    (probed, report)
+}
+
+/// Refuse a write when the plan under edit is already dirty.
+fn require_clean(report: &pc_core::passes::Report) {
+    if report.ok() {
+        return;
+    }
+    for diag in &report.diagnostics {
+        eprintln!("{}", pc_core::render_human(diag));
+    }
+    eprintln!(
+        "found {} error{}",
+        report.counts.errors,
+        if report.counts.errors == 1 { "" } else { "s" }
+    );
+    std::process::exit(1);
+}
+
+/// Probe-check a merged edit and refuse the write when it is dirty.
+///
+/// `edited` is the pristine plan plus the staged decision; the probe runs on
+/// a copy so pass mutations never reach the file. Diagnostics ARE the
+/// finding for a refused decision, exactly as with `pc impact`.
+fn require_merged_clean(loaded: &pc_store::LoadedPlan, edited: &pc_ir::PlanDoc) {
+    let mut probed = edited.clone();
+    let evidence_log = loaded
+        .evidence_file
+        .as_deref()
+        .map(|file| pc_core::passes::EvidenceLog {
+            file,
+            lines: &loaded.evidence_lines,
+        });
+    let report = pc_core::passes::check(
+        &loaded.display_path,
+        &loaded.text,
+        &mut probed,
+        evidence_log,
+    );
+    require_clean(&report);
+}
+
+/// Write the edited pristine plan back to the file it was loaded from.
+///
+/// The trailing evidence records `pc_store::load` folded in from the sibling
+/// `evidence.jsonl` stay in the log: writing them inline would count every
+/// observation twice on the next load.
+fn write_edited(loaded: &pc_store::LoadedPlan, edited: &pc_ir::PlanDoc) {
+    let plan_file = std::path::PathBuf::from(&loaded.display_path);
+    let mut file_doc = edited.clone();
+    let inline = file_doc
+        .evidence
+        .len()
+        .saturating_sub(loaded.evidence_lines.len());
+    file_doc.evidence.truncate(inline);
+    if let Err(e) = pc_store::write_plan(&plan_file, &file_doc) {
+        eprintln!("error[E000]: {e}");
+        std::process::exit(1);
+    }
+}
+
+/// Print staged decisions: bare notes in text, the notes plus the plan in JSON.
+fn print_decision(notes: &[String], plan: &str, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "applied": notes,
+                "plan": plan,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    for note in notes {
+        println!("{note}");
+    }
+}
+
+/// Handler for `pc propose`.
+fn run_propose(patch_path: &std::path::Path, path: &std::path::Path, json: bool) {
+    let text = match std::fs::read_to_string(patch_path) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error: cannot read `{}`: {e}", patch_path.display());
+            std::process::exit(1);
+        }
+    };
+    let patch: pc_ir::Patch = match serde_json::from_str(&text) {
+        Ok(patch) => patch,
+        Err(e) => {
+            eprintln!(
+                "error: cannot parse `{}` as a patch: {e}",
+                patch_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let loaded = load_pristine(path);
+    let (_, report) = checked_copy(&loaded);
+    require_clean(&report);
+    if let Err(e) = pc_core::validate_patch(&loaded.doc, &patch) {
+        eprintln!("error: invalid patch: {e}");
+        std::process::exit(1);
+    }
+    let mut edited = loaded.doc.clone();
+    let applied = pc_core::apply_patch(&mut edited, patch);
+    require_merged_clean(&loaded, &edited);
+    write_edited(&loaded, &edited);
+    print_decision(&applied, &loaded.display_path, json);
+}
+
+/// Handler for `pc accept` and `pc reject`.
+fn run_decide(id: &str, path: &std::path::Path, json: bool, accept: bool) {
+    let loaded = load_pristine(path);
+    let (checked_doc, report) = checked_copy(&loaded);
+    require_clean(&report);
+    let id = id.strip_prefix("method:").unwrap_or(id);
+    let mut edited = loaded.doc.clone();
+    let outcome = if accept {
+        pc_core::accept_method(&mut edited, &checked_doc, id)
+    } else {
+        pc_core::reject_method(&mut edited, &checked_doc, id)
+    };
+    let note = match outcome {
+        Ok(note) => note,
+        Err(pc_core::ImpactError::UnknownMethod { id }) => {
+            eprintln!("error: unknown method `{id}`");
+            std::process::exit(1);
+        }
+        Err(pc_core::ImpactError::NotAcceptable { id, status }) => {
+            let (verb, past) = if accept {
+                ("accept", "accepted")
+            } else {
+                ("reject", "rejected")
+            };
+            eprintln!(
+                "error: cannot {verb} method `{id}` with status `{status}` (only proposed or derived methods can be {past})"
+            );
+            std::process::exit(1);
+        }
+    };
+    require_merged_clean(&loaded, &edited);
+    write_edited(&loaded, &edited);
+    print_decision(&[note], &loaded.display_path, json);
+}
+
+/// Handler for `pc context`.
+fn run_context(task: &str, path: &std::path::Path, json: bool, budget: u64) {
+    let (loaded, _) = load_checked(path);
+    let compiled =
+        match pc_core::compile_with_budget(&loaded.doc, std::time::Duration::from_millis(2000)) {
+            Ok(compiled) => compiled,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+    let frontier_report = pc_core::frontier(&loaded.doc, &compiled);
+    let task = task.strip_prefix("task:").unwrap_or(task);
+    let full = match pc_core::context(&loaded.doc, &compiled, &frontier_report, task) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let fitted = pc_core::fit_context(full, budget);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&fitted).unwrap_or_default()
+        );
+        return;
+    }
+    print!("{}", pc_core::render_context_text(&fitted));
 }

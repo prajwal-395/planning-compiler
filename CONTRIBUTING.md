@@ -29,7 +29,9 @@ cargo deny --workspace check licenses advisories bans sources
 
 1. Edit types in `crates/pc-ir` (keep `deny_unknown_fields`; keep TOML
    hand-writeable; no `human-role`, no `human_minutes`).
-2. Regenerate: `cargo run -q -p pc-cli -- schema --out schema/plan.schema.json`.
+2. Regenerate both schemas (the patch embeds tasks, methods and
+   capabilities): `cargo run -q -p pc-cli -- schema --out schema/plan.schema.json`
+   and `cargo run -q -p pc-cli -- schema --patch --out schema/patch.schema.json`.
 3. Round-trip property tests must stay green; if decimal precision is at
    stake, see the `finite_float` rationale in
    `crates/pc-ir/tests/roundtrip.rs`.

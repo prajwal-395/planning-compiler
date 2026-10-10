@@ -47,3 +47,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo run -q -p pc-cli -- schema > /tmp/plan.schema.json
       - run: diff -u schema/plan.schema.json /tmp/plan.schema.json
+      - run: cargo run -q -p pc-cli -- schema --patch > /tmp/patch.schema.json
+      - run: diff -u schema/patch.schema.json /tmp/patch.schema.json

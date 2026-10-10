@@ -1,0 +1,29 @@
+---
+source: crates/pc-cli/tests/cli.rs
+assertion_line: 1210
+expression: text
+---
+context task:transcribe-footage (budget 2000 tokens, ~423 used)
+task transcribe-footage: Transcribe footage [resolved]
+  produces: transcript[words, timings, segment_confidence]
+  selected: via-whisperx
+method via-hybrid [proposed invoke capability:voz-hybrid@1 by agent:claude]
+  assumes: Far faster and close enough: every accuracy figure is a distance from WhisperX output, never more accurate.
+  assumes: Hybrid accuracy is measured as distance from the incumbent, not as absolute accuracy.
+  assumes: WhisperX stays as fallback; fallback triggers when the hybrid emits nothing usable.
+  assumes: The hybrid emits no segment_confidence; the confidence gap is made LOUD with a confidence_notice.
+method via-whisperx [accepted invoke capability:whisperx@3 by human:test]
+capability voz-hybrid@1 [tool v1]
+  produces: transcript[words, timings]
+  duration_minutes: 13.000/15.000/19.000 declared
+  failure_risk: 0.050/0.100/0.200 declared
+capability whisperx@3 [tool v3]
+  produces: transcript[words, timings, segment_confidence]
+  duration_minutes: 10.000/12.000/16.000 declared
+  failure_risk: 0.050/0.100/0.200 declared
+parent ship-reels (Ship the reels) via reels-pipeline [accepted]
+evidence voz-hybrid@1 accuracy_distance_from_incumbent: 0.080/0.100/0.120 (n=2)
+evidence voz-hybrid@1 duration_minutes: 3.000/4.000/5.000 (n=3, contradicts declared)
+evidence whisperx@3 duration_minutes: 11.000/12.000/13.000 (n=3)
+frontier method:via-hybrid [proposal] (critical): proposed by agent:claude for task:transcribe-footage; awaiting accept or reject
+frontier method:via-hybrid [blocked-alternative] (critical): accepting it would drop transcript.segment_confidence (consumed by select-lines)

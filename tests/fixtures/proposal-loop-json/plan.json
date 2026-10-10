@@ -1,0 +1,99 @@
+{
+  "ir_version": 0,
+  "plan": {
+    "id": "proposal-loop",
+    "title": "Proposal loop study",
+    "description": "",
+    "external_inputs": []
+  },
+  "objective": {
+    "root_task": "root",
+    "weights": {
+      "duration_minutes": 1.0
+    },
+    "budget_usd": null,
+    "deadline": null,
+    "quality_floor": null,
+    "acceptance": []
+  },
+  "artifact": [
+    {
+      "name": "doc",
+      "fields": ["text", "notes"]
+    }
+  ],
+  "resource": [],
+  "task": [
+    {
+      "id": "root",
+      "title": "Root",
+      "state": "decomposed",
+      "consumes": [],
+      "produces": []
+    },
+    {
+      "id": "draft",
+      "title": "Draft",
+      "state": "open",
+      "consumes": [],
+      "produces": [
+        {
+          "artifact": "doc",
+          "fields": ["text"]
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "title": "Review",
+      "state": "open",
+      "consumes": [
+        {
+          "artifact": "doc",
+          "fields": ["text"]
+        }
+      ],
+      "produces": []
+    }
+  ],
+  "method": [
+    {
+      "id": "root-all",
+      "task": "root",
+      "kind": "decompose",
+      "subtasks": ["draft", "review"],
+      "order_edges": [],
+      "capability": null,
+      "status": "accepted",
+      "provenance": "human:test",
+      "assumptions": []
+    }
+  ],
+  "capability": [
+    {
+      "id": "writer@1",
+      "kind": "tool",
+      "version": "1",
+      "consumes": [],
+      "produces": [
+        {
+          "artifact": "doc",
+          "fields": ["text"]
+        }
+      ],
+      "estimates": [
+        {
+          "metric": "duration_minutes",
+          "low": 2.0,
+          "likely": 4.0,
+          "high": 6.0,
+          "provenance": "declared",
+          "observations": null,
+          "window": null
+        }
+      ],
+      "resources": []
+    }
+  ],
+  "evidence": []
+}

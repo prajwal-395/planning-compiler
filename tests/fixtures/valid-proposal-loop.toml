@@ -1,0 +1,45 @@
+ir_version = 0
+
+[plan]
+id = "proposal-loop"
+title = "Proposal loop study"
+
+[objective]
+root_task = "root"
+weights = { duration_minutes = 1.0 }
+
+[[artifact]]
+name = "doc"
+fields = ["text", "notes"]
+
+[[task]]
+id = "root"
+title = "Root"
+state = "decomposed"
+
+[[task]]
+id = "draft"
+title = "Draft"
+state = "open"
+produces = [{ artifact = "doc", fields = ["text"] }]
+
+[[task]]
+id = "review"
+title = "Review"
+state = "open"
+consumes = [{ artifact = "doc", fields = ["text"] }]
+
+[[method]]
+id = "root-all"
+task = "root"
+kind = "decompose"
+subtasks = ["draft", "review"]
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "writer@1"
+kind = "tool"
+version = "1"
+produces = [{ artifact = "doc", fields = ["text"] }]
+estimates = [{ metric = "duration_minutes", low = 2.0, likely = 4.0, high = 6.0, provenance = "declared" }]

@@ -759,6 +759,7 @@ dependencies = [
  "pc-ir",
  "pc-select",
  "petgraph",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",

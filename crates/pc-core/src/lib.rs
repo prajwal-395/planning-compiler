@@ -16,6 +16,7 @@ pub mod estimate;
 pub mod frontier;
 pub mod impact;
 pub mod passes;
+pub mod propose;
 
 pub use compile::{
     CompileError, CompileTrace, CompiledPlan, EstimateRange, MetricBasis, ProvenanceRow,
@@ -28,4 +29,10 @@ pub use impact::{Change, DiffReport, ImpactError, ImpactReport, diff, impact};
 pub use passes::{
     Counts, Ctx, EstimatePass, MatchPass, Pass, Report, ResolvePass, SharePass, TraceEvent,
     ValidatePass, check,
+};
+pub use propose::{
+    CapabilityView, ContextError, ContextReport, DEFAULT_CONTEXT_BUDGET_TOKENS, MATCH_ID_PREFIX,
+    MethodView, ParentView, PatchError, TaskView, accept_method, apply_patch, context,
+    estimate_tokens, fit_context, method_kind_str, reject_method, render_context_text,
+    task_state_str, validate_patch,
 };

@@ -372,6 +372,31 @@ pub fn plan_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(PlanDoc)).unwrap_or(serde_json::Value::Null)
 }
 
+/// An agent patch for `pc propose`: new tasks, methods and capabilities.
+///
+/// JSON is canonical for agent patches; unknown fields are refused so a
+/// typo'd patch never silently applies. Every key is optional and defaults
+/// to empty, but a patch that adds nothing is refused by validation.
+/// Proposed methods must carry `status = "proposed"`: accepting them is the
+/// separate `pc accept` decision, and artifact declarations stay
+/// human-maintained, so patches cannot add artifacts or resources.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, default)]
+pub struct Patch {
+    /// Tasks to add to the plan.
+    pub add_task: Vec<Task>,
+    /// Methods to add, each with `status = "proposed"`.
+    pub add_method: Vec<Method>,
+    /// Capabilities to add.
+    pub add_capability: Vec<Capability>,
+}
+
+/// Build the published JSON Schema for [`Patch`].
+#[must_use]
+pub fn patch_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(Patch)).unwrap_or(serde_json::Value::Null)
+}
+
 /// Parse a plan from TOML text.
 pub fn from_toml(text: &str) -> Result<PlanDoc, toml::de::Error> {
     toml::from_str(text)
