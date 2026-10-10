@@ -1,0 +1,31 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+
+[[task]]
+id = "root"
+title = "root"
+state = "decomposed"
+
+[[task]]
+id = "a"
+title = "a"
+state = "open"
+
+[[task]]
+id = "b"
+title = "b"
+state = "open"
+
+[[method]]
+id = "split"
+task = "root"
+kind = "decompose"
+subtasks = ["a", "b"]
+order_edges = [{ from = "a", to = "b" }, { from = "b", to = "a" }]
+status = "accepted"

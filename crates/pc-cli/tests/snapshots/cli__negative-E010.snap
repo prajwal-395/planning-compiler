@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E010]: capability `c@1` uses unknown metric `vibes`
+  --> invalid-E010.toml:19
+found 1 error

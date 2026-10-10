@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: "String::from_utf8(output.stderr).unwrap()"
+---
+error[E008]: method `voz-mfa` cannot satisfy task `transcribe-footage`: capability `voz-mfa@1` does not produce `transcript.segment_confidence`
+  --> invalid-E008.toml:27
+found 1 error

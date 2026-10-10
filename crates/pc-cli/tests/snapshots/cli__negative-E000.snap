@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E000]: cannot resolve plan: unsupported ir_version 99, expected 0
+  --> invalid-E000.toml:1
+found 1 error

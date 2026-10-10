@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E011]: invalid estimate for `duration_minutes` on capability:c@1: three-point estimate violates low <= likely <= high (9 <= 5 <= 3)
+  --> invalid-E011.toml:19
+found 1 error

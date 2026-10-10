@@ -1,0 +1,19 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+
+[[task]]
+id = "root"
+title = "root"
+state = "open"
+
+[[capability]]
+id = "c@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 9.0, likely = 5.0, high = 3.0, provenance = "declared" }]

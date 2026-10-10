@@ -1,0 +1,9 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E004]: task `maker` uses undeclared artifact `video`
+  --> invalid-E004.toml:14
+error[E004]: task `root` uses undeclared artifact `video`
+  --> invalid-E004.toml:14
+found 2 errors

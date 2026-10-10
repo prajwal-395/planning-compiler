@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E003]: method `inv` invokes unknown capability `ghost@1`
+  --> invalid-E003.toml
+found 1 error

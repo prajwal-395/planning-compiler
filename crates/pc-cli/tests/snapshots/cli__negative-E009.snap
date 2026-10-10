@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E009]: task `root` consumes `transcript.words` which no other task produces and no external input provides
+  --> invalid-E009.toml:8
+found 1 error

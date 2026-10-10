@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E013]: invoke method `inv` names no capability
+  --> invalid-E013.toml:21
+found 1 error

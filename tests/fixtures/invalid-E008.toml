@@ -1,0 +1,38 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "transcribe-footage"
+
+[[artifact]]
+name = "transcript"
+fields = ["words", "timings", "segment_confidence"]
+
+[[task]]
+id = "transcribe-footage"
+title = "Transcribe footage"
+state = "resolved"
+produces = [{ artifact = "transcript", fields = ["words", "timings", "segment_confidence"] }]
+
+[[task]]
+id = "select-lines"
+title = "Select lines"
+state = "open"
+consumes = [{ artifact = "transcript", fields = ["words", "segment_confidence"] }]
+
+[[method]]
+id = "voz-mfa"
+task = "transcribe-footage"
+kind = "invoke"
+capability = "voz-mfa@1"
+status = "accepted"
+provenance = "agent:claude"
+
+[[capability]]
+id = "voz-mfa@1"
+kind = "tool"
+version = "1"
+produces = [{ artifact = "transcript", fields = ["words", "timings"] }]

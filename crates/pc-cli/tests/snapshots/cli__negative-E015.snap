@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E015]: objective weights unknown metric `human_minutes`
+  --> invalid-E015.toml:9
+found 1 error

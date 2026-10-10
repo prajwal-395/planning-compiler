@@ -1,0 +1,5 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+ok: 13 tasks, 5 methods, 1 capabilities, 1 artifacts, 2 evidence (examples/self-plan/plan.toml)

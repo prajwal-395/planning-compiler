@@ -1,0 +1,40 @@
+ir_version = 0
+
+[plan]
+id = "contracts-ok"
+title = "Contracts satisfied"
+
+[objective]
+root_task = "transcribe-footage"
+weights = { duration_minutes = 1.0 }
+
+[[artifact]]
+name = "transcript"
+fields = ["words", "timings", "segment_confidence"]
+
+[[task]]
+id = "transcribe-footage"
+title = "Transcribe footage"
+state = "resolved"
+produces = [{ artifact = "transcript", fields = ["words", "timings", "segment_confidence"] }]
+
+[[task]]
+id = "select-lines"
+title = "Select lines"
+state = "open"
+consumes = [{ artifact = "transcript", fields = ["words", "segment_confidence"] }]
+
+[[method]]
+id = "whisperx"
+task = "transcribe-footage"
+kind = "invoke"
+capability = "whisperx@3"
+status = "accepted"
+provenance = "agent:claude"
+
+[[capability]]
+id = "whisperx@3"
+kind = "tool"
+version = "3"
+produces = [{ artifact = "transcript", fields = ["words", "timings", "segment_confidence"] }]
+estimates = [{ metric = "duration_minutes", low = 8.0, likely = 12.0, high = 20.0, provenance = "declared" }]

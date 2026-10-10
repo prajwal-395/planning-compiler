@@ -1,0 +1,9 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E005]: task `maker` uses undeclared field `transcript.confidence`
+  --> invalid-E005.toml:18
+error[E005]: task `root` uses undeclared field `transcript.confidence`
+  --> invalid-E005.toml:18
+found 2 errors

@@ -1,0 +1,21 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+
+[[task]]
+id = "root"
+title = "root"
+state = "open"
+
+[[evidence]]
+subject = "capability:ghost@1"
+metric = "duration_minutes"
+value = 4.0
+unit = "minutes"
+time = "2026-10-01T00:00:00Z"
+source = "manual"

@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E012]: capability `c@1` uses undeclared resource `gpu-9`
+  --> invalid-E012.toml:19
+found 1 error

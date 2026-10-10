@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E002]: objective root_task refers to unknown task `ghost`
+  --> invalid-E002.toml:8
+found 1 error

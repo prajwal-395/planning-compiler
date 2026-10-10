@@ -1,0 +1,174 @@
+ir_version = 0
+
+[plan]
+id = "self-plan"
+title = "planning-compiler implementation plan"
+description = "Dogfood fixture: the nine-step plan from the scoping report, with steps 0-1 committed and steps 2-8 open."
+
+[objective]
+root_task = "ship-compiler"
+weights = { duration_minutes = 1.0, failure_risk = 2.0, money_usd = 0.5 }
+budget_usd = 1000.0
+deadline = "2026-12-31"
+quality_floor = 0.8
+
+[[objective.acceptance]]
+kind = "command"
+description = "Workspace tests pass on every commit."
+command = "cargo test --workspace"
+
+[[objective.acceptance]]
+kind = "manual"
+description = "Steps 0-1 release is tagged and usable on its own."
+
+[[objective.acceptance]]
+kind = "metric"
+description = "Checking the self-plan stays fast."
+metric = "duration_minutes"
+op = "<="
+value = 5.0
+
+[[artifact]]
+name = "check-report"
+fields = ["diagnostics", "counts"]
+
+[[resource]]
+name = "ci-minutes"
+capacity = 2000.0
+unit = "minutes"
+
+[[task]]
+id = "ship-compiler"
+title = "Ship the planning compiler"
+state = "decomposed"
+
+[[task]]
+id = "step-0"
+title = "Step 0: workspace skeleton and CI"
+state = "decomposed"
+
+[[task]]
+id = "step-1"
+title = "Step 1: IR v0 and pc check"
+state = "decomposed"
+
+[[task]]
+id = "step-2"
+title = "Step 2: analysis on a given plan"
+state = "open"
+
+[[task]]
+id = "step-3"
+title = "Step 3: alternatives and selection"
+state = "open"
+
+[[task]]
+id = "step-4"
+title = "Step 4: matching and sharing"
+state = "open"
+
+[[task]]
+id = "step-5"
+title = "Step 5: evidence"
+state = "open"
+
+[[task]]
+id = "step-6"
+title = "Step 6: frontier and impact"
+state = "open"
+
+[[task]]
+id = "step-7"
+title = "Step 7: proposal loop"
+state = "open"
+
+[[task]]
+id = "step-8"
+title = "Step 8: proof on real work"
+state = "open"
+
+[[task]]
+id = "run-check"
+title = "Run pc check on the self-plan"
+state = "resolved"
+produces = [{ artifact = "check-report", fields = ["diagnostics", "counts"] }]
+
+[[task]]
+id = "gate-release"
+title = "Gate the release on a clean check"
+state = "open"
+consumes = [{ artifact = "check-report", fields = ["diagnostics"] }]
+
+[[task]]
+id = "frontier-spike"
+title = "Spike the frontier scoring heuristic"
+state = "open"
+
+[[method]]
+id = "plan-steps"
+task = "ship-compiler"
+kind = "decompose"
+subtasks = ["step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "step-6", "step-7", "step-8"]
+order_edges = [
+  { from = "step-0", to = "step-1" },
+  { from = "step-1", to = "step-2" },
+  { from = "step-2", to = "step-3" },
+  { from = "step-3", to = "step-4" },
+  { from = "step-4", to = "step-5" },
+  { from = "step-5", to = "step-6" },
+  { from = "step-6", to = "step-7" },
+  { from = "step-7", to = "step-8" },
+]
+status = "accepted"
+provenance = "agent:firstmate-scout"
+assumptions = ["Steps stay independently shippable in report section 4.2 order."]
+
+[[method]]
+id = "check-then-gate"
+task = "step-1"
+kind = "decompose"
+subtasks = ["run-check", "gate-release"]
+order_edges = [{ from = "run-check", to = "gate-release" }]
+status = "accepted"
+provenance = "agent:crewmate"
+
+[[method]]
+id = "scaffold-then-ir"
+task = "step-0"
+kind = "decompose"
+subtasks = ["run-check", "gate-release"]
+status = "derived"
+provenance = "pass:bootstrap"
+
+[[method]]
+id = "invoke-check"
+task = "run-check"
+kind = "invoke"
+capability = "cargo-test@1"
+status = "accepted"
+provenance = "agent:crewmate"
+
+[[method]]
+id = "frontier-hypothesis"
+task = "step-6"
+kind = "decompose"
+subtasks = ["frontier-spike"]
+status = "proposed"
+provenance = "llm:scout-model"
+assumptions = ["Frontier scoring stays a deterministic heuristic (report P8)."]
+
+[[capability]]
+id = "cargo-test@1"
+kind = "tool"
+version = "1"
+produces = [{ artifact = "check-report", fields = ["diagnostics", "counts"] }]
+estimates = [{ metric = "duration_minutes", low = 2.0, likely = 5.0, high = 15.0, provenance = "declared" }]
+resources = ["ci-minutes"]
+
+[[evidence]]
+subject = "capability:cargo-test@1"
+metric = "duration_minutes"
+value = 4.0
+unit = "minutes"
+time = "2026-10-10T00:00:00Z"
+source = "ci"

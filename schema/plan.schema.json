@@ -1,0 +1,770 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "AcceptanceCriterion": {
+      "additionalProperties": false,
+      "description": "One acceptance criterion on the objective.",
+      "properties": {
+        "command": {
+          "description": "Command to run, for `kind = \"command\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "default": "",
+          "description": "Human-readable statement. Required for every kind.",
+          "type": "string"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AcceptanceKind"
+            }
+          ],
+          "description": "How the criterion is checked."
+        },
+        "metric": {
+          "description": "Metric to compare, for `kind = \"metric\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "description": "Comparison operator (`<=`, `>=`, `==`), for `kind = \"metric\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "Threshold value, for `kind = \"metric\"`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "AcceptanceKind": {
+      "description": "How an acceptance criterion is checked.",
+      "oneOf": [
+        {
+          "description": "A person signs off.",
+          "enum": [
+            "manual"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A command exits zero.",
+          "enum": [
+            "command"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A metric comparison holds.",
+          "enum": [
+            "metric"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ArtifactDecl": {
+      "additionalProperties": false,
+      "description": "A declared artifact type: a name plus its typed fields.",
+      "properties": {
+        "fields": {
+          "description": "Field names this artifact type carries.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Artifact type name, e.g. `\"transcript\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fields",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Capability": {
+      "additionalProperties": false,
+      "description": "An executor with a typed contract and three-point estimates.\n\n`kind` deliberately excludes people: there is no `human-role` in v0.",
+      "properties": {
+        "consumes": {
+          "default": [],
+          "description": "Typed inputs the capability needs from the invoking task.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "estimates": {
+          "default": [],
+          "description": "Three-point estimates per metric.",
+          "items": {
+            "$ref": "#/definitions/Estimate"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable capability id, e.g. `\"whisperx@3\"`.",
+          "type": "string"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CapabilityKind"
+            }
+          ],
+          "description": "Executor flavour. People are out of scope for v0."
+        },
+        "produces": {
+          "default": [],
+          "description": "Typed outputs the capability delivers.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "default": [],
+          "description": "Resources this capability draws on.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "default": "",
+          "description": "Capability version string.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "CapabilityKind": {
+      "description": "Executor flavours v0 models. No human executors.",
+      "oneOf": [
+        {
+          "description": "A coding agent or harness.",
+          "enum": [
+            "agent"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A deterministic tool or model endpoint.",
+          "enum": [
+            "tool"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A composed workflow.",
+          "enum": [
+            "workflow"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An imported skill (contracts live in a sidecar).",
+          "enum": [
+            "skill"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "An external service.",
+          "enum": [
+            "service"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ContractItem": {
+      "additionalProperties": false,
+      "description": "One typed contract entry: an artifact plus the fields used.",
+      "properties": {
+        "artifact": {
+          "description": "Artifact type name. Must be declared under `artifact`.",
+          "type": "string"
+        },
+        "fields": {
+          "description": "Fields of that artifact. Must be a subset of the declaration.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifact",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "Estimate": {
+      "additionalProperties": false,
+      "description": "A three-point estimate with provenance.",
+      "properties": {
+        "high": {
+          "description": "Pessimistic bound.",
+          "format": "double",
+          "type": "number"
+        },
+        "likely": {
+          "description": "Most likely value.",
+          "format": "double",
+          "type": "number"
+        },
+        "low": {
+          "description": "Optimistic bound.",
+          "format": "double",
+          "type": "number"
+        },
+        "metric": {
+          "description": "One of [`KNOWN_METRICS`].",
+          "type": "string"
+        },
+        "observations": {
+          "description": "Observation count, for `measured` provenance.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "provenance": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EstimateProvenance"
+            }
+          ],
+          "description": "Where the numbers came from."
+        },
+        "window": {
+          "description": "Evidence window label, e.g. `\"30d\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "high",
+        "likely",
+        "low",
+        "metric",
+        "provenance"
+      ],
+      "type": "object"
+    },
+    "EstimateProvenance": {
+      "description": "Where an estimate's numbers came from.",
+      "oneOf": [
+        {
+          "description": "A guess written by a person or agent.",
+          "enum": [
+            "declared"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Derived from evidence (estimators arrive in step 5).",
+          "enum": [
+            "measured"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "One append-only observation about a capability, method or task.\n\nEstimators that fold evidence into profiles arrive in step 5. P1/P2 only check that the subject exists and units are consistent.",
+      "properties": {
+        "artifact_hash": {
+          "description": "Optional content hash of the backing artifact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metric": {
+          "description": "One of [`KNOWN_METRICS`].",
+          "type": "string"
+        },
+        "source": {
+          "description": "Where the observation came from.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "`capability:<id>`, `method:<id>` or `task:<id>`.",
+          "type": "string"
+        },
+        "time": {
+          "description": "RFC 3339 timestamp.",
+          "type": "string"
+        },
+        "unit": {
+          "description": "Observed unit; P1 accepts only the metric's canonical unit (case-insensitive) and canonicalizes its case.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Observed value.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "metric",
+        "source",
+        "subject",
+        "time",
+        "unit",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Method": {
+      "additionalProperties": false,
+      "description": "One way to achieve a task.\n\n`kind` selects the shape: `decompose` uses `subtasks`/`order_edges`, `invoke` uses `capability`. P2 reports E013 when the shape is mixed.",
+      "properties": {
+        "assumptions": {
+          "default": [],
+          "description": "Assumptions `explain` must surface (step 2).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "capability": {
+          "description": "Capability id, for `kind = \"invoke\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable method id, unique among methods.",
+          "type": "string"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MethodKind"
+            }
+          ],
+          "description": "Decomposition versus capability invocation."
+        },
+        "order_edges": {
+          "default": [],
+          "description": "Ordering constraints between subtasks, for `kind = \"decompose\"`.",
+          "items": {
+            "$ref": "#/definitions/OrderEdge"
+          },
+          "type": "array"
+        },
+        "provenance": {
+          "default": "",
+          "description": "Who proposed it: `human:<name>`, `agent:<name>`, `llm:<model>`, or `pass:<name>`.",
+          "type": "string"
+        },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MethodStatus"
+            }
+          ],
+          "description": "Lifecycle: only `accepted`/`derived` methods are checked and compiled."
+        },
+        "subtasks": {
+          "default": [],
+          "description": "Child task ids, for `kind = \"decompose\"`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "Task this method achieves.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "status",
+        "task"
+      ],
+      "type": "object"
+    },
+    "MethodKind": {
+      "description": "Decomposition versus invocation.",
+      "oneOf": [
+        {
+          "description": "Achieve the task via subtasks.",
+          "enum": [
+            "decompose"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Achieve the task via a capability.",
+          "enum": [
+            "invoke"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "MethodStatus": {
+      "description": "Lifecycle of a method. P2 checks `accepted` and `derived` only.",
+      "oneOf": [
+        {
+          "description": "Committed to the plan.",
+          "enum": [
+            "accepted"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Awaiting `accept`/`reject` (step 7).",
+          "enum": [
+            "proposed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Generated by a compiler pass.",
+          "enum": [
+            "derived"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Explicitly refused; ignored by every pass.",
+          "enum": [
+            "rejected"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "Objective": {
+      "additionalProperties": false,
+      "description": "Root task plus constraints, weights and acceptance criteria.",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "description": "What counts as achieving the objective.",
+          "items": {
+            "$ref": "#/definitions/AcceptanceCriterion"
+          },
+          "type": "array"
+        },
+        "budget_usd": {
+          "description": "Hard budget in USD, if any.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "deadline": {
+          "description": "Hard deadline (free-form date string in v0), if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quality_floor": {
+          "description": "Hard quality floor in `[0, 1]`, if any.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "root_task": {
+          "description": "Id of the root task.",
+          "type": "string"
+        },
+        "weights": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "default": {},
+          "description": "Weight per metric for the step-3 additive objective. v0 only validates.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "root_task"
+      ],
+      "type": "object"
+    },
+    "OrderEdge": {
+      "additionalProperties": false,
+      "description": "An ordering constraint `from` -> `to` between subtasks of one method.",
+      "properties": {
+        "from": {
+          "description": "Predecessor subtask id.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Successor subtask id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "PlanMeta": {
+      "additionalProperties": false,
+      "description": "Plan identity and the fields an external input may satisfy.",
+      "properties": {
+        "description": {
+          "default": "",
+          "description": "Longer description, if any.",
+          "type": "string"
+        },
+        "external_inputs": {
+          "default": [],
+          "description": "Artifact fields the world provides, so dataflow need not produce them.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable plan id, e.g. `\"self-plan\"`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "ResourceDecl": {
+      "additionalProperties": false,
+      "description": "A named capacity, e.g. `\"gpu-1\"`. v0 reports usage only.",
+      "properties": {
+        "capacity": {
+          "description": "Available capacity in `unit`.",
+          "format": "double",
+          "type": "number"
+        },
+        "name": {
+          "description": "Resource name.",
+          "type": "string"
+        },
+        "unit": {
+          "default": "",
+          "description": "Capacity unit, free-form in v0.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "capacity",
+        "name"
+      ],
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "description": "A need: what must be true or produced.",
+      "properties": {
+        "consumes": {
+          "default": [],
+          "description": "Typed inputs this task needs from upstream or external inputs.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable task id.",
+          "type": "string"
+        },
+        "produces": {
+          "default": [],
+          "description": "Typed outputs this task promises downstream.",
+          "items": {
+            "$ref": "#/definitions/ContractItem"
+          },
+          "type": "array"
+        },
+        "state": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TaskState"
+            }
+          ],
+          "description": "Lifecycle state. The compiler reads `done`, never sets it."
+        },
+        "title": {
+          "description": "Human title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "title"
+      ],
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "Lifecycle states for a task.",
+      "oneOf": [
+        {
+          "description": "Not yet broken down.",
+          "enum": [
+            "open"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Has an accepted decomposition.",
+          "enum": [
+            "decomposed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Fully reduced to invocations (informational in v0).",
+          "enum": [
+            "resolved"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Observed finished. Read from imports, never set by the compiler.",
+          "enum": [
+            "done"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Explicitly abandoned.",
+          "enum": [
+            "dropped"
+          ],
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "A plan file: one TOML (`plan.toml`) or JSON (`plan.json`) document.",
+  "properties": {
+    "artifact": {
+      "default": [],
+      "description": "Declared artifact types. Defaults to empty.",
+      "items": {
+        "$ref": "#/definitions/ArtifactDecl"
+      },
+      "type": "array"
+    },
+    "capability": {
+      "default": [],
+      "description": "Executors with typed contracts and three-point estimates.",
+      "items": {
+        "$ref": "#/definitions/Capability"
+      },
+      "type": "array"
+    },
+    "evidence": {
+      "default": [],
+      "description": "Recorded observations. Estimators arrive in step 5; P1 only validates references and units. Defaults to empty.",
+      "items": {
+        "$ref": "#/definitions/Evidence"
+      },
+      "type": "array"
+    },
+    "ir_version": {
+      "description": "Schema version. Must equal [`IR_VERSION`].",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "method": {
+      "default": [],
+      "description": "Ways to achieve tasks: decompose or invoke. Defaults to empty.",
+      "items": {
+        "$ref": "#/definitions/Method"
+      },
+      "type": "array"
+    },
+    "objective": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Objective"
+        }
+      ],
+      "description": "Root task, hard constraints, weights, acceptance criteria."
+    },
+    "plan": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PlanMeta"
+        }
+      ],
+      "description": "Plan identity plus plan-wide external inputs."
+    },
+    "resource": {
+      "default": [],
+      "description": "Named capacities (reported against, never scheduled under, in v0).",
+      "items": {
+        "$ref": "#/definitions/ResourceDecl"
+      },
+      "type": "array"
+    },
+    "task": {
+      "default": [],
+      "description": "Needs: what must be true or produced.",
+      "items": {
+        "$ref": "#/definitions/Task"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ir_version",
+    "objective",
+    "plan"
+  ],
+  "title": "PlanDoc",
+  "type": "object"
+}

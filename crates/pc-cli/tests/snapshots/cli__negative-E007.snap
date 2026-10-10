@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E007]: method `split` has a cycle in its order edges
+  --> invalid-E007.toml:26
+found 1 error

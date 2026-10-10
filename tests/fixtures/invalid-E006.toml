@@ -1,0 +1,32 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+
+[[task]]
+id = "root"
+title = "root"
+state = "decomposed"
+
+[[task]]
+id = "leaf"
+title = "leaf"
+state = "decomposed"
+
+[[method]]
+id = "down"
+task = "root"
+kind = "decompose"
+subtasks = ["leaf"]
+status = "accepted"
+
+[[method]]
+id = "back"
+task = "leaf"
+kind = "decompose"
+subtasks = ["root"]
+status = "accepted"

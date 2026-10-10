@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E001]: duplicate task id `root`
+  --> invalid-E001.toml:8
+found 1 error

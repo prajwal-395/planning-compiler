@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E006]: method hierarchy contains a cycle involving task `root`: acyclic hierarchies keep plan existence decidable
+  --> invalid-E006.toml:8
+found 1 error

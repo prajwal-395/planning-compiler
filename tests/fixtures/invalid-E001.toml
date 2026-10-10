@@ -1,0 +1,18 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+
+[[task]]
+id = "root"
+title = "root"
+state = "open"
+
+[[task]]
+id = "root"
+title = "duplicate"
+state = "open"

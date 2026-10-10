@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: "String::from_utf8(output.stderr).unwrap()"
+---
+error[E014]: evidence for `task:root` uses unit `hours` but metric `duration_minutes` takes `minutes`
+  --> evidence-log/evidence.jsonl:3
+found 1 error

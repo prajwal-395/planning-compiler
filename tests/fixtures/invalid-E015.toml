@@ -1,0 +1,14 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+weights = { human_minutes = 1.0 }
+
+[[task]]
+id = "root"
+title = "root"
+state = "open"
