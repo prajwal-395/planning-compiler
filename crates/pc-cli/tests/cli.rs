@@ -125,7 +125,8 @@ fn negative_fixtures_fail_with_their_code() {
     }
 }
 
-/// The project's self-plan fixture is a clean, reviewable step-1 plan.
+/// The project's self-plan fixture is the step-8 dogfood plan: steps 0-7
+/// done, step 8 in progress, post-MVP open.
 #[test]
 fn self_plan_fixture_passes() {
     let mut cmd = Command::cargo_bin("pc").unwrap();
@@ -148,28 +149,21 @@ fn self_plan_compiles_and_explains_accepted_work() {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout).unwrap();
-    // Step 5 folds the two run-check observations (3.0 via the task, 4.0 via
-    // the capability) into a measured (3.0, 3.5, 4.0) triple, so the makespan
-    // is the measured 3.5 minutes, not the declared 6.167.
-    assert!(text.contains("makespan 3.500 minutes"), "{text}");
-    assert!(text.contains("duration_minutes:"), "{text}");
-    // The run-check observations carry no typed basis, so the measured
-    // total names its missing basis explicitly.
-    assert!(
-        text.contains("(predicted 6.167; measured 1/1; basis none)"),
-        "{text}"
-    );
-    assert!(text.contains("critical tasks: run-check\n"), "{text}");
-    assert!(
-        text.contains("slack run-check: 0.000 minutes (critical)\n"),
-        "{text}"
-    );
+    // Every finished step is a done leaf and no remaining task has an
+    // accepted method, so there is no executable work to roll up: makespan
+    // 0 with no metric totals, and the open step-8/post-MVP work listed.
+    assert!(text.contains("makespan 0.000 minutes"), "{text}");
+    assert!(text.contains("parallel width 0"), "{text}");
+    assert!(!text.contains("duration_minutes:"), "{text}");
+    assert!(text.contains("unresolved: dogfood-2wk"), "{text}");
+    assert!(text.contains("post-mvp-01-tasks-axi"), "{text}");
+    assert!(text.contains("post-mvp-11-mining"), "{text}");
 
     let mut explain = Command::cargo_bin("pc").unwrap();
     explain.current_dir(workspace_root());
     let output = explain
         .arg("explain")
-        .arg("task:step-1")
+        .arg("task:step-8")
         .arg("examples/self-plan")
         .output()
         .unwrap();
@@ -181,7 +175,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .contains("uses method:check-then-gate")
+            .contains("uses method:step-8-plan")
     );
 
     let explain = |target: &str| {
@@ -207,19 +201,104 @@ fn self_plan_compiles_and_explains_accepted_work() {
         ),
         "{text}"
     );
-    let text = explain("run-check");
+    let text = explain("method:step-8-plan");
     assert!(
-        text.contains("task:run-check: critical (slack 0.000 minutes; earliest 0.000-3.500, latest 0.000-3.500)"),
+        text.contains("method:step-8-plan: assumes (Retrospective accepted as step 8's first proof point (3/3 pass with documented nuances).)"),
+        "{text}"
+    );
+    let text = explain("task:dogfood-2wk");
+    assert!(
+        text.contains("task:dogfood-2wk: unresolved (no accepted method)"),
         "{text}"
     );
 
-    // The P5 provenance report names the measured capability behind the
-    // makespan: two observations, none stale, agreeing with the guess.
-    let text = explain("capability:cargo-test@1");
+    // The P5 provenance report for the shared implementation capability
+    // rests on the eight measured PR open-to-merge times (basis absolute),
+    // recorded as a pipeline-time baseline; no open task estimates through it.
+    let text = explain("capability:crewmate@1");
     assert!(
-        text.contains("provenance cargo-test@1 duration_minutes: predicted 2.000/5.000/15.000 vs measured 3.000/3.500/4.000 (n=2, sources: ci)"),
+        text.contains("measured (P5 median 4.341 over 8 observations for `duration_minutes` (min 2.883, max 16.650) [basis absolute])"),
         "{text}"
     );
+    assert!(
+        text.contains("provenance crewmate@1 duration_minutes: predicted 2.000/5.000/15.000 vs measured 2.883/4.341/16.650 (n=8"),
+        "{text}"
+    );
+    assert!(text.contains("[basis absolute]"), "{text}");
+
+    // The frontier ranks the pending proposals (scheduling/store backends)
+    // first on the tie, then the in-progress step-8 work, then the
+    // post-MVP list in report order.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("frontier")
+        .arg("examples/self-plan")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let subjects: Vec<&str> = text
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .collect();
+    assert_eq!(
+        subjects,
+        [
+            "method:sched-via-aries",
+            "method:sched-via-pumpkin",
+            "method:store-via-postgres",
+            "method:store-via-sqlite",
+            "task:dogfood-2wk",
+            "task:live-ren-cycle",
+            "task:post-mvp-01-tasks-axi",
+            "task:post-mvp-02-beads",
+            "task:post-mvp-03-taskmaster",
+            "task:post-mvp-04-skill-scan",
+            "task:post-mvp-05-mcp",
+            "task:post-mvp-06-proposer",
+            "task:post-mvp-07-pareto",
+            "task:post-mvp-08-scheduling",
+            "task:post-mvp-09-sqlite",
+            "task:post-mvp-10-rewrite",
+            "task:post-mvp-11-mining",
+        ],
+        "{text}"
+    );
+}
+
+/// The next dogfood decision (accepting a pending backend proposal) keeps
+/// the self-plan feasible: every proposed capability declares the cost and
+/// risk the objective's budget and quality floor require.
+#[test]
+fn self_plan_stays_feasible_after_accepting_each_proposal() {
+    for method in [
+        "sched-via-pumpkin",
+        "sched-via-aries",
+        "store-via-sqlite",
+        "store-via-postgres",
+    ] {
+        let dir = scratch_dir(method);
+        for file in ["plan.toml", "evidence.jsonl"] {
+            std::fs::copy(
+                workspace_root()
+                    .join("examples")
+                    .join("self-plan")
+                    .join(file),
+                dir.join(file),
+            )
+            .unwrap();
+        }
+        pc_ok(&dir, &["accept", method]);
+        let text = pc_ok(&dir, &["compile"]);
+        assert!(text.contains("selection: optimal"), "{method}: {text}");
+        pc_ok(&dir, &["frontier"]);
+    }
 }
 
 /// Parallel critical tasks are listed as a set, never as an invented chain.

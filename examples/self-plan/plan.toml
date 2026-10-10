@@ -3,7 +3,7 @@ ir_version = 0
 [plan]
 id = "self-plan"
 title = "planning-compiler implementation plan"
-description = "Dogfood fixture: the nine-step plan from the scoping report, with steps 0-1 committed and steps 2-8 open."
+description = "Dogfood fixture: steps 0-7 and the PR 8 gap fixes shipped (done), step 8 in progress (retro done, dogfood current, live Ren cycle next), post-MVP open in report 4.2 value order. PR open-to-merge times are absolute duration evidence on capability:crewmate@1."
 
 [objective]
 root_task = "ship-compiler"
@@ -28,6 +28,10 @@ metric = "duration_minutes"
 op = "<="
 value = 5.0
 
+[[objective.acceptance]]
+kind = "manual"
+description = "Step 8 proves the compiler changes or catches a real decision at a maintenance cost below what it saves (docs/evidence/dogfood.md)."
+
 [[artifact]]
 name = "check-report"
 fields = ["diagnostics", "counts"]
@@ -45,70 +49,145 @@ state = "decomposed"
 [[task]]
 id = "step-0"
 title = "Step 0: workspace skeleton and CI"
-state = "decomposed"
+state = "done"
 
 [[task]]
 id = "step-1"
 title = "Step 1: IR v0 and pc check"
-state = "decomposed"
+state = "done"
 
 [[task]]
 id = "step-2"
 title = "Step 2: analysis on a given plan"
-state = "open"
+state = "done"
 
 [[task]]
 id = "step-3"
 title = "Step 3: alternatives and selection"
-state = "open"
+state = "done"
 
 [[task]]
 id = "step-4"
 title = "Step 4: matching and sharing"
-state = "open"
+state = "done"
 
 [[task]]
 id = "step-5"
 title = "Step 5: evidence"
-state = "open"
+state = "done"
 
 [[task]]
 id = "step-6"
 title = "Step 6: frontier and impact"
-state = "open"
+state = "done"
 
 [[task]]
 id = "step-7"
 title = "Step 7: proposal loop"
-state = "open"
+state = "done"
 
 [[task]]
 id = "step-8"
 title = "Step 8: proof on real work"
+state = "decomposed"
+
+[[task]]
+id = "retro-ren"
+title = "Ren transcription retrospective (3/3 pass)"
+state = "done"
+
+[[task]]
+id = "dogfood-2wk"
+title = "Dogfood the self-plan for 2+ weeks"
+state = "open"
+
+[[task]]
+id = "live-ren-cycle"
+title = "One live Ren planning cycle"
+state = "open"
+
+[[task]]
+id = "post-mvp"
+title = "Post-MVP work, ordered by value (report 4.2)"
+state = "decomposed"
+
+[[task]]
+id = "post-mvp-01-tasks-axi"
+title = "tasks-axi backlog.md import/export (Firstmate integration)"
+state = "open"
+
+[[task]]
+id = "post-mvp-02-beads"
+title = "Beads JSONL import/export"
+state = "open"
+
+[[task]]
+id = "post-mvp-03-taskmaster"
+title = "Task Master import"
+state = "open"
+
+[[task]]
+id = "post-mvp-04-skill-scan"
+title = "SKILL.md capability scanner (sidecar contracts)"
+state = "open"
+
+[[task]]
+id = "post-mvp-05-mcp"
+title = "MCP server (rmcp)"
+state = "open"
+
+[[task]]
+id = "post-mvp-06-proposer"
+title = "LLM proposer plugin"
+state = "open"
+
+[[task]]
+id = "post-mvp-07-pareto"
+title = "Pareto plan sets"
+state = "open"
+
+[[task]]
+id = "post-mvp-08-scheduling"
+title = "Resource-constrained scheduling (RCPSP)"
+state = "open"
+
+[[task]]
+id = "post-mvp-09-sqlite"
+title = "SQLite store (measured need only)"
+state = "open"
+
+[[task]]
+id = "post-mvp-10-rewrite"
+title = "Guarded rewrite rules (egglog candidate)"
+state = "open"
+
+[[task]]
+id = "post-mvp-11-mining"
+title = "Repeated-procedure mining (Experiment B)"
 state = "open"
 
 [[task]]
 id = "run-check"
 title = "Run pc check on the self-plan"
-state = "resolved"
+state = "done"
 produces = [{ artifact = "check-report", fields = ["diagnostics", "counts"] }]
 
 [[task]]
 id = "gate-release"
 title = "Gate the release on a clean check"
-state = "open"
+state = "done"
 consumes = [{ artifact = "check-report", fields = ["diagnostics"] }]
 
 [[task]]
 id = "frontier-spike"
 title = "Spike the frontier scoring heuristic"
-state = "open"
+state = "dropped"
 
 [[method]]
 id = "plan-steps"
 task = "ship-compiler"
 kind = "decompose"
-subtasks = ["step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "step-6", "step-7", "step-8"]
+subtasks = ["step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "step-6", "step-7", "step-8", "post-mvp"]
 order_edges = [
   { from = "step-0", to = "step-1" },
   { from = "step-1", to = "step-2" },
@@ -118,10 +197,14 @@ order_edges = [
   { from = "step-5", to = "step-6" },
   { from = "step-6", to = "step-7" },
   { from = "step-7", to = "step-8" },
+  { from = "step-8", to = "post-mvp" },
 ]
 status = "accepted"
 provenance = "agent:firstmate-scout"
-assumptions = ["Steps stay independently shippable in report section 4.2 order."]
+assumptions = [
+  "Steps stay independently shippable in report section 4.2 order.",
+  "Captain's 2026-10-10 rulings bind: no LLM calls in the core, text-file state, typed matching only, people left out, task tracking out of scope, license deferred.",
+]
 
 [[method]]
 id = "check-then-gate"
@@ -153,9 +236,82 @@ id = "frontier-hypothesis"
 task = "step-6"
 kind = "decompose"
 subtasks = ["frontier-spike"]
-status = "proposed"
+status = "rejected"
 provenance = "llm:scout-model"
-assumptions = ["Frontier scoring stays a deterministic heuristic (report P8)."]
+assumptions = [
+  "Frontier scoring stays a deterministic heuristic (report P8).",
+  "Superseded: step 6 shipped as PR 6 with a deterministic P8 heuristic; the hypothesis is moot.",
+]
+
+[[method]]
+id = "step-8-plan"
+task = "step-8"
+kind = "decompose"
+subtasks = ["retro-ren", "dogfood-2wk", "live-ren-cycle"]
+order_edges = [
+  { from = "retro-ren", to = "dogfood-2wk" },
+  { from = "dogfood-2wk", to = "live-ren-cycle" },
+]
+status = "accepted"
+provenance = "agent:crewmate"
+assumptions = [
+  "Retrospective accepted as step 8's first proof point (3/3 pass with documented nuances).",
+  "Dogfood, then one live Ren cycle, per report Q3(a).",
+]
+
+[[method]]
+id = "retro-run"
+task = "retro-ren"
+kind = "invoke"
+capability = "crewmate@1"
+status = "accepted"
+provenance = "agent:crewmate"
+assumptions = ["Retrospective reproduced the human analysis shape deterministically; the judgment stays human."]
+
+[[method]]
+id = "post-mvp-plan"
+task = "post-mvp"
+kind = "decompose"
+subtasks = ["post-mvp-01-tasks-axi", "post-mvp-02-beads", "post-mvp-03-taskmaster", "post-mvp-04-skill-scan", "post-mvp-05-mcp", "post-mvp-06-proposer", "post-mvp-07-pareto", "post-mvp-08-scheduling", "post-mvp-09-sqlite", "post-mvp-10-rewrite", "post-mvp-11-mining"]
+status = "accepted"
+provenance = "agent:crewmate"
+assumptions = ["Post-MVP order is by value, report section 4.2; import/export adapters first (Firstmate integration)."]
+
+[[method]]
+id = "sched-via-pumpkin"
+task = "post-mvp-08-scheduling"
+kind = "invoke"
+capability = "sched-pumpkin@1"
+status = "proposed"
+provenance = "agent:crewmate"
+assumptions = ["Pumpkin is the report's exact backend for resource-constrained scheduling (2.4); pure Rust."]
+
+[[method]]
+id = "sched-via-aries"
+task = "post-mvp-08-scheduling"
+kind = "invoke"
+capability = "sched-aries@1"
+status = "proposed"
+provenance = "agent:crewmate"
+assumptions = ["aries-solver is the report's later candidate for joint selection plus scheduling (2.4)."]
+
+[[method]]
+id = "store-via-sqlite"
+task = "post-mvp-09-sqlite"
+kind = "invoke"
+capability = "store-sqlite@1"
+status = "proposed"
+provenance = "agent:crewmate"
+assumptions = ["SQLite only when a measured need appears; text files plus JSONL until then (report Q5)."]
+
+[[method]]
+id = "store-via-postgres"
+task = "post-mvp-09-sqlite"
+kind = "invoke"
+capability = "store-postgres@1"
+status = "proposed"
+provenance = "agent:crewmate"
+assumptions = ["Postgres only for multi-user, after SQLite (report Q5)."]
 
 [[capability]]
 id = "cargo-test@1"
@@ -168,6 +324,56 @@ estimates = [
   { metric = "failure_risk", low = 0.01, likely = 0.01, high = 0.01, provenance = "declared" },
 ]
 resources = ["ci-minutes"]
+
+[[capability]]
+id = "crewmate@1"
+kind = "agent"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 2.0, likely = 5.0, high = 15.0, provenance = "declared" },
+  { metric = "money_usd", low = 0.0, likely = 1.0, high = 5.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.02, likely = 0.05, high = 0.1, provenance = "declared" },
+]
+
+[[capability]]
+id = "sched-pumpkin@1"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 60.0, likely = 120.0, high = 240.0, provenance = "declared" },
+  { metric = "money_usd", low = 0.0, likely = 0.0, high = 0.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.02, likely = 0.05, high = 0.1, provenance = "declared" },
+]
+
+[[capability]]
+id = "sched-aries@1"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 60.0, likely = 180.0, high = 360.0, provenance = "declared" },
+  { metric = "money_usd", low = 0.0, likely = 0.0, high = 0.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.1, high = 0.2, provenance = "declared" },
+]
+
+[[capability]]
+id = "store-sqlite@1"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 30.0, likely = 60.0, high = 120.0, provenance = "declared" },
+  { metric = "money_usd", low = 0.0, likely = 0.0, high = 0.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.01, likely = 0.02, high = 0.05, provenance = "declared" },
+]
+
+[[capability]]
+id = "store-postgres@1"
+kind = "service"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 60.0, likely = 120.0, high = 240.0, provenance = "declared" },
+  { metric = "money_usd", low = 0.0, likely = 20.0, high = 100.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.02, likely = 0.05, high = 0.1, provenance = "declared" },
+]
 
 [[evidence]]
 subject = "capability:cargo-test@1"

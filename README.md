@@ -51,7 +51,7 @@ schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
-docs/             ir.md, passes.md, adr/
+docs/             ir.md, passes.md, evidence/ (step-8 dogfood log), adr/
 ```
 
 Adapters (`pc-adapter-*`) arrive after the MVP.
