@@ -60,20 +60,27 @@ pub struct MetricBasis {
     pub measured_nodes: usize,
     /// Selected leaf tasks contributing to this metric at all.
     pub total_nodes: usize,
+    /// Sorted unique typed bases behind the measured nodes, with the
+    /// missing basis reported as `"none"`. Empty when nothing is measured:
+    /// declared guesses carry no basis.
+    pub bases: Vec<String>,
 }
 
 /// One provenance row: declared guesses beside measured evidence for a
-/// capability and metric. This is the provenance report `pc compile --json`
-/// carries and `pc explain capability:<id>` renders.
+/// capability, metric and typed basis. This is the provenance report `pc
+/// compile --json` carries and `pc explain capability:<id>` renders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceRow {
     /// Capability id.
     pub capability: String,
     /// One known metric.
     pub metric: String,
+    /// Typed measurement basis behind `measured`: `None` for evidence with
+    /// no basis field and for declared-only rows.
+    pub measurement_basis: Option<String>,
     /// Declared triple, when the plan states one.
     pub predicted: Option<EstimateRange>,
-    /// Measured triple, when attributed evidence exists.
+    /// Measured triple, when live attributed evidence exists for this basis.
     pub measured: Option<EstimateRange>,
     /// Observation count behind `measured` (zero when declared-only).
     pub observations: u64,
@@ -104,12 +111,19 @@ pub struct CompiledPlan {
     /// Predicted-versus-measured basis behind each metric in `totals`.
     pub basis: BTreeMap<String, MetricBasis>,
     /// Per-capability provenance: declared guesses beside measured
-    /// evidence. Sorted by `(capability, metric)`.
+    /// evidence, one row per capability, metric and typed basis. Sorted by
+    /// `(capability, metric, basis)`.
     pub provenance: Vec<ProvenanceRow>,
     /// `task:<id>` evidence P5 ignored because the task's accepted invoke
     /// methods call no capability or more than one. Sorted by
     /// `(task, metric)`.
     pub unattributed_tasks: Vec<crate::estimate::UnattributedTaskEvidence>,
+    /// Evidence staged with proposals P5 held out of the effective numbers.
+    /// Sorted by `(capability, metric, basis)`.
+    pub staged_evidence: Vec<crate::estimate::StagedEvidence>,
+    /// Evidence for subjects not in the plan, held until the subject is
+    /// proposed. Sorted by `(subject, metric, basis)`.
+    pub pending_evidence: Vec<crate::estimate::PendingEvidence>,
     /// Expected duration in minutes, equal to the CPM makespan.
     pub makespan_minutes: f64,
     /// Maximum number of simultaneously executable leaf tasks. Tasks with
@@ -575,6 +589,18 @@ pub fn compile_with_budget(
                     && measured.contains(&(n.capability.clone(), metric.clone()))
             })
             .count();
+        // Sorted unique typed bases behind the measured nodes, with the
+        // missing basis reported as "none". Empty for declared-only totals.
+        let bases = nodes
+            .iter()
+            .filter(|n| {
+                n.estimates.contains_key(metric)
+                    && measured.contains(&(n.capability.clone(), metric.clone()))
+            })
+            .flat_map(|n| estimated.measured_bases(&n.capability, metric))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         basis.insert(
             metric.clone(),
             MetricBasis {
@@ -582,6 +608,7 @@ pub fn compile_with_budget(
                 effective: totals[metric],
                 measured_nodes,
                 total_nodes,
+                bases,
             },
         );
     }
@@ -610,7 +637,8 @@ pub fn compile_with_budget(
         reason: format!("P7 CPM makespan {makespan:.3} minutes; parallel width {width}"),
     });
     // Provenance report: every measured profile plus every used
-    // capability's metrics, sorted by (capability, metric) as estimated.
+    // capability's metrics, sorted by (capability, metric, basis) as
+    // estimated.
     let selected_caps: BTreeSet<String> = selection
         .methods
         .values()
@@ -631,6 +659,7 @@ pub fn compile_with_budget(
         provenance.push(ProvenanceRow {
             capability: profile.capability.clone(),
             metric: profile.metric.clone(),
+            measurement_basis: profile.basis.clone(),
             predicted: profile.declared.map(|d| EstimateRange {
                 low: d.low,
                 likely: d.likely,
@@ -666,11 +695,15 @@ pub fn compile_with_budget(
             continue;
         };
         let subject = format!("capability:{}", row.capability);
+        let row_basis = row
+            .measurement_basis
+            .as_deref()
+            .map_or(String::new(), |b| format!(" [basis {b}]"));
         trace.push(CompileTrace {
             subject: subject.clone(),
             decision: "measured".to_string(),
             reason: format!(
-                "P5 median {:.3} over {} observations for `{}` (min {:.3}, max {:.3})",
+                "P5 median {:.3} over {} observations for `{}` (min {:.3}, max {:.3}){row_basis}",
                 measured.likely, row.observations, row.metric, measured.low, measured.high,
             ),
         });
@@ -704,6 +737,8 @@ pub fn compile_with_budget(
         basis,
         provenance,
         unattributed_tasks: estimated.unattributed_tasks,
+        staged_evidence: estimated.staged,
+        pending_evidence: estimated.pending,
         makespan_minutes: makespan,
         parallel_width: width,
         timings,

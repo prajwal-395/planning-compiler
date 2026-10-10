@@ -32,11 +32,15 @@ Parse (in `pc-store`), then:
 | E011 | invalid estimate | finite, `low <= likely <= high`, non-negative, risk in `[0,1]`, `measured` cites observations |
 | E012 | undefined resource | capability resources name declared resources |
 | E013 | method shape | `invoke` names a capability and no subtasks/edges; `decompose` names no capability and at least one subtask; order endpoints are subtasks of the same method |
-| E014 | invalid evidence | subject exists (`capability:`/`method:`/`task:`), timestamp is RFC 3339, value is finite and non-negative (units are checked in P1) |
+| E014 | invalid evidence | subject is `capability:`, `method:` or `task:` with a non-empty id, timestamp is RFC 3339, value is finite and non-negative, basis is `absolute` or `distance-from:<capability>` when recorded, one attributed capability and metric (or pending subject) carries one basis (units are checked in P1) |
 | E015 | invalid objective | weights name known metrics and are finite/non-negative; budget non-negative; floor in `[0,1]`; criteria carry their kind's fields |
 
 Scope notes:
 
+- A well-formed subject whose id names nothing in the plan is not an error. The record is
+  held as pending evidence until the subject is proposed (see P5), so
+  evidence can be staged together with the hypothesis it supports instead
+  of failing every command.
 - Cycle detection uses `petgraph` topological sort only.
 - Line numbers in diagnostics for plan-file entities are best-effort
   (first line mentioning the quoted id), not true source spans; TOML
@@ -92,9 +96,9 @@ task may be leafless; P4 runs only over clean plans. `pc compile` and
 
 ## P5: estimate (step 5)
 
-`pc check` folds evidence into per-capability profiles and reports one
-`measured` trace event per capability and metric with observations, plus
-`stale` and `contradicts` events. Evidence never edits declared estimates:
+`pc check` folds evidence into per-capability, per-basis profiles and
+reports one `measured` trace event per capability, metric and basis with
+observations, plus `stale` and `contradicts` events. Evidence never edits declared estimates:
 each profile keeps the declared triple beside the measured triple
 (min/median/max over attributed observations), and selection (P6) and
 roll-ups run on the *effective* numbers (measured when present, declared
@@ -113,6 +117,33 @@ does `pc explain` for that task or any capability it could have measured.
 P5 runs after P4, so evidence recorded against a merged-away task
 already names the surviving task and counts toward the same capability.
 
+Evidence staged with a proposal never moves the accepted plan's numbers.
+A record is live only when its capability is invoked by at least one
+accepted method, whichever subject (`capability:`, `method:` or `task:`)
+named it; records for a capability only proposed, derived or rejected
+methods invoke are held as staged evidence (`staged` trace events and
+`staged` report entries naming the proposals currently invoking that
+capability). Accepting any method that invokes the capability makes its
+staged records live with no record movement; rejecting keeps them staged. A subject that names nothing in the plan stages
+pending evidence (`pending` trace events and report entries) until the
+subject is proposed. `pc record` accepts both shapes with a warning instead
+of refusing them, and `pc compile` lists staged and pending holdings beside
+the unattributed ones. `pc explain` for a proposed capability or method and
+`pc context` for a task invoking it render the staged holdings, labelled
+with the proposal they are staged for and not counted until accepted.
+
+Observations carry an optional typed basis (`absolute`, or
+`distance-from:<capability>`): what the value is measured against. Each
+attributed family (capability and metric after placement, live or staged,
+or the pending subject) carries one basis: P2 and `pc record` refuse a mix
+with E014 naming every basis and the subjects that recorded it (a missing
+basis counts as `none`), so bases are never pooled or resolved by
+majority. Only the basis shape
+is validated: the `distance-from` target may name a retired capability,
+because evidence outlives the incumbents it was measured against. Evidence
+with no basis field behaves exactly as before (one profile per capability
+and metric).
+
 Statistics are deterministic with no wall-clock input: values sort
 ascending, the median is the middle value (mean of the two middles for even
 counts), spread is min/max, staleness is older than 90 days before the
@@ -124,12 +155,18 @@ validated observation to the sibling `evidence.jsonl`, refusing anything
 
 `pc compile` and `pc explain` show predicted versus measured: per-metric
 lines carry the declared-only prediction beside the effective total with a
-measured/total node count, `pc explain capability:<id>` renders the
+measured/total node count, plus the sorted unique typed bases behind the
+measured nodes (`; basis ...`, omitted for declared-only totals),
+`pc explain capability:<id>` renders the
 provenance report (predicted triple vs measured triple, observation and
-stale counts, contradiction flag), and `--json` carries the same rows:
-`pc compile --json` adds the per-metric basis, and `pc explain --json` emits
+stale counts, contradiction flag, and the row's basis:
+`[basis none]` when the evidence predates basis typing), and `--json` carries the same rows:
+`pc compile --json` adds the per-metric basis (including `bases`), and
+`pc explain --json` emits
 an object with the decision `rows`, the capability's `provenance` rows
-(empty for non-capability targets), and the matching `unattributed_tasks`.
+(empty for non-capability targets; `basis` is the `declared`/`measured(n)`
+label and `measurement_basis` the typed basis), the matching
+`unattributed_tasks`, and the matching `staged_evidence`.
 
 ## P6: select (step 3)
 
@@ -215,7 +252,8 @@ that then fails P6/P7.
 capabilities and methods added, removed or changed (methods split into
 pure status flips and deeper content changes), each side's makespan when
 that side compiles, selection flips, makespan and expected-value movements
-per metric when both sides compile,
+per metric when both sides compile (measured movements name the typed bases
+behind each side: `[basis: X -> Y]`, with `-` for a declared-only side),
 and diagnostics added or removed (compared by code, subject and message so
 the same mistake in two files counts once), with the same distance label.
 Sides that fail check still
@@ -254,7 +292,8 @@ refused) is published at `schema/patch.schema.json`, generated by
 - `pc context <task> [path] [--budget tokens]` renders the slice an agent
   needs to propose the next decomposition: the task with its contract and
   plan position, its non-rejected methods, the capabilities they invoke,
-  parent and child neighbours, the measured-evidence summary and the frontier
+  parent and child neighbours, the measured-evidence summary and the
+  evidence staged with proposals for those capabilities, and the frontier
   entries touching the task. Sections fill in that order while the rendered
   text fits `chars/4` tokens under the budget (default 2000); `truncated`
   records the drop. `--json` emits the fitted struct.

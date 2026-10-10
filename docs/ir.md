@@ -53,13 +53,19 @@ without an accepted method remain visible as unresolved.
   references; reporting usage against capacity arrives with scheduling.
 - **Evidence.** An append-only observation: `subject`
   (`capability:<id>`, `method:<id>` or `task:<id>`), `metric`, `value`,
-  `unit`, RFC 3339 `time`, `source`, optional `artifact_hash`. Evidence
+  `unit`, RFC 3339 `time`, `source`, an optional typed `basis`
+  (`absolute`, or `distance-from:<capability>` saying what the value is
+  measured against), and an optional `artifact_hash`. Evidence
   never edits declared estimates: P5 derives measured triples from it
   (see `passes.md`) and selection and roll-ups run on the effective
-  numbers. P1
+  numbers. A well-formed subject that names nothing in the plan is held as pending,
+  and evidence for a proposal no accepted method invokes is staged with
+  it: neither moves the accepted plan's numbers (see `passes.md` P5).
+  P1
   accepts only the metric's canonical unit (case-insensitive, never
-  empty) and canonicalizes its case; P2 checks subjects, timestamps and
-  values. `pc record` appends one validated observation to the sibling
+  empty) and canonicalizes its case; P2 checks subject shape, timestamps,
+  values and bases, and refuses one attributed capability and metric
+  recorded under two bases. `pc record` appends one validated observation to the sibling
   `evidence.jsonl`.
 
 ## Metrics
@@ -77,6 +83,19 @@ v0 knows four metrics, each with a canonical unit:
 lands from the incumbent's, never absolute accuracy. It is kept apart from
 `failure_risk` in profiles and totals, and `pc compile`, `pc impact` and
 `pc diff` label it as a distance from the incumbent.
+
+The typed `basis` says what a value is measured against, for any metric:
+`absolute`, or `distance-from:<capability>`. One attributed family carries
+exactly one basis: the capability and metric a record measures after P5
+placement (so `capability:<id>`, `method:<id>` and `task:<id>` records for
+the same capability are one family, live or staged), or the subject itself
+while it is pending. Any mix is an E014 error in P2 and in `pc record`,
+naming every basis with the subjects that recorded it; record the other
+basis under a distinct metric instead. A missing basis counts as its own
+basis (`none`), so basis-less legacy records pool only with other
+basis-less records, and a later absolute-accuracy figure can never
+silently pool with distances. Mixes are refused, never resolved: no
+majority pick, and no family is dropped from selection or costed at zero.
 
 There is no `human_minutes`: people are out of scope for v0. Objective
 weights may only name known metrics and must be finite and non-negative.

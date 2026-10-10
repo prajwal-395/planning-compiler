@@ -345,8 +345,14 @@ pub enum EstimateProvenance {
 
 /// One append-only observation about a capability, method or task.
 ///
-/// P1/P2 check that the subject exists and units are consistent; P5
-/// folds it into capability profiles (see `docs/passes.md`).
+/// P1/P2 check units, timestamps, values, the subject shape (see
+/// [`check_evidence_subject`]) and the typed basis (see
+/// [`check_evidence_basis`]; P2 also refuses one attributed capability and
+/// metric under two bases); P5 folds it into capability profiles (see
+/// `docs/passes.md`). A well-formed subject
+/// that names nothing in the plan is not an error: P5 holds the record as
+/// pending until the subject is proposed, so evidence can be staged
+/// together with the hypothesis it supports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
@@ -362,8 +368,55 @@ pub struct Evidence {
     pub time: String,
     /// Where the observation came from.
     pub source: String,
+    /// Typed measurement basis: what the value is measured against.
+    /// `None` means no basis was recorded (all pre-basis evidence).
+    /// `Some` must pass [`check_evidence_basis`].
+    #[serde(default)]
+    pub basis: Option<String>,
     /// Optional content hash of the backing artifact.
     pub artifact_hash: Option<String>,
+}
+
+/// Check a typed evidence basis: `absolute` for ground-truth measurements,
+/// or `distance-from:<target>` for values measured against another
+/// capability (for example `distance-from:whisperx@3`). Anything else is
+/// refused so a later agent cannot record an absolute-accuracy number where
+/// a distance belongs without saying so.
+///
+/// Only the shape is checked: the target is not required to exist in the
+/// plan, because evidence outlives retired incumbents (a fallback capability
+/// removed after a substitution must not invalidate the measurements that
+/// justified it).
+pub fn check_evidence_basis(basis: &Option<String>) -> Result<(), String> {
+    let Some(basis) = basis.as_deref() else {
+        return Ok(());
+    };
+    if basis == "absolute" {
+        return Ok(());
+    }
+    if let Some(target) = basis.strip_prefix("distance-from:")
+        && !target.is_empty()
+        && !target.chars().any(char::is_whitespace)
+        && !target.contains(':')
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "evidence basis `{basis}` must be `absolute` or `distance-from:<capability>`"
+    ))
+}
+
+/// Check an evidence subject's shape: `capability:<id>`, `method:<id>` or
+/// `task:<id>` with a non-empty id. The id need not exist yet (P5 holds such
+/// records as pending), but a subject outside these kinds can never be
+/// proposed, so it is refused instead of pending forever.
+pub fn check_evidence_subject(subject: &str) -> Result<(), String> {
+    match subject.split_once(':') {
+        Some(("capability" | "method" | "task", id)) if !id.is_empty() => Ok(()),
+        _ => Err(format!(
+            "evidence subject `{subject}` names nothing: use capability:<id>, method:<id> or task:<id>"
+        )),
+    }
 }
 
 /// Build the published JSON Schema for [`PlanDoc`].

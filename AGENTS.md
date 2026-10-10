@@ -1,6 +1,7 @@
 ## Notes
 
 - Proposal-loop commands (`pc propose`/`accept`/`reject`, in `crates/pc-core/src/propose.rs`) edit the pristine plan and only write when a probe copy of the merged plan passes `check`; pass mutations (P3 derived, P4 merges, P1 unit canonicalization) are never written back.
+- Evidence may name proposed or not-yet-existing subjects: P5 holds it as staged/pending, never effective until an invoke method is accepted, and records carry a typed `basis` (`absolute`, `distance-from:<capability>`); see P5 in `docs/passes.md`.
 - `pc context` fits sections (methods, capabilities, parents, children, evidence, frontier) while the rendering fits `chars/4` tokens under `--budget` (default 2000); text and `--json` always agree.
 - Schemas are generated: `pc schema --out schema/plan.schema.json`, `pc schema --patch --out schema/patch.schema.json`; CI fails when stale.
 

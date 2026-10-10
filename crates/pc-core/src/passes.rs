@@ -960,8 +960,15 @@ fn split_subject(subject: &str) -> Option<(&str, &str)> {
     subject.split_once(':')
 }
 
-/// E014: evidence subjects exist, timestamps are RFC 3339 and values are
-/// finite. Units belong to P1.
+/// E014: evidence subjects are `capability:`, `method:` or `task:` with a
+/// non-empty id, timestamps, values and bases are well-formed, one
+/// attributed family (capability and metric after P5 placement, see
+/// [`crate::estimate::BasisConflict`]) carries one basis, and units were
+/// canonical (P1). Subject ids
+/// need not exist: a well-formed subject that names nothing in the plan
+/// stages pending evidence P5 holds until the subject is proposed, so
+/// evidence can arrive together with the hypothesis it supports instead of
+/// failing every command.
 fn check_evidence(ctx: &mut Ctx) {
     let mut order: Vec<usize> = (0..ctx.doc.evidence.len()).collect();
     order.sort_by(|&a, &b| {
@@ -973,24 +980,9 @@ fn check_evidence(ctx: &mut Ctx) {
         let ev = ctx.doc.evidence[i].clone();
         let subject = format!("evidence:{}", ev.subject);
         let anchor = ctx.evidence_anchor(i);
-        match split_subject(&ev.subject) {
-            Some(("capability", id)) if ctx.capabilities.contains_key(id) => {}
-            Some(("method", id)) if ctx.methods.contains_key(id) => {}
-            Some(("task", id)) if ctx.tasks.contains_key(id) => {}
-            _ => {
-                ctx.error_in(
-                    "P2-validate",
-                    "E014",
-                    format!(
-                        "evidence subject `{}` names nothing: use \
-                         capability:<id>, method:<id> or task:<id>",
-                        ev.subject
-                    ),
-                    anchor,
-                    subject.clone(),
-                );
-                continue;
-            }
+        if let Err(reason) = pc_ir::check_evidence_subject(&ev.subject) {
+            ctx.error_in("P2-validate", "E014", reason, anchor, subject);
+            continue;
         }
         if !KNOWN_METRICS.contains(&ev.metric.as_str()) {
             continue;
@@ -1016,9 +1008,17 @@ fn check_evidence(ctx: &mut Ctx) {
                     ev.subject
                 ),
                 anchor,
-                subject,
+                subject.clone(),
             );
         }
+        if let Err(reason) = pc_ir::check_evidence_basis(&ev.basis) {
+            ctx.error_in("P2-validate", "E014", reason, anchor, subject);
+        }
+    }
+    for conflict in crate::estimate::estimate(ctx.doc).basis_conflicts {
+        let anchor = ctx.evidence_anchor(conflict.record);
+        let subject = format!("evidence:{}", ctx.doc.evidence[conflict.record].subject);
+        ctx.error_in("P2-validate", "E014", conflict.message(), anchor, subject);
     }
 }
 
@@ -1726,9 +1726,11 @@ fn dedup_merged_methods(ctx: &mut Ctx, rewritten: &BTreeSet<String>) -> BTreeMap
 
 /// P5: estimate the effective capability profiles from evidence.
 ///
-/// Folds evidence into per-capability profiles (see [`crate::estimate`])
-/// and reports one `measured` trace event per capability and metric with
-/// observations, plus `stale` and `contradicts` events. P5 never edits the
+/// Folds live evidence into per-capability, per-basis profiles (see
+/// [`crate::estimate`]) and reports one `measured` trace event per
+/// capability, metric and basis with observations, plus `stale`,
+/// `contradicts`, `staged` (evidence held with a proposal) and `pending`
+/// (evidence for subjects not in the plan) events. P5 never edits the
 /// document: declared estimates stay as written, and selection and roll-ups
 /// read the effective numbers. It runs after P4, so evidence recorded
 /// against a merged-away task already names the surviving task. Like P3 and
@@ -1751,12 +1753,16 @@ impl Pass for EstimatePass {
             };
             let subject = format!("capability:{}", profile.capability);
             let unit = canonical_unit(&profile.metric).unwrap_or("");
+            let basis = profile
+                .basis
+                .as_deref()
+                .map_or(String::new(), |b| format!(" [basis {b}]"));
             ctx.trace.push(TraceEvent {
                 pass: self.name().to_string(),
                 subject: subject.clone(),
                 decision: "measured".to_string(),
                 reason: format!(
-                    "median {:.3} {unit} over {} observations for `{}` (min {:.3}, max {:.3})",
+                    "median {:.3} {unit} over {} observations for `{}` (min {:.3}, max {:.3}){basis}",
                     measured.likely,
                     measured.observations,
                     profile.metric,
@@ -1794,6 +1800,52 @@ impl Pass for EstimatePass {
                     ),
                 });
             }
+        }
+        for staged in &report.staged {
+            let basis = staged
+                .basis
+                .as_deref()
+                .map_or(String::new(), |b| format!(" [basis {b}]"));
+            let with = if staged.methods.is_empty() {
+                format!(
+                    "no invoke method proposes capability:{} yet",
+                    staged.capability
+                )
+            } else {
+                format!(
+                    "staged with {}",
+                    staged
+                        .methods
+                        .iter()
+                        .map(|m| format!("method:{m}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            ctx.trace.push(TraceEvent {
+                pass: self.name().to_string(),
+                subject: format!("capability:{}", staged.capability),
+                decision: "staged".to_string(),
+                reason: format!(
+                    "{} observations for `{}`{basis} {with}: not effective until an invoke method is accepted",
+                    staged.observations, staged.metric,
+                ),
+            });
+        }
+        for pending in &report.pending {
+            let basis = pending
+                .basis
+                .as_deref()
+                .map_or(String::new(), |b| format!(" [basis {b}]"));
+            ctx.trace.push(TraceEvent {
+                pass: self.name().to_string(),
+                subject: pending.subject.clone(),
+                decision: "pending".to_string(),
+                reason: format!(
+                    "{} observations for `{}`{basis} name nothing yet: held until the subject is proposed",
+                    pending.observations, pending.metric,
+                ),
+            });
         }
     }
 }

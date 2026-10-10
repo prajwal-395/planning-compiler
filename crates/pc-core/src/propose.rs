@@ -678,8 +678,9 @@ pub struct ParentView {
 
 /// The compact slice an agent needs to propose the next decomposition of one
 /// task: the task itself, its methods, the capabilities those methods invoke,
-/// parent and child neighbours, the measured-evidence summary for the
-/// in-scope capabilities, and the frontier entries touching the task.
+/// parent and child neighbours, the measured-evidence summary and the
+/// proposal-staged evidence for the in-scope capabilities, and the frontier
+/// entries touching the task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextReport {
     /// `task:<id>` of the focal task.
@@ -704,6 +705,9 @@ pub struct ContextReport {
     pub provenance: Vec<crate::compile::ProvenanceRow>,
     /// Ignored `task:<id>` evidence for the focal task, if any.
     pub unattributed: Vec<crate::estimate::UnattributedTaskEvidence>,
+    /// Evidence staged with proposals for the in-scope capabilities: not
+    /// counted until the proposal is accepted.
+    pub staged: Vec<crate::estimate::StagedEvidence>,
     /// Frontier entries about the focal task or its methods, ranked order.
     pub frontier: Vec<FrontierItem>,
 }
@@ -812,12 +816,20 @@ pub fn context(
         a.capability
             .cmp(&b.capability)
             .then_with(|| a.metric.cmp(&b.metric))
+            .then_with(|| a.measurement_basis.cmp(&b.measurement_basis))
     });
 
     let unattributed: Vec<crate::estimate::UnattributedTaskEvidence> = compiled
         .unattributed_tasks
         .iter()
         .filter(|entry| entry.task == task_id)
+        .cloned()
+        .collect();
+
+    let staged: Vec<crate::estimate::StagedEvidence> = compiled
+        .staged_evidence
+        .iter()
+        .filter(|entry| cap_ids.contains(entry.capability.as_str()))
         .cloned()
         .collect();
 
@@ -843,6 +855,7 @@ pub fn context(
         children,
         provenance,
         unattributed,
+        staged,
         frontier: frontier_items,
     };
     report.tokens = estimate_tokens(&render_context_text(&report));
@@ -895,6 +908,7 @@ pub fn fit_context(mut full: ContextReport, budget_tokens: u64) -> ContextReport
         children: Vec::new(),
         provenance: Vec::new(),
         unattributed: Vec::new(),
+        staged: Vec::new(),
         frontier: Vec::new(),
     };
     // The focal task always survives, even over budget: an empty slice helps
@@ -902,7 +916,8 @@ pub fn fit_context(mut full: ContextReport, budget_tokens: u64) -> ContextReport
     let mut fitted = empty.clone();
     fitted.tokens = estimate_tokens(&render_context_text(&fitted));
     // Sections in fill order. Evidence travels as one section: the measured
-    // summary and the unattributed notes explain each other.
+    // summary, the unattributed notes and the staged holdings explain each
+    // other.
     let sections: [fn(&mut ContextReport, &ContextReport); 6] = [
         |f, r| f.methods = r.methods.clone(),
         |f, r| f.capabilities = r.capabilities.clone(),
@@ -911,6 +926,7 @@ pub fn fit_context(mut full: ContextReport, budget_tokens: u64) -> ContextReport
         |f, r| {
             f.provenance = r.provenance.clone();
             f.unattributed = r.unattributed.clone();
+            f.staged = r.staged.clone();
         },
         |f, r| f.frontier = r.frontier.clone(),
     ];
@@ -919,7 +935,7 @@ pub fn fit_context(mut full: ContextReport, budget_tokens: u64) -> ContextReport
         |r| !r.capabilities.is_empty(),
         |r| !r.parents.is_empty(),
         |r| !r.children.is_empty(),
-        |r| !r.provenance.is_empty() || !r.unattributed.is_empty(),
+        |r| !r.provenance.is_empty() || !r.unattributed.is_empty() || !r.staged.is_empty(),
         |r| !r.frontier.is_empty(),
     ];
     let mut kept: Vec<usize> = Vec::new();
@@ -1094,8 +1110,10 @@ pub fn render_context_text(report: &ContextReport) -> String {
                 )
             });
         out.push_str(&format!(
-            "evidence {} {}: {measured}\n",
-            row.capability, row.metric
+            "evidence {} {}: {measured} [basis {}]\n",
+            row.capability,
+            row.metric,
+            row.measurement_basis.as_deref().unwrap_or("none"),
         ));
     }
     for entry in &report.unattributed {
@@ -1106,6 +1124,10 @@ pub fn render_context_text(report: &ContextReport) -> String {
             entry.observations,
             if entry.observations == 1 { "" } else { "s" }
         ));
+    }
+    for entry in &report.staged {
+        out.push_str(&entry.line());
+        out.push('\n');
     }
     for item in &report.frontier {
         out.push_str(&format!(

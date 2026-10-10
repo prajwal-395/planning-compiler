@@ -23,9 +23,12 @@ pub use compile::{
     TaskTiming, compile, compile_with_budget,
 };
 pub use diagnostic::{Diagnostic, render_human};
-pub use estimate::{EstimateReport, UnattributedTaskEvidence, estimate};
+pub use estimate::{
+    BasisConflict, EstimateReport, PendingEvidence, StagedEvidence, UnattributedTaskEvidence,
+    basis_name, estimate,
+};
 pub use frontier::{FrontierItem, FrontierReport, frontier};
-pub use impact::{Change, DiffReport, ImpactError, ImpactReport, diff, impact};
+pub use impact::{Change, DiffReport, ImpactError, ImpactReport, delta_bases, diff, impact};
 pub use passes::{
     Counts, Ctx, EstimatePass, MatchPass, Pass, Report, ResolvePass, SharePass, TraceEvent,
     ValidatePass, check,

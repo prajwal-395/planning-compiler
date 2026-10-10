@@ -181,6 +181,10 @@ pub enum EvidenceRecordError {
     /// The text is not one JSON evidence object.
     #[error("cannot parse evidence: {0}")]
     Unparsable(String),
+    /// The subject is not `capability:`, `method:` or `task:` with an id
+    /// (P2 reports E014).
+    #[error("{0}")]
+    BadSubject(String),
     /// The metric is not one v0 knows (P2 reports E010).
     #[error("evidence uses unknown metric `{0}`")]
     UnknownMetric(String),
@@ -197,6 +201,9 @@ pub enum EvidenceRecordError {
     /// The timestamp is not RFC 3339 (P2 reports E014).
     #[error("evidence has timestamp `{0}` which is not RFC 3339")]
     BadTime(String),
+    /// The basis is not a typed basis (P2 reports E014).
+    #[error("{0}")]
+    BadBasis(String),
     /// The value is not finite or is negative (P2 reports E014).
     #[error("evidence must have a finite, non-negative value")]
     BadValue,
@@ -204,13 +211,19 @@ pub enum EvidenceRecordError {
 
 /// Parse and validate one JSON evidence object for `pc record`.
 ///
-/// Accepts exactly what P1/P2 accept: a known metric, the metric's
-/// canonical unit (case-insensitive, canonicalized in place), an RFC 3339
-/// timestamp and a finite, non-negative value. Subject existence needs the plan, so `pc
-/// record` checks that separately with [`evidence_subject_exists`].
+/// Accepts exactly what P1/P2 accept for one record: a well-formed subject,
+/// a known metric, the metric's canonical unit (case-insensitive,
+/// canonicalized in place), an RFC 3339 timestamp, a typed basis when one
+/// is recorded, and a finite, non-negative value. Subject existence and
+/// basis agreement with earlier records need the plan, so `pc record`
+/// checks those separately: an unknown subject is staged as pending
+/// evidence, not refused, and a basis conflict is refused.
 pub fn parse_evidence_record(text: &str) -> Result<Evidence, EvidenceRecordError> {
     let mut record: Evidence =
         serde_json::from_str(text).map_err(|e| EvidenceRecordError::Unparsable(e.to_string()))?;
+    if let Err(reason) = pc_ir::check_evidence_subject(&record.subject) {
+        return Err(EvidenceRecordError::BadSubject(reason));
+    }
     if !pc_ir::KNOWN_METRICS.contains(&record.metric.as_str()) {
         return Err(EvidenceRecordError::UnknownMetric(record.metric));
     }
@@ -227,23 +240,13 @@ pub fn parse_evidence_record(text: &str) -> Result<Evidence, EvidenceRecordError
     if chrono::DateTime::parse_from_rfc3339(&record.time).is_err() {
         return Err(EvidenceRecordError::BadTime(record.time));
     }
+    if let Err(reason) = pc_ir::check_evidence_basis(&record.basis) {
+        return Err(EvidenceRecordError::BadBasis(reason));
+    }
     if !record.value.is_finite() || record.value < 0.0 {
         return Err(EvidenceRecordError::BadValue);
     }
     Ok(record)
-}
-
-/// True when an evidence subject names a task, method or capability in the
-/// plan. `pc record` refuses subjects that fail this, the same records P2
-/// would flag with E014.
-#[must_use]
-pub fn evidence_subject_exists(doc: &PlanDoc, subject: &str) -> bool {
-    match subject.split_once(':') {
-        Some(("capability", id)) => doc.capability.iter().any(|c| c.id == id),
-        Some(("method", id)) => doc.method.iter().any(|m| m.id == id),
-        Some(("task", id)) => doc.task.iter().any(|t| t.id == id),
-        _ => false,
-    }
 }
 
 /// Append one record to the `evidence.jsonl` sibling of a plan file,

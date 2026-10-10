@@ -184,6 +184,7 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                         unit: "minutes".to_string(),
                         time: "2026-10-10T00:00:00Z".to_string(),
                         source: "prop".to_string(),
+                        basis: None,
                         artifact_hash: None,
                     }],
                 }

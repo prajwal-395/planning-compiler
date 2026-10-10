@@ -302,10 +302,18 @@
     },
     "Evidence": {
       "additionalProperties": false,
-      "description": "One append-only observation about a capability, method or task.\n\nP1/P2 check that the subject exists and units are consistent; P5 folds it into capability profiles (see `docs/passes.md`).",
+      "description": "One append-only observation about a capability, method or task.\n\nP1/P2 check units, timestamps, values, the subject shape (see [`check_evidence_subject`]) and the typed basis (see [`check_evidence_basis`]; P2 also refuses one attributed capability and metric under two bases); P5 folds it into capability profiles (see `docs/passes.md`). A well-formed subject that names nothing in the plan is not an error: P5 holds the record as pending until the subject is proposed, so evidence can be staged together with the hypothesis it supports.",
       "properties": {
         "artifact_hash": {
           "description": "Optional content hash of the backing artifact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "basis": {
+          "default": null,
+          "description": "Typed measurement basis: what the value is measured against. `None` means no basis was recorded (all pre-basis evidence). `Some` must pass [`check_evidence_basis`].",
           "type": [
             "string",
             "null"

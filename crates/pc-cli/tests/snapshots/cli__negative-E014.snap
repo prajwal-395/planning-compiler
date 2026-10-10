@@ -2,6 +2,6 @@
 source: crates/pc-cli/tests/cli.rs
 expression: stderr
 ---
-error[E014]: evidence subject `capability:ghost@1` names nothing: use capability:<id>, method:<id> or task:<id>
-  --> invalid-E014.toml:16
+error[E014]: evidence for `task:root` has timestamp `yesterday` which is not RFC 3339
+  --> invalid-E014.toml:18
 found 1 error

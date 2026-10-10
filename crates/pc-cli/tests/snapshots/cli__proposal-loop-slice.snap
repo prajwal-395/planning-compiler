@@ -1,9 +1,8 @@
 ---
 source: crates/pc-cli/tests/cli.rs
-assertion_line: 1210
 expression: text
 ---
-context task:transcribe-footage (budget 2000 tokens, ~423 used)
+context task:transcribe-footage (budget 2000 tokens, ~454 used)
 task transcribe-footage: Transcribe footage [resolved]
   produces: transcript[words, timings, segment_confidence]
   selected: via-whisperx
@@ -22,8 +21,8 @@ capability whisperx@3 [tool v3]
   duration_minutes: 10.000/12.000/16.000 declared
   failure_risk: 0.050/0.100/0.200 declared
 parent ship-reels (Ship the reels) via reels-pipeline [accepted]
-evidence voz-hybrid@1 accuracy_distance_from_incumbent: 0.080/0.100/0.120 (n=2)
-evidence voz-hybrid@1 duration_minutes: 3.000/4.000/5.000 (n=3, contradicts declared)
-evidence whisperx@3 duration_minutes: 11.000/12.000/13.000 (n=3)
+evidence whisperx@3 duration_minutes: 11.000/12.000/13.000 (n=3) [basis none]
+staged capability:voz-hybrid@1 accuracy_distance_from_incumbent: 2 observations staged for proposal method:via-hybrid, not counted until accepted
+staged capability:voz-hybrid@1 duration_minutes: 3 observations staged for proposal method:via-hybrid, not counted until accepted
 frontier method:via-hybrid [proposal] (critical): proposed by agent:claude for task:transcribe-footage; awaiting accept or reject
 frontier method:via-hybrid [blocked-alternative] (critical): accepting it would drop transcript.segment_confidence (consumed by select-lines)

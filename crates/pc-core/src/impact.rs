@@ -230,6 +230,11 @@ pub struct MetricDelta {
     pub after: f64,
     /// After minus before.
     pub delta: f64,
+    /// Sorted unique typed bases behind the measured nodes before, with
+    /// the missing basis reported as `"none"`. Empty when declared-only.
+    pub basis_before: Vec<String>,
+    /// Sorted unique typed bases behind the measured nodes after.
+    pub basis_after: Vec<String>,
 }
 
 /// The compiled shape of one plan side: its selection, totals and makespan.
@@ -239,6 +244,8 @@ pub struct PlanSummary {
     pub selection: BTreeMap<String, String>,
     /// Effective roll-up ranges by metric.
     pub totals: BTreeMap<String, EstimateRange>,
+    /// Sorted unique typed bases behind each metric's measured nodes.
+    pub bases: BTreeMap<String, Vec<String>>,
     /// Expected makespan in minutes.
     pub makespan_minutes: f64,
 }
@@ -249,6 +256,11 @@ pub fn summarize(compiled: &CompiledPlan) -> PlanSummary {
     PlanSummary {
         selection: compiled.selection.clone(),
         totals: compiled.totals.clone(),
+        bases: compiled
+            .basis
+            .iter()
+            .map(|(metric, column)| (metric.clone(), column.bases.clone()))
+            .collect(),
         makespan_minutes: compiled.makespan_minutes,
     }
 }
@@ -294,10 +306,31 @@ pub fn totals_delta(before: &PlanSummary, after: &PlanSummary) -> Vec<MetricDelt
             before: a,
             after: b,
             delta: b - a,
+            basis_before: before.bases.get(metric).cloned().unwrap_or_default(),
+            basis_after: after.bases.get(metric).cloned().unwrap_or_default(),
         });
     }
     out.sort_by(|a, b| a.metric.cmp(&b.metric));
     out
+}
+
+/// Render the typed bases behind a totals movement: `before -> after`,
+/// with `-` for a declared-only side. Empty when neither side measured
+/// anything, so declared-only movements render exactly as before.
+#[must_use]
+pub fn delta_bases(delta: &MetricDelta) -> String {
+    let side = |bases: &[String]| {
+        if bases.is_empty() {
+            "-".to_string()
+        } else {
+            bases.join(", ")
+        }
+    };
+    format!(
+        "{} -> {}",
+        side(&delta.basis_before),
+        side(&delta.basis_after)
+    )
 }
 
 /// The result of previewing a [`Change`]: affected tasks by reverse
@@ -897,6 +930,7 @@ estimates = [{ metric = "duration_minutes", low = 2.0, likely = 3.0, high = 4.0,
                     unit: "minutes".into(),
                     time: "2026-10-01T00:00:00Z".into(),
                     source: "test".into(),
+                    basis: None,
                     artifact_hash: None,
                 },
                 pc_ir::Evidence {
@@ -906,6 +940,7 @@ estimates = [{ metric = "duration_minutes", low = 2.0, likely = 3.0, high = 4.0,
                     unit: "minutes".into(),
                     time: "2026-10-01T00:00:00Z".into(),
                     source: "test".into(),
+                    basis: None,
                     artifact_hash: None,
                 },
             ],

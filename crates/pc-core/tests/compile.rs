@@ -500,6 +500,7 @@ fn compile_surfaces_unattributed_task_evidence() {
             unit: "minutes".into(),
             time: time.into(),
             source: "test".into(),
+            basis: None,
             artifact_hash: None,
         });
     }

@@ -376,7 +376,10 @@ fn e013_reports_invoke_without_capability() {
 }
 
 #[test]
-fn e014_reports_unknown_evidence_subject() {
+fn e014_holds_unknown_evidence_subjects_as_pending() {
+    // G1: evidence may arrive before the hypothesis it supports. The record
+    // is accepted and held as pending — never an error, and never folded
+    // into the effective numbers — until the subject is proposed.
     let (text, mut doc) = valid_doc();
     doc.evidence.push(Evidence {
         subject: "capability:ghost@1".to_string(),
@@ -385,10 +388,114 @@ fn e014_reports_unknown_evidence_subject() {
         unit: "minutes".to_string(),
         time: "2026-10-01T00:00:00Z".to_string(),
         source: "manual".to_string(),
+        basis: None,
         artifact_hash: None,
     });
     let report = check("plan.toml", &text, &mut doc, None);
-    assert_eq!(codes(&report), vec!["E014"]);
+    assert!(report.ok(), "got {:?}", report.diagnostics);
+    let estimated = pc_core::estimate(&doc);
+    assert_eq!(estimated.unattributed, 0);
+    assert_eq!(
+        estimated.pending,
+        [pc_core::PendingEvidence {
+            subject: "capability:ghost@1".into(),
+            metric: "duration_minutes".into(),
+            basis: None,
+            observations: 1,
+        }]
+    );
+    assert!(
+        report.trace.iter().any(|e| e.pass == "P5-estimate"
+            && e.subject == "capability:ghost@1"
+            && e.decision == "pending"),
+        "pending is traced: {:?}",
+        report.trace
+    );
+}
+
+#[test]
+fn e014_reports_malformed_evidence_subject() {
+    // Only well-formed subjects may be pending: a subject outside the
+    // capability/method/task kinds, or with an empty id, can never be
+    // proposed, so it is refused instead of pending forever.
+    for subject in [
+        "capabilty:ghost@1",
+        "cap:x",
+        "ghost@1",
+        "task:",
+        "capability:",
+    ] {
+        let (text, mut doc) = valid_doc();
+        doc.evidence.push(Evidence {
+            subject: subject.to_string(),
+            metric: "duration_minutes".to_string(),
+            value: 4.0,
+            unit: "minutes".to_string(),
+            time: "2026-10-01T00:00:00Z".to_string(),
+            source: "manual".to_string(),
+            basis: None,
+            artifact_hash: None,
+        });
+        let report = check("plan.toml", &text, &mut doc, None);
+        assert_eq!(codes(&report), vec!["E014"], "subject {subject}");
+    }
+}
+
+#[test]
+fn e014_reports_malformed_evidence_basis() {
+    // G4: the basis is typed. Anything but `absolute` or
+    // `distance-from:<capability>` is refused, so an absolute-accuracy
+    // number cannot slip in where a distance belongs.
+    for basis in [
+        Some(""),
+        Some("whisperx@3"),
+        Some("distance-from:"),
+        Some("distance-from:whisper x@3"),
+        Some("distance-from:a:b"),
+        Some("ground-truth"),
+    ] {
+        let (text, mut doc) = valid_doc();
+        doc.evidence.push(Evidence {
+            subject: "task:root".to_string(),
+            metric: "duration_minutes".to_string(),
+            value: 4.0,
+            unit: "minutes".to_string(),
+            time: "2026-10-01T00:00:00Z".to_string(),
+            source: "manual".to_string(),
+            basis: basis.map(str::to_string),
+            artifact_hash: None,
+        });
+        let report = check("plan.toml", &text, &mut doc, None);
+        assert_eq!(
+            report
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>(),
+            vec!["E014"],
+            "basis {basis:?}: {:?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
+fn typed_evidence_bases_check_clean() {
+    for basis in [None, Some("absolute"), Some("distance-from:whisperx@3")] {
+        let (text, mut doc) = valid_doc();
+        doc.evidence.push(Evidence {
+            subject: "task:root".to_string(),
+            metric: "duration_minutes".to_string(),
+            value: 4.0,
+            unit: "minutes".to_string(),
+            time: "2026-10-01T00:00:00Z".to_string(),
+            source: "manual".to_string(),
+            basis: basis.map(str::to_string),
+            artifact_hash: None,
+        });
+        let report = check("plan.toml", &text, &mut doc, None);
+        assert!(report.ok(), "basis {basis:?}: {:?}", report.diagnostics);
+    }
 }
 
 fn root_evidence(metric: &str, unit: &str) -> Evidence {
@@ -399,6 +506,7 @@ fn root_evidence(metric: &str, unit: &str) -> Evidence {
         unit: unit.to_string(),
         time: "2026-10-01T00:00:00Z".to_string(),
         source: "manual".to_string(),
+        basis: None,
         artifact_hash: None,
     }
 }
@@ -450,15 +558,15 @@ fn evidence_log_records_anchor_to_the_log() {
         .push(root_evidence("duration_minutes", "minutes"));
     doc.evidence
         .push(root_evidence("duration_minutes", "hours"));
-    let mut ghost = root_evidence("duration_minutes", "minutes");
-    ghost.subject = "task:ghost".to_string();
-    doc.evidence.push(ghost);
+    let mut pending = root_evidence("duration_minutes", "minutes");
+    pending.subject = "task:ghost".to_string();
+    doc.evidence.push(pending);
     let mut odd = root_evidence("bogus_metric", "x");
     odd.subject = "task:leaf".to_string();
     doc.evidence.push(odd);
     let log = EvidenceLog {
         file: "evidence.jsonl",
-        lines: &[2, 4, 7],
+        lines: &[2, 4, 7, 9],
     };
     let report = check("plan.toml", &text, &mut doc, Some(log));
     let anchors: Vec<(&str, &str, Option<u32>)> = report
@@ -466,12 +574,13 @@ fn evidence_log_records_anchor_to_the_log() {
         .iter()
         .map(|d| (d.code.as_str(), d.file.as_str(), d.line))
         .collect();
+    // The unknown subject stages pending evidence, not a diagnostic: only
+    // the bad unit and the unknown metric anchor to the log.
     assert_eq!(
         anchors,
         vec![
-            ("E010", "evidence.jsonl", Some(7)),
+            ("E010", "evidence.jsonl", Some(9)),
             ("E014", "evidence.jsonl", Some(4)),
-            ("E014", "evidence.jsonl", Some(2)),
         ]
     );
 }

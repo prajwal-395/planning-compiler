@@ -275,6 +275,22 @@ fn unattributed_line(entry: &pc_core::UnattributedTaskEvidence) -> String {
     )
 }
 
+/// One text line for pending evidence in compile output.
+fn pending_line(entry: &pc_core::PendingEvidence) -> String {
+    let basis = entry
+        .basis
+        .as_deref()
+        .map_or(String::new(), |b| format!(" [basis {b}]"));
+    format!(
+        "pending {} {}{}: {} observation{} held (subject not in plan)",
+        entry.subject,
+        entry.metric,
+        basis,
+        entry.observations,
+        if entry.observations == 1 { "" } else { "s" },
+    )
+}
+
 fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
     let (loaded, _) = load_checked(path);
     let result = match pc_core::compile_with_budget(
@@ -306,8 +322,15 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
         let Some(column) = result.basis.get(metric) else {
             continue;
         };
+        // Declared-only totals carry no basis; measured totals name every
+        // typed basis behind them so a distance never reads as accuracy.
+        let bases = if column.measured_nodes == 0 {
+            String::new()
+        } else {
+            format!("; basis {}", column.bases.join(", "))
+        };
         println!(
-            "{}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{})",
+            "{}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{}{})",
             metric_label(metric),
             range.low,
             range.likely,
@@ -316,6 +339,7 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
             column.predicted.expected,
             column.measured_nodes,
             column.total_nodes,
+            bases,
         );
     }
     let mut timed: Vec<_> = result.timings.iter().collect();
@@ -344,6 +368,12 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
     }
     for entry in &result.unattributed_tasks {
         println!("{}", unattributed_line(entry));
+    }
+    for entry in &result.staged_evidence {
+        println!("{}", entry.line());
+    }
+    for entry in &result.pending_evidence {
+        println!("{}", pending_line(entry));
     }
 }
 
@@ -391,7 +421,19 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
         })
         .cloned()
         .collect();
-    if rows.is_empty() && provenance.is_empty() && unattributed.is_empty() {
+    // Proposed subjects also render the evidence staged with them, which
+    // stays out of the effective numbers until the proposal is accepted.
+    let staged: Vec<_> = result
+        .staged_evidence
+        .iter()
+        .filter(|entry| match target.split_once(':') {
+            Some(("capability", id)) => entry.capability == id,
+            Some(("method", id)) => entry.methods.iter().any(|m| m == id),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    if rows.is_empty() && provenance.is_empty() && unattributed.is_empty() && staged.is_empty() {
         eprintln!("error: no explanation for `{target}` in reachable accepted plan");
         std::process::exit(1);
     }
@@ -402,6 +444,7 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
                 "rows": rows,
                 "provenance": provenance,
                 "unattributed_tasks": unattributed,
+                "staged_evidence": staged,
             }))
             .unwrap_or_default()
         );
@@ -436,13 +479,24 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
             } else {
                 ""
             };
+            // Declared-only rows carry no measurement to type; measured
+            // rows always name their basis (`none` when the evidence
+            // predates basis typing) so a distance never reads as accuracy.
+            let basis = match (&row.measured, &row.measurement_basis) {
+                (Some(_), Some(b)) => format!(" [basis {b}]"),
+                (Some(_), None) => " [basis none]".to_string(),
+                (None, _) => String::new(),
+            };
             println!(
-                "provenance {} {}: predicted {predicted} vs measured {measured}{contradicts}",
+                "provenance {} {}: predicted {predicted} vs measured {measured}{contradicts}{basis}",
                 row.capability, row.metric,
             );
         }
         for entry in &unattributed {
             println!("{}", unattributed_line(entry));
+        }
+        for entry in &staged {
+            println!("{}", entry.line());
         }
     }
 }
@@ -478,11 +532,18 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
             std::process::exit(1);
         }
     };
-    if !pc_store::evidence_subject_exists(&loaded.doc, &record.subject) {
-        eprintln!(
-            "error[E014]: evidence subject `{}` names nothing: use capability:<id>, method:<id> or task:<id>",
-            record.subject
-        );
+    let mut with_record = loaded.doc.clone();
+    with_record.evidence.push(record.clone());
+    if let Some(conflict) = pc_core::estimate(&with_record)
+        .basis_conflicts
+        .into_iter()
+        .find(|c| {
+            c.bases
+                .iter()
+                .any(|(_, subjects)| subjects.contains(&record.subject))
+        })
+    {
+        eprintln!("error[E014]: {}", conflict.message());
         std::process::exit(1);
     }
     let plan_file = std::path::PathBuf::from(&loaded.display_path);
@@ -496,6 +557,11 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
                 record.unit,
                 log.display(),
             );
+            // The probe holds only the new record, so every warning below
+            // describes this record, never the rest of the log. Unknown
+            // subjects are staged as pending evidence, not refused: the
+            // hypothesis they support may be proposed after they are
+            // recorded.
             let mut probe = loaded.doc;
             probe.evidence = vec![record];
             let report =
@@ -503,7 +569,29 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
             if !report.ok() {
                 return;
             }
-            for entry in pc_core::estimate(&probe).unattributed_tasks {
+            let estimated = pc_core::estimate(&probe);
+            for entry in &estimated.pending {
+                eprintln!(
+                    "warning: evidence subject `{}` names nothing yet; P5 holds it as pending until the subject is proposed",
+                    entry.subject,
+                );
+            }
+            for entry in &estimated.staged {
+                let with = if entry.methods.is_empty() {
+                    format!("capability:{}", entry.capability)
+                } else {
+                    entry
+                        .methods
+                        .iter()
+                        .map(|m| format!("method:{m}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                eprintln!(
+                    "warning: P5 holds this evidence as staged with {with}: it stays out of the effective numbers until an invoke method is accepted",
+                );
+            }
+            for entry in estimated.unattributed_tasks {
                 eprintln!(
                     "warning: P5 will not attribute task:{} evidence ({})",
                     entry.task,
@@ -883,8 +971,15 @@ fn run_diff(a: &std::path::Path, b: &std::path::Path, json: bool, selection_time
             continue;
         }
         empty = false;
+        // Like the movement itself, the bases behind each side render only
+        // when they moved: identical bases on both sides add no signal.
+        let bases = if delta.basis_before == delta.basis_after {
+            String::new()
+        } else {
+            format!(" [basis: {}]", pc_core::delta_bases(delta))
+        };
         println!(
-            "{}: expected {:.3} -> {:.3} ({:+.3})",
+            "{}: expected {:.3} -> {:.3} ({:+.3}){bases}",
             metric_label(&delta.metric),
             delta.before,
             delta.after,

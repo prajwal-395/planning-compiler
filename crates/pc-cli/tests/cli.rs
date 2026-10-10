@@ -153,7 +153,12 @@ fn self_plan_compiles_and_explains_accepted_work() {
     // is the measured 3.5 minutes, not the declared 6.167.
     assert!(text.contains("makespan 3.500 minutes"), "{text}");
     assert!(text.contains("duration_minutes:"), "{text}");
-    assert!(text.contains("(predicted 6.167; measured 1/1)"), "{text}");
+    // The run-check observations carry no typed basis, so the measured
+    // total names its missing basis explicitly.
+    assert!(
+        text.contains("(predicted 6.167; measured 1/1; basis none)"),
+        "{text}"
+    );
     assert!(text.contains("critical tasks: run-check\n"), "{text}");
     assert!(
         text.contains("slack run-check: 0.000 minutes (critical)\n"),
@@ -772,6 +777,7 @@ fn transcription_substitution_criteria() {
         .find(|row| row["metric"] == "failure_risk")
         .expect("failure_risk provenance");
     assert_eq!(risk["basis"], "declared", "{risk}");
+    assert_eq!(risk["measurement_basis"], serde_json::Value::Null, "{risk}");
     assert_eq!(risk["observations"], 0, "{risk}");
     let text = explain("method:via-hybrid", &decided);
     assert!(
@@ -1150,7 +1156,8 @@ fn decide_keeps_evidence_log_out_of_the_plan() {
             .map(str::to_string)
             .collect()
     };
-    let whisperx = "evidence whisperx@3 duration_minutes: 11.000/12.000/13.000 (n=3)".to_string();
+    let whisperx =
+        "evidence whisperx@3 duration_minutes: 11.000/12.000/13.000 (n=3) [basis none]".to_string();
     assert!(evidence(&dir).contains(&whisperx), "{:?}", evidence(&dir));
 
     assert_eq!(
@@ -1674,7 +1681,9 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
 }
 
 /// `pc record` refuses unknown metrics, wrong units, bad timestamps,
-/// negative values and unknown subjects instead of appending them.
+/// malformed subjects and bases, and negative values instead of appending
+/// them. Well-formed unknown subjects are staged as pending evidence, not
+/// refused.
 #[test]
 fn record_rejects_invalid_evidence() {
     let dir = scratch_dir("invalid");
@@ -1715,9 +1724,21 @@ fn record_rejects_invalid_evidence() {
         r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"yesterday","source":"ci","artifact_hash":null}"#,
     );
     assert!(stderr.contains("error[E014]"), "{stderr}");
+    for subject in ["capabilty:fast@1", "fast@1", "capability:"] {
+        let stderr = record(
+            "subject.json",
+            &format!(
+                r#"{{"subject":"{subject}","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}}"#
+            ),
+        );
+        assert!(
+            stderr.contains("error[E014]") && stderr.contains("names nothing"),
+            "{subject}: {stderr}"
+        );
+    }
     let stderr = record(
-        "subject.json",
-        r#"{"subject":"capability:ghost@9","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
+        "basis.json",
+        r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","basis":"vibes","artifact_hash":null}"#,
     );
     assert!(stderr.contains("error[E014]"), "{stderr}");
     let stderr = record(
@@ -1730,4 +1751,389 @@ fn record_rejects_invalid_evidence() {
         "nothing invalid was appended"
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// G1: `pc record` stages evidence for subjects that name nothing yet as
+/// pending instead of refusing it with E014.
+#[test]
+fn record_accepts_unknown_subjects_as_pending() {
+    let dir = scratch_dir("pending");
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("evidence-flip")
+            .join("plan.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let observation = dir.join("observation.json");
+    std::fs::write(
+        &observation,
+        r#"{"subject":"capability:ghost@9","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
+    )
+    .unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("record")
+        .arg(&observation)
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("names nothing yet; P5 holds it as pending"),
+        "{stderr}"
+    );
+    assert!(dir.join("evidence.jsonl").exists());
+    // The staged record checks clean and moves no numbers.
+    let check = pc_ok(&dir, &["check"]);
+    assert!(check.contains("ok:"), "{check}");
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("pending capability:ghost@9 duration_minutes: 1 observation held"),
+        "{compiled}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+const HYPOTHESIS_PLAN: &str = r#"ir_version = 0
+
+[plan]
+id = "hypothesis"
+title = "Hypothesis"
+
+[objective]
+root_task = "job"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "job"
+title = "Do the job"
+state = "resolved"
+
+[[method]]
+id = "via-old"
+task = "job"
+kind = "invoke"
+capability = "old@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "old@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0, provenance = "declared" }]
+"#;
+
+/// G4: one capability and metric carries one basis. `pc record` refuses a
+/// record whose basis differs from the log's, naming both bases, and `pc
+/// check` refuses a hand-edited log that mixes them.
+#[test]
+fn record_refuses_mixed_basis_for_one_subject_and_metric() {
+    let dir = scratch_dir("basis-conflict");
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("evidence-flip")
+            .join("plan.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let legacy = r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#;
+    std::fs::write(dir.join("evidence.jsonl"), format!("{legacy}\n")).unwrap();
+    let observation = dir.join("observation.json");
+    std::fs::write(
+        &observation,
+        r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":2.0,"unit":"minutes","time":"2026-10-08T01:00:00Z","source":"ci","basis":"absolute","artifact_hash":null}"#,
+    )
+    .unwrap();
+    let stderr = pc_fails(&dir, &["record", observation.to_str().unwrap()]);
+    assert!(
+        stderr.contains("error[E014]")
+            && stderr.contains("`absolute` (capability:fast@1) and `none` (capability:fast@1)")
+            && stderr.contains("distinct metric"),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap(),
+        format!("{legacy}\n"),
+        "nothing was appended"
+    );
+    // A basis-less record pools with the basis-less log.
+    std::fs::write(&observation, legacy).unwrap();
+    pc_ok(&dir, &["record", observation.to_str().unwrap()]);
+    // A hand-edited log mixing bases fails check the same way.
+    std::fs::write(
+        dir.join("evidence.jsonl"),
+        format!(
+            "{legacy}\n{}\n",
+            legacy.replace(
+                r#""artifact_hash""#,
+                r#""basis":"distance-from:slow@1","artifact_hash""#
+            )
+        ),
+    )
+    .unwrap();
+    let stderr = pc_fails(&dir, &["check"]);
+    assert!(
+        stderr.contains("error[E014]")
+            && stderr.contains(
+                "`distance-from:slow@1` (capability:fast@1) and `none` (capability:fast@1)"
+            ),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+const HYPOTHESIS_PATCH: &str = r#"{
+  "add_capability": [
+    {"id": "new@1", "kind": "tool", "version": "1",
+     "estimates": [{"metric": "duration_minutes", "low": 8.0, "likely": 10.0, "high": 12.0, "provenance": "declared"}]}
+  ],
+  "add_method": [
+    {"id": "via-new", "task": "job", "kind": "invoke", "capability": "new@1",
+     "status": "proposed", "provenance": "agent:e2e"}
+  ]
+}"#;
+
+const HYPOTHESIS_OBSERVATION: &str = r#"{"subject":"capability:new@1","metric":"duration_minutes","value":2.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#;
+
+/// G1 end to end: evidence recorded against a proposed capability is
+/// staged (never moves the accepted totals), goes live on accept, and
+/// stays staged on reject.
+#[test]
+fn proposal_evidence_lifecycle() {
+    let dir = scratch_dir("hypothesis");
+    std::fs::write(dir.join("plan.toml"), HYPOTHESIS_PLAN).unwrap();
+    let patch = write_patch(&dir, "patch.json", HYPOTHESIS_PATCH);
+    let observation = dir.join("observation.json");
+    std::fs::write(&observation, HYPOTHESIS_OBSERVATION).unwrap();
+
+    let proposed = pc_ok(&dir, &["propose", patch.to_str().unwrap()]);
+    assert!(proposed.contains("proposed method:via-new"), "{proposed}");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("record")
+        .arg(&observation)
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("staged with method:via-new"), "{stderr}");
+
+    // Staged: the incumbent still holds at its declared 5 minutes.
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("expected 5.000 (predicted 5.000; measured 0/1)"),
+        "{compiled}"
+    );
+    assert!(
+        compiled.contains(
+            "staged capability:new@1 duration_minutes: 1 observation staged for proposal method:via-new, not counted until accepted"
+        ),
+        "{compiled}"
+    );
+    // The agent reviewing the proposal sees the evidence behind it.
+    let context = pc_ok(&dir, &["context", "job"]);
+    assert!(
+        context.contains(
+            "staged capability:new@1 duration_minutes: 1 observation staged for proposal method:via-new, not counted until accepted"
+        ),
+        "{context}"
+    );
+    let context_json: serde_json::Value =
+        serde_json::from_str(&pc_ok(&dir, &["context", "job", "--json"])).unwrap();
+    assert_eq!(
+        context_json["staged"][0]["capability"], "new@1",
+        "{context_json}"
+    );
+    assert_eq!(
+        context_json["staged"][0]["methods"][0], "via-new",
+        "{context_json}"
+    );
+    for target in ["capability:new@1", "method:via-new"] {
+        let explained = pc_ok(&dir, &["explain", target]);
+        assert!(
+            explained.contains("staged for proposal method:via-new, not counted until accepted"),
+            "{target}: {explained}"
+        );
+        let explained: serde_json::Value =
+            serde_json::from_str(&pc_ok(&dir, &["explain", target, "--json"])).unwrap();
+        assert_eq!(
+            explained["staged_evidence"][0]["observations"], 1,
+            "{target}: {explained}"
+        );
+    }
+
+    // Accept: the staged record goes live and the selection flips to the
+    // measured 2 minutes (declared alone would say 10).
+    let accepted = pc_ok(&dir, &["accept", "via-new"]);
+    assert!(accepted.contains("accepted method:via-new"), "{accepted}");
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("expected 2.000 (predicted 10.000; measured 1/1; basis none)"),
+        "{compiled}"
+    );
+    assert!(!compiled.contains("staged capability:new@1"), "{compiled}");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Reject: the hypothesis dies but its records stay staged, and the
+    // accepted totals never moved.
+    let dir = scratch_dir("hypothesis-reject");
+    std::fs::write(dir.join("plan.toml"), HYPOTHESIS_PLAN).unwrap();
+    let patch = write_patch(&dir, "patch.json", HYPOTHESIS_PATCH);
+    let observation = dir.join("observation.json");
+    std::fs::write(&observation, HYPOTHESIS_OBSERVATION).unwrap();
+    pc_ok(&dir, &["propose", patch.to_str().unwrap()]);
+    pc_ok(&dir, &["record", observation.to_str().unwrap()]);
+    let rejected = pc_ok(&dir, &["reject", "via-new"]);
+    assert!(rejected.contains("rejected method:via-new"), "{rejected}");
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("expected 5.000 (predicted 5.000; measured 0/1)"),
+        "{compiled}"
+    );
+    assert!(
+        compiled.contains(
+            "staged capability:new@1 duration_minutes: 1 observation staged with no proposal for capability:new@1 yet, not counted until accepted"
+        ),
+        "{compiled}"
+    );
+    // A live observation recorded beside the staged one warns about
+    // nothing: warnings describe the new record, never the rest of the log.
+    let live = dir.join("live.json");
+    std::fs::write(
+        &live,
+        HYPOTHESIS_OBSERVATION.replace("capability:new@1", "capability:old@1"),
+    )
+    .unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("record")
+        .arg(&live)
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("warning"), "{stderr}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// G4 end to end: the typed basis surfaces in compile, explain and diff;
+/// subjects measuring one capability pool under one basis, and a record
+/// mixing in another basis is refused naming both subjects.
+#[test]
+fn evidence_basis_renderings() {
+    let dir = scratch_dir("basis");
+    std::fs::write(
+        dir.join("plan.toml"),
+        r#"ir_version = 0
+
+[plan]
+id = "basis"
+title = "Basis"
+
+[objective]
+root_task = "job"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "job"
+title = "Do the job"
+state = "resolved"
+
+[[method]]
+id = "via-c"
+task = "job"
+kind = "invoke"
+capability = "c@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "c@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0, provenance = "declared" }]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("evidence.jsonl"),
+        "{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":10.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T00:00:00Z\",\"source\":\"ci\",\"basis\":\"distance-from:old@1\",\"artifact_hash\":null}\n{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":12.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T01:00:00Z\",\"source\":\"ci\",\"basis\":\"distance-from:old@1\",\"artifact_hash\":null}\n{\"subject\":\"method:via-c\",\"metric\":\"duration_minutes\",\"value\":20.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T02:00:00Z\",\"source\":\"ci\",\"basis\":\"distance-from:old@1\",\"artifact_hash\":null}\n{\"subject\":\"method:via-c\",\"metric\":\"duration_minutes\",\"value\":21.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T03:00:00Z\",\"source\":\"ci\",\"basis\":\"distance-from:old@1\",\"artifact_hash\":null}\n{\"subject\":\"method:via-c\",\"metric\":\"duration_minutes\",\"value\":22.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T04:00:00Z\",\"source\":\"ci\",\"basis\":\"distance-from:old@1\",\"artifact_hash\":null}\n",
+    )
+    .unwrap();
+
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("measured 1/1; basis distance-from:old@1)"),
+        "{compiled}"
+    );
+    let explained = pc_ok(&dir, &["explain", "capability:c@1"]);
+    assert!(
+        explained.contains("(n=5, sources: ci) [contradicts declared] [basis distance-from:old@1]"),
+        "{explained}"
+    );
+
+    // A basis-less record for the same capability through another subject
+    // is refused, naming both bases and their subjects.
+    let observation = dir.join("observation.json");
+    std::fs::write(
+        &observation,
+        r#"{"subject":"method:via-c","metric":"duration_minutes","value":30.0,"unit":"minutes","time":"2026-10-08T05:00:00Z","source":"ci","artifact_hash":null}"#,
+    )
+    .unwrap();
+    let stderr = pc_fails(&dir, &["record", observation.to_str().unwrap()]);
+    assert!(
+        stderr.contains("error[E014]")
+            && stderr.contains("`capability:c@1`")
+            && stderr.contains(
+                "`distance-from:old@1` (capability:c@1, method:via-c) and `none` (method:via-c)"
+            ),
+        "{stderr}"
+    );
+
+    // Diff against a sibling plan measured without a basis: the totals
+    // move and the basis movement renders beside them.
+    let other = scratch_dir("basis-other");
+    std::fs::copy(dir.join("plan.toml"), other.join("plan.toml")).unwrap();
+    std::fs::write(
+        other.join("evidence.jsonl"),
+        "{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":30.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T00:00:00Z\",\"source\":\"ci\",\"artifact_hash\":null}\n",
+    )
+    .unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("diff")
+        .arg(&dir)
+        .arg(&other)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let diff = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        diff.contains("[basis: distance-from:old@1 -> none]"),
+        "{diff}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&other).unwrap();
 }

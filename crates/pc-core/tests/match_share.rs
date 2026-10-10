@@ -722,6 +722,7 @@ fn p4_rewrites_evidence_subjects_of_merged_tasks() {
         unit: "minutes".into(),
         time: "2026-10-01T00:00:00Z".into(),
         source: "test".into(),
+        basis: None,
         artifact_hash: None,
     });
     let report = check("plan.toml", &text, &mut doc, None);

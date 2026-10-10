@@ -12,10 +12,12 @@ id = "root"
 title = "root"
 state = "open"
 
+# Unknown subjects stage pending evidence (G1), so the E014 fixture pins a
+# malformed timestamp instead.
 [[evidence]]
-subject = "capability:ghost@1"
+subject = "task:root"
 metric = "duration_minutes"
 value = 4.0
 unit = "minutes"
-time = "2026-10-01T00:00:00Z"
+time = "yesterday"
 source = "manual"
