@@ -1,4 +1,4 @@
-//! Passes P1 (load/resolve) and P2 (validate).
+//! Passes P1 (load/resolve), P2 (validate), P3 (match) and P4 (share).
 //!
 //! P1 parses the document (done by `pc-store`), rejects a wrong
 //! `ir_version` (E000), indexes entities, reports duplicate ids (E001) and
@@ -11,12 +11,19 @@
 //! step 7 and `rejected` methods are ignored by every pass. `dropped` tasks
 //! are abandoned work and are skipped by contract and dataflow checks.
 //!
+//! P3 proposes `derived` invoke methods for `open` tasks whose typed
+//! contract is covered by a capability. P4 merges structurally identical
+//! tasks by content hash so shared work is counted once downstream.
+//! Both run only over clean plans: any diagnostic from P1-P2 (or an
+//! unsupported version) leaves the document untouched.
+//!
 //! Everything here is deterministic: indexes are `BTreeMap`s, diagnostics
 //! are sorted by `(code, subject, file, line, message)`, and the same inputs always
 //! produce byte-identical reports.
 
 use pc_ir::{
-    ContractItem, KNOWN_METRICS, MethodStatus, PlanDoc, TaskState, canonical_unit, check_version,
+    ContractItem, KNOWN_METRICS, Method, MethodKind, MethodStatus, PlanDoc, TaskState,
+    canonical_unit, check_version,
 };
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -77,9 +84,10 @@ impl Report {
     }
 }
 
-/// A compiler pass in the P1-P9 pipeline. Only P1-P2 exist in v0;
-/// contributors add later passes as new implementors without touching the
-/// manager. See `docs/passes.md` for each pass's contract.
+/// A compiler pass in the P1-P9 pipeline. P1-P4 live here; P6-P7 run over
+/// the passed document in `compile`, and contributors add later passes as
+/// new implementors without touching the manager. See `docs/passes.md` for
+/// each pass's contract.
 pub trait Pass {
     /// Short stable name, e.g. `"P2-validate"`.
     fn name(&self) -> &'static str;
@@ -1100,11 +1108,621 @@ fn check_objective(ctx: &mut Ctx) {
     }
 }
 
-/// Run P1 then P2 over a parsed document and build the sorted report.
+/// True when `cap_produces` covers everything `task_produces` promises.
+fn capability_covers(task_produces: &[ContractItem], cap_produces: &[ContractItem]) -> bool {
+    missing_fields(task_produces, cap_produces).is_empty()
+}
+
+/// True when everything `cap_consumes` needs is available from `task_consumes`
+/// or plan `external` inputs.
+fn inputs_satisfied(
+    cap_consumes: &[ContractItem],
+    task_consumes: &[ContractItem],
+    external: &[ContractItem],
+) -> bool {
+    let mut available = task_consumes.to_vec();
+    available.extend(external.iter().cloned());
+    missing_fields(cap_consumes, &available).is_empty()
+}
+
+/// P3: match open primitive tasks against capabilities by typed contract.
+///
+/// For each `open` task with no committed method that promises at least one
+/// typed output field, propose a `derived` invoke method for every
+/// capability whose contract covers the task's contract: the capability must
+/// produce everything the task promises, and everything the capability
+/// consumes must come from the task or plan external inputs. The matching is
+/// exact typed subset matching; no embeddings or negotiation. Tasks that
+/// promise nothing need decomposition, not invocation, so they are skipped:
+/// an empty promise is covered by every capability and would only spam
+/// vacuous proposals. Proposals that collide with an existing method id, or
+/// that duplicate a live invoke of the same capability for the same task,
+/// are skipped. Surviving proposals are reported with trace events and carry
+/// `derived` status.
+pub struct MatchPass;
+
+impl Pass for MatchPass {
+    fn name(&self) -> &'static str {
+        "P3-match"
+    }
+
+    fn run(&self, ctx: &mut Ctx) {
+        if !ctx.diagnostics.is_empty() {
+            return;
+        }
+        let external = ctx.doc.plan.external_inputs.clone();
+        let mut proposals: Vec<(String, String)> = Vec::new();
+        for task in &ctx.doc.task {
+            if task.state != TaskState::Open {
+                continue;
+            }
+            if !task.produces.iter().any(|c| !c.fields.is_empty()) {
+                continue;
+            }
+            let has_committed = ctx
+                .doc
+                .method
+                .iter()
+                .any(|m| m.task == task.id && is_committed(m.status));
+            if has_committed {
+                continue;
+            }
+            for cap in &ctx.doc.capability {
+                let already_covered = ctx.doc.method.iter().any(|m| {
+                    m.kind == MethodKind::Invoke
+                        && m.task == task.id
+                        && m.capability.as_deref() == Some(cap.id.as_str())
+                        && m.status != MethodStatus::Rejected
+                });
+                if already_covered {
+                    continue;
+                }
+                if capability_covers(&task.produces, &cap.produces)
+                    && inputs_satisfied(&cap.consumes, &task.consumes, &external)
+                {
+                    proposals.push((task.id.clone(), cap.id.clone()));
+                }
+            }
+        }
+        proposals.sort();
+        proposals.dedup();
+        let taken: BTreeSet<String> = ctx.doc.method.iter().map(|m| m.id.clone()).collect();
+        for (task_id, cap_id) in proposals {
+            let method_id = format!("match-{task_id}-{cap_id}");
+            if taken.contains(method_id.as_str()) {
+                continue;
+            }
+            ctx.doc.method.push(Method {
+                id: method_id,
+                task: task_id.clone(),
+                kind: MethodKind::Invoke,
+                subtasks: Vec::new(),
+                order_edges: Vec::new(),
+                capability: Some(cap_id.clone()),
+                status: MethodStatus::Derived,
+                provenance: "pass:match".into(),
+                assumptions: Vec::new(),
+            });
+            ctx.trace.push(TraceEvent {
+                pass: self.name().to_string(),
+                subject: format!("task:{task_id}"),
+                decision: "derived".to_string(),
+                reason: format!("capability `{cap_id}` covers the task contract"),
+            });
+        }
+    }
+}
+
+/// Canonical share form of a task's own fields for content hashing.
+///
+/// Serializes the title, lifecycle state, and consumes/produces as sorted
+/// `(artifact, fields)` pairs. The task id is intentionally excluded: two
+/// ids denote one shared node only when everything else matches. The title
+/// is load-bearing, not decoration: matching on contracts alone wrongly
+/// merges distinct work (report section 2.7.1: `transcribe_clip_1` must
+/// never equal `transcribe_clip_2`), and collapses plans whose steps share
+/// an empty contract but do different work. The state keeps finished or
+/// abandoned work from merging into live work and vice versa.
+fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
+    let mut consumes: Vec<(String, Vec<String>)> = task
+        .consumes
+        .iter()
+        .map(|c| {
+            let mut fields = c.fields.clone();
+            fields.sort();
+            (c.artifact.clone(), fields)
+        })
+        .collect();
+    consumes.sort();
+    let mut produces: Vec<(String, Vec<String>)> = task
+        .produces
+        .iter()
+        .map(|p| {
+            let mut fields = p.fields.clone();
+            fields.sort();
+            (p.artifact.clone(), fields)
+        })
+        .collect();
+    produces.sort();
+    serde_json::json!({
+        "title": task.title,
+        "state": task.state,
+        "consumes": consumes,
+        "produces": produces,
+    })
+}
+
+/// Memoized blake3 content hashes over each task's canonical form plus the
+/// structure of its committed (accepted/derived) methods: kind, capability,
+/// and the hashes of its subtasks and order edges. Two tasks hash equal only
+/// when their whole committed subtree is identical, so a merge never drops
+/// work. P2 has already proven the committed hierarchy acyclic.
+struct ShareHasher<'a> {
+    tasks: BTreeMap<&'a str, &'a pc_ir::Task>,
+    methods: BTreeMap<&'a str, Vec<&'a Method>>,
+    memo: BTreeMap<&'a str, String>,
+}
+
+impl<'a> ShareHasher<'a> {
+    fn new(doc: &'a PlanDoc) -> Self {
+        let tasks = doc.task.iter().map(|t| (t.id.as_str(), t)).collect();
+        let mut methods: BTreeMap<&str, Vec<&Method>> = BTreeMap::new();
+        for m in &doc.method {
+            if is_committed(m.status) {
+                methods.entry(m.task.as_str()).or_default().push(m);
+            }
+        }
+        ShareHasher {
+            tasks,
+            methods,
+            memo: BTreeMap::new(),
+        }
+    }
+
+    fn hash(&mut self, id: &'a str) -> String {
+        if let Some(hash) = self.memo.get(id) {
+            return hash.clone();
+        }
+        let Some(task) = self.tasks.get(id).copied() else {
+            return String::new();
+        };
+        let mut forms: Vec<String> = Vec::new();
+        for m in self.methods.get(id).cloned().unwrap_or_default() {
+            let subtasks: Vec<String> = m.subtasks.iter().map(|s| self.hash(s)).collect();
+            let mut order: Vec<(String, String)> = m
+                .order_edges
+                .iter()
+                .map(|e| (self.hash(&e.from), self.hash(&e.to)))
+                .collect();
+            order.sort();
+            order.dedup();
+            forms.push(
+                serde_json::json!({
+                    "kind": m.kind,
+                    "capability": m.capability,
+                    "subtasks": subtasks,
+                    "order": order,
+                })
+                .to_string(),
+            );
+        }
+        forms.sort();
+        forms.dedup();
+        let mut form = canonical_task_form(task);
+        form["methods"] = forms.into();
+        let hash = blake3::hash(form.to_string().as_bytes())
+            .to_hex()
+            .to_string();
+        self.memo.insert(id, hash.clone());
+        hash
+    }
+}
+
+/// Leaves a task may and must expand to in `compile`, over every possible
+/// P6 selection. `compile` gives `done`/`dropped` tasks and tasks with no
+/// accepted method no leaves, an accepted invoke the task itself, and an
+/// accepted decomposition its subtasks' leaves. `may` unions the accepted
+/// alternatives and `must` intersects them.
+#[derive(Clone, Default)]
+struct Leaves {
+    may: BTreeSet<String>,
+    must: BTreeSet<String>,
+}
+
+/// Accepted alternatives per (aliased) task: `None` for an invoke,
+/// `Some(subtasks)` for a decomposition.
+type Alternatives = BTreeMap<String, Vec<Option<Vec<String>>>>;
+
+fn leaf_set(
+    task: &str,
+    skipped: &BTreeSet<String>,
+    alternatives: &Alternatives,
+    memo: &mut BTreeMap<String, Leaves>,
+) -> Leaves {
+    if let Some(leaves) = memo.get(task) {
+        return leaves.clone();
+    }
+    memo.insert(task.to_string(), Leaves::default());
+    let mut may = BTreeSet::new();
+    let mut must: Option<BTreeSet<String>> = None;
+    if !skipped.contains(task) {
+        for alt in alternatives.get(task).into_iter().flatten() {
+            let leaves = match alt {
+                None => {
+                    let own = BTreeSet::from([task.to_string()]);
+                    Leaves {
+                        may: own.clone(),
+                        must: own,
+                    }
+                }
+                Some(subtasks) => {
+                    let mut leaves = Leaves::default();
+                    for sub in subtasks {
+                        let child = leaf_set(sub, skipped, alternatives, memo);
+                        leaves.may.extend(child.may);
+                        leaves.must.extend(child.must);
+                    }
+                    leaves
+                }
+            };
+            may.extend(leaves.may);
+            must = Some(match must {
+                None => leaves.must,
+                Some(m) => m.intersection(&leaves.must).cloned().collect(),
+            });
+        }
+    }
+    let leaves = Leaves {
+        may,
+        must: must.unwrap_or_default(),
+    };
+    memo.insert(task.to_string(), leaves.clone());
+    leaves
+}
+
+/// Leaves that may and must finish before `child` counts as finished within
+/// one method, following compile's `finish_leaves`: a child's own leaves,
+/// or for a leafless child, whatever must finish before it.
+fn finish_set(
+    child: &str,
+    edges: &[(String, String)],
+    leaves: &BTreeMap<String, Leaves>,
+    memo: &mut BTreeMap<String, Leaves>,
+) -> Leaves {
+    if let Some(done) = memo.get(child) {
+        return done.clone();
+    }
+    memo.insert(child.to_string(), Leaves::default());
+    let own = leaves.get(child).cloned().unwrap_or_default();
+    let result = if own.must.is_empty() {
+        let mut relayed = Leaves::default();
+        for (from, _) in edges.iter().filter(|(_, to)| to == child) {
+            let before = finish_set(from, edges, leaves, memo);
+            relayed.may.extend(before.may);
+            relayed.must.extend(before.must);
+        }
+        if own.may.is_empty() {
+            relayed
+        } else {
+            Leaves {
+                may: own.may.union(&relayed.may).cloned().collect(),
+                must: BTreeSet::new(),
+            }
+        }
+    } else {
+        own
+    };
+    memo.insert(child.to_string(), result.clone());
+    result
+}
+
+/// Leaves on a precedence cycle in compile's leaf graph once `alias` is
+/// applied, over every possible P6 selection, plus every task's leaves.
+///
+/// Each accepted decomposition's order edge `from -> to` makes every leaf
+/// that may finish before `from` precede every leaf `to` may expand to,
+/// skipping target leaves that must already be in the `from` set, as
+/// compile skips them. Every edge compile can draw is drawn, so a cycle
+/// compile can hit is never missed.
+fn leaves_on_order_cycle(
+    doc: &PlanDoc,
+    alias: &BTreeMap<String, String>,
+) -> (BTreeSet<String>, BTreeMap<String, Leaves>) {
+    let resolve = |id: &str| alias.get(id).cloned().unwrap_or_else(|| id.to_string());
+    let skipped: BTreeSet<String> = doc
+        .task
+        .iter()
+        .filter(|t| matches!(t.state, TaskState::Done | TaskState::Dropped))
+        .map(|t| resolve(&t.id))
+        .collect();
+    let accepted: Vec<&Method> = doc
+        .method
+        .iter()
+        .filter(|m| m.status == MethodStatus::Accepted)
+        .collect();
+    let mut alternatives: Alternatives = BTreeMap::new();
+    for m in &accepted {
+        let alt = match m.kind {
+            MethodKind::Invoke => None,
+            MethodKind::Decompose => Some(m.subtasks.iter().map(|s| resolve(s)).collect()),
+        };
+        alternatives.entry(resolve(&m.task)).or_default().push(alt);
+    }
+    let mut leaves: BTreeMap<String, Leaves> = BTreeMap::new();
+    for task in &doc.task {
+        leaf_set(&resolve(&task.id), &skipped, &alternatives, &mut leaves);
+    }
+    let mut graph: DiGraph<String, ()> = DiGraph::new();
+    let mut nodes: BTreeMap<String, petgraph::graph::NodeIndex> = BTreeMap::new();
+    for m in accepted.iter().filter(|m| m.kind == MethodKind::Decompose) {
+        let edges: Vec<(String, String)> = m
+            .order_edges
+            .iter()
+            .map(|e| (resolve(&e.from), resolve(&e.to)))
+            .filter(|(from, to)| from != to)
+            .collect();
+        let mut finishes = BTreeMap::new();
+        for (from, to) in &edges {
+            let before = finish_set(from, &edges, &leaves, &mut finishes);
+            for b in leaves.get(to).into_iter().flat_map(|l| &l.may) {
+                if before.must.contains(b) {
+                    continue;
+                }
+                for a in before.may.iter().filter(|a| *a != b) {
+                    let x = *nodes
+                        .entry(a.clone())
+                        .or_insert_with(|| graph.add_node(a.clone()));
+                    let y = *nodes
+                        .entry(b.clone())
+                        .or_insert_with(|| graph.add_node(b.clone()));
+                    graph.add_edge(x, y, ());
+                }
+            }
+        }
+    }
+    let mut cyclic = BTreeSet::new();
+    for scc in petgraph::algo::tarjan_scc(&graph) {
+        if scc.len() > 1 {
+            cyclic.extend(scc.into_iter().map(|i| graph[i].clone()));
+        }
+    }
+    (cyclic, leaves)
+}
+
+/// True when some live (non-rejected) decomposition's order edges, rewritten
+/// through `alias` with self-edges dropped, form a cycle (E007 after merge).
+fn method_order_cyclic(doc: &PlanDoc, alias: &BTreeMap<String, String>) -> bool {
+    let resolve = |id: &String| alias.get(id).cloned().unwrap_or_else(|| id.clone());
+    doc.method
+        .iter()
+        .filter(|m| m.kind == MethodKind::Decompose && m.status != MethodStatus::Rejected)
+        .any(|m| {
+            let mut graph: DiGraph<(), ()> = DiGraph::new();
+            let mut nodes: BTreeMap<String, petgraph::graph::NodeIndex> = BTreeMap::new();
+            for edge in &m.order_edges {
+                let (from, to) = (resolve(&edge.from), resolve(&edge.to));
+                if from == to {
+                    continue;
+                }
+                let f = *nodes.entry(from).or_insert_with(|| graph.add_node(()));
+                let t = *nodes.entry(to).or_insert_with(|| graph.add_node(()));
+                graph.add_edge(f, t, ());
+            }
+            toposort(&graph, None).is_err()
+        })
+}
+
+/// P4: share structurally identical tasks by content hash.
+///
+/// Computes a blake3 hash over each task's canonical form (title, state,
+/// typed contract) and its committed method subtree (see [`ShareHasher`]).
+/// Tasks with the same hash are merged: the smallest id is kept as the
+/// canonical node, duplicates are removed, and all references
+/// (`method.task`, subtasks, order edges, `objective.root_task`, `task:`
+/// evidence subjects) are rewritten through the alias map. Merge groups
+/// are tried one at a time in canonical-id order. A group is refused when
+/// it would cycle a decomposition's own order edges, or when compile's leaf
+/// graph over every selection (see [`leaves_on_order_cycle`]) has a cycle
+/// through the canonical task's leaves, or any cycle at all if the
+/// canonical task may be leafless and so relay order. Over-approximated
+/// cycles only refuse more. The group is then
+/// reported as `kept`. Subtask order is preserved (first occurrence
+/// wins); only methods that actually reference a duplicate are touched.
+/// Self-edges created by a merge are dropped. Methods that become identical
+/// on the canonical task are deduplicated, keeping the best status
+/// (accepted, then derived, then proposed). Every merge, refusal and
+/// removal is reported with a trace event, never silent.
+pub struct SharePass;
+
+impl Pass for SharePass {
+    fn name(&self) -> &'static str {
+        "P4-share"
+    }
+
+    fn run(&self, ctx: &mut Ctx) {
+        if !ctx.diagnostics.is_empty() {
+            return;
+        }
+        let mut by_hash: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut hasher = ShareHasher::new(ctx.doc);
+        for task in &ctx.doc.task {
+            by_hash
+                .entry(hasher.hash(&task.id))
+                .or_default()
+                .push(task.id.clone());
+        }
+        let mut merges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for mut ids in by_hash.into_values() {
+            if ids.len() < 2 {
+                continue;
+            }
+            ids.sort();
+            let canonical = ids.remove(0);
+            merges.insert(canonical, ids);
+        }
+        let mut alias: BTreeMap<String, String> = BTreeMap::new();
+        for (canonical, duplicates) in std::mem::take(&mut merges) {
+            let mut trial = alias.clone();
+            trial.extend(duplicates.iter().map(|d| (d.clone(), canonical.clone())));
+            let (cyclic, leaves) = leaves_on_order_cycle(ctx.doc, &trial);
+            let footprint = leaves.get(&canonical).cloned().unwrap_or_default();
+            let touches_cycle = if footprint.must.is_empty() {
+                !cyclic.is_empty()
+            } else {
+                !cyclic.is_disjoint(&footprint.may)
+            };
+            if !method_order_cyclic(ctx.doc, &trial) && !touches_cycle {
+                alias = trial;
+                merges.insert(canonical, duplicates);
+                continue;
+            }
+            for dup in duplicates {
+                ctx.trace.push(TraceEvent {
+                    pass: self.name().to_string(),
+                    subject: format!("task:{dup}"),
+                    decision: "kept".to_string(),
+                    reason: format!("merging into task:{canonical} would create an order cycle"),
+                });
+            }
+        }
+        let mut rewritten: BTreeSet<String> = BTreeSet::new();
+        for method in &mut ctx.doc.method {
+            if let Some(canonical) = alias.get(&method.task).cloned() {
+                method.task = canonical;
+                rewritten.insert(method.id.clone());
+            }
+            if method.subtasks.iter().any(|s| alias.contains_key(s)) {
+                let mut seen = BTreeSet::new();
+                let mut subtasks = Vec::with_capacity(method.subtasks.len());
+                for sub in std::mem::take(&mut method.subtasks) {
+                    let target = alias.get(&sub).cloned().unwrap_or(sub);
+                    if seen.insert(target.clone()) {
+                        subtasks.push(target);
+                    }
+                }
+                method.subtasks = subtasks;
+            }
+            if method
+                .order_edges
+                .iter()
+                .any(|e| alias.contains_key(&e.from) || alias.contains_key(&e.to))
+            {
+                for edge in &mut method.order_edges {
+                    if let Some(canonical) = alias.get(&edge.from).cloned() {
+                        edge.from = canonical;
+                    }
+                    if let Some(canonical) = alias.get(&edge.to).cloned() {
+                        edge.to = canonical;
+                    }
+                }
+                method.order_edges.retain(|e| e.from != e.to);
+                method
+                    .order_edges
+                    .sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
+                method.order_edges.dedup();
+            }
+        }
+        if let Some(canonical) = alias.get(&ctx.doc.objective.root_task).cloned() {
+            ctx.doc.objective.root_task = canonical;
+        }
+        ctx.doc.task.retain(|t| !alias.contains_key(&t.id));
+        let removed = dedup_merged_methods(ctx, &rewritten);
+        for evidence in &mut ctx.doc.evidence {
+            let target = match split_subject(&evidence.subject) {
+                Some(("task", id)) => alias.get(id).map(|c| format!("task:{c}")),
+                Some(("method", id)) => removed.get(id).map(|k| format!("method:{k}")),
+                _ => None,
+            };
+            if let Some(subject) = target {
+                evidence.subject = subject;
+            }
+        }
+        for (canonical, duplicates) in &merges {
+            for dup in duplicates {
+                ctx.trace.push(TraceEvent {
+                    pass: self.name().to_string(),
+                    subject: format!("task:{dup}"),
+                    decision: "merged".to_string(),
+                    reason: format!("structurally identical to task:{canonical}"),
+                });
+            }
+        }
+        ctx.doc.task.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+}
+
+/// Selection preference among identical methods: accepted, derived, proposed.
+fn status_rank(status: MethodStatus) -> u8 {
+    match status {
+        MethodStatus::Accepted => 0,
+        MethodStatus::Derived => 1,
+        MethodStatus::Proposed => 2,
+        MethodStatus::Rejected => 3,
+    }
+}
+
+/// Remove live methods made identical by a merge. Only groups containing a
+/// method in `rewritten` (whose task was merged away) are touched; the
+/// survivor has the best status, then prefers the canonical task's own
+/// method, then the smallest id. Rejected methods are left alone. Each
+/// removal is traced. Returns removed method id mapped to the survivor.
+fn dedup_merged_methods(ctx: &mut Ctx, rewritten: &BTreeSet<String>) -> BTreeMap<String, String> {
+    let mut groups: BTreeMap<String, Vec<&Method>> = BTreeMap::new();
+    for m in &ctx.doc.method {
+        if m.status == MethodStatus::Rejected {
+            continue;
+        }
+        let mut order: Vec<(&str, &str)> = m
+            .order_edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect();
+        order.sort_unstable();
+        let key = serde_json::json!({
+            "task": m.task,
+            "kind": m.kind,
+            "capability": m.capability,
+            "subtasks": m.subtasks,
+            "order": order,
+        })
+        .to_string();
+        groups.entry(key).or_default().push(m);
+    }
+    let mut removed: BTreeMap<String, String> = BTreeMap::new();
+    for mut group in groups.into_values() {
+        if group.len() < 2 || !group.iter().any(|m| rewritten.contains(&m.id)) {
+            continue;
+        }
+        group.sort_by_key(|m| {
+            (
+                status_rank(m.status),
+                rewritten.contains(&m.id),
+                m.id.clone(),
+            )
+        });
+        let keep = group[0].id.clone();
+        for m in &group[1..] {
+            removed.insert(m.id.clone(), keep.clone());
+        }
+    }
+    ctx.doc.method.retain(|m| !removed.contains_key(&m.id));
+    for (id, keep) in &removed {
+        ctx.trace.push(TraceEvent {
+            pass: "P4-share".to_string(),
+            subject: format!("method:{id}"),
+            decision: "deduplicated".to_string(),
+            reason: format!("identical to method:{keep} after merge"),
+        });
+    }
+    removed
+}
+
+/// Run P1-P4 over a parsed document and build the sorted report.
 ///
 /// `file` is the display path used in diagnostics and `text` the raw source
 /// used for line lookup. `evidence_log` anchors records loaded from a JSONL
-/// log. Evidence unit case is canonicalized in place, so callers pass a
+/// log. Evidence unit case is canonicalized in place, P3 appends `derived`
+/// proposals and P4 rewrites shared tasks in place, so callers pass a
 /// mutable copy when the file must stay pristine.
 pub fn check(
     file: &str,
@@ -1125,7 +1743,12 @@ pub fn check(
         trace: Vec::new(),
         evidence_log,
     };
-    let passes: Vec<Box<dyn Pass>> = vec![Box::new(ResolvePass), Box::new(ValidatePass)];
+    let passes: Vec<Box<dyn Pass>> = vec![
+        Box::new(ResolvePass),
+        Box::new(ValidatePass),
+        Box::new(MatchPass),
+        Box::new(SharePass),
+    ];
     for pass in &passes {
         pass.run(&mut ctx);
     }

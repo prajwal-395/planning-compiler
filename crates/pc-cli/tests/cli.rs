@@ -41,6 +41,60 @@ fn valid_contracts_golden() {
     insta::assert_snapshot!("valid-contracts", String::from_utf8(output.stdout).unwrap());
 }
 
+/// Step 4: duplicates merge by content hash and covering capabilities are
+/// proposed as derived methods, pinned by snapshot.
+#[test]
+fn match_share_golden() {
+    let mut cmd = Command::cargo_bin("pc").unwrap();
+    cmd.current_dir(workspace_root().join("tests").join("fixtures"));
+    cmd.arg("check").arg("valid-match-share.toml");
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    insta::assert_snapshot!("match-share", String::from_utf8(output.stdout).unwrap());
+
+    // The trace names the Substitute (derived proposal) and Share (merge)
+    // decisions; the same-title, different-contract task is never merged.
+    let mut json = Command::cargo_bin("pc").unwrap();
+    json.current_dir(workspace_root().join("tests").join("fixtures"));
+    let output = json
+        .arg("check")
+        .arg("valid-match-share.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["counts"]["tasks"], 3);
+    assert_eq!(report["counts"]["methods"], 2);
+    let trace = report["trace"].as_array().unwrap();
+    let has = |pass: &str, subject: &str, decision: &str| {
+        trace
+            .iter()
+            .any(|e| e["pass"] == pass && e["subject"] == subject && e["decision"] == decision)
+    };
+    assert!(has("P3-match", "task:ingest-a", "derived"));
+    assert!(has("P4-share", "task:ingest-b", "merged"));
+    assert!(!has("P4-share", "task:ingest-c", "merged"));
+
+    // Compile runs over the shared document: the merged task is gone from
+    // the unresolved list, so P6 counts its work once.
+    let mut compile = Command::cargo_bin("pc").unwrap();
+    compile.current_dir(workspace_root().join("tests").join("fixtures"));
+    let output = compile
+        .arg("compile")
+        .arg("valid-match-share.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("unresolved: ingest-a, ingest-c\n"), "{text}");
+    assert!(!text.contains("ingest-b"), "{text}");
+}
+
 /// The Ren dropped-output case names the lost field and the code.
 #[test]
 fn dropped_output_golden() {

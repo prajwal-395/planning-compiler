@@ -19,7 +19,7 @@ struct Cli {
 /// Available commands. Later-step commands are added with their passes.
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run passes P1-P2 over a plan file or directory.
+    /// Run passes P1-P4 over a plan file or directory.
     Check {
         /// Plan file or directory. Defaults to the current directory.
         #[arg(default_value = ".")]
@@ -82,7 +82,7 @@ fn main() {
 }
 
 fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passes::Report) {
-    let loaded = match pc_store::load(path) {
+    let mut loaded = match pc_store::load(path) {
         Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("error[E000]: {e}");
@@ -104,6 +104,10 @@ fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passe
         }
         std::process::exit(1);
     }
+    // Compile and explain run over the passed document: P3 proposals are
+    // visible as derived methods and P4 shares identical subtasks, so P6
+    // counts shared work once. P6 still selects among accepted methods only.
+    loaded.doc = doc;
     (loaded, report)
 }
 

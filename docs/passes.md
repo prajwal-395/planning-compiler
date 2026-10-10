@@ -45,6 +45,51 @@ Scope notes:
 - One unit test per code lives in `crates/pc-core/tests/diagnostics.rs`;
   one CLI fixture per code lives in `tests/fixtures/invalid-E*.toml`.
 
+## P3: match (step 4)
+
+`pc check` proposes `derived` invoke methods for `open` tasks with no
+committed (`accepted`/`derived`) method, using exact typed subset matching
+only: the capability must produce everything the task promises, and
+everything the capability consumes must come from the task's consumables or
+plan external inputs. No embeddings, no negotiation.
+
+Guards: tasks that promise no typed field are skipped (an empty promise is
+covered by every capability, so proposing would spam vacuous
+substitutions); proposals that collide with an existing method id or that
+duplicate a live invoke of the same capability for the same task are
+skipped. Each proposal carries `provenance = "pass:match"` and a `derived`
+trace event. P3 runs only over clean plans: any P1-P2 diagnostic leaves the
+document untouched. Selection (P6) still considers `accepted` methods only;
+derived proposals await the step-7 accept loop.
+
+## P4: share (step 4)
+
+`pc check` merges structurally identical tasks by blake3 content hash over
+the canonical form (title, lifecycle state, sorted consumes/produces, and
+the committed method subtree: each accepted/derived method's kind,
+capability, and the hashes of its subtasks and order edges), so shared work
+is counted once downstream. The smallest id wins; every reference
+(`method.task`, subtasks, order edges, `objective.root_task`, `task:`
+evidence subjects) is rewritten and self-edges from a merge are dropped.
+Methods that become identical on the surviving task are deduplicated,
+keeping accepted over derived over proposed (`method:` evidence subjects
+follow the survivor); methods untouched by a merge are never removed.
+Subtask order is preserved; only methods that reference a duplicate are
+touched. Every merge emits a `merged` trace event, every removed method a
+`deduplicated` event, never silent.
+
+Guards: the title is load-bearing (contract-only equality wrongly merges
+distinct work, e.g. two clips' transcriptions), the state keeps finished or
+abandoned work from merging into live work, the subtree keeps tasks with
+different decompositions apart, merge groups are tried one at a time in
+canonical-id order and a group is refused with a `kept` trace event when it
+would cycle a decomposition's own order edges, or when compile's leaf graph
+over every P6 selection (accepted methods only; `done`/`dropped` and
+unresolved tasks are leafless and relay order, as in compile) has a cycle
+through the canonical task's leaves, or any cycle at all if the canonical
+task may be leafless; P4 runs only over clean plans. `pc compile` and
+`pc explain` run over the shared document, so P6 sees the merged graph.
+
 ## P6: select (step 3)
 
 `compile` considers accepted methods reachable from the objective root.
@@ -84,12 +129,10 @@ failure risk combines independent task risks as `1 - product(1 - risk)`.
 `pc explain` lists each selected method's assumptions and each executable
 task's slack and critical status.
 
-## Deferred (steps 4-8)
+## Deferred (steps 5-8)
 
 | Pass | Ships in |
 |---|---|
-| P3 match (derived invoke proposals) | step 4 |
-| P4 share (content-hash dedup) | step 4 |
 | P5 estimate (evidence folding) | step 5 |
 | P8 frontier (ranking) | step 6 |
 | P9 impact/diff | step 6 |

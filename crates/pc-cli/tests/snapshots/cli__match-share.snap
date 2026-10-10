@@ -1,0 +1,6 @@
+---
+source: crates/pc-cli/tests/cli.rs
+assertion_line: 53
+expression: "String::from_utf8(output.stdout).unwrap()"
+---
+ok: 3 tasks, 2 methods, 1 capabilities, 1 artifacts, 0 evidence (valid-match-share.toml)

@@ -1,0 +1,56 @@
+ir_version = 0
+
+[plan]
+id = "match-share"
+title = "Matching and sharing demo"
+
+[objective]
+root_task = "assemble"
+
+[[artifact]]
+name = "clip"
+fields = ["frames", "audio"]
+
+[[task]]
+id = "assemble"
+title = "Assemble the segment"
+state = "decomposed"
+
+# ingest-a and ingest-b are the same work under two ids: P4 must merge them
+# into one shared node, and P3 must propose the covering capability once.
+[[task]]
+id = "ingest-a"
+title = "Ingest footage"
+state = "open"
+produces = [{ artifact = "clip", fields = ["frames"] }]
+
+[[task]]
+id = "ingest-b"
+title = "Ingest footage"
+state = "open"
+produces = [{ artifact = "clip", fields = ["frames"] }]
+
+# Same title, different contract: a guarded non-merge. It also consumes
+# frames, which the surviving ingest task produces (E009).
+[[task]]
+id = "ingest-c"
+title = "Ingest footage"
+state = "open"
+consumes = [{ artifact = "clip", fields = ["frames"] }]
+produces = [{ artifact = "clip", fields = ["frames", "audio"] }]
+
+[[method]]
+id = "assemble-all"
+task = "assemble"
+kind = "decompose"
+subtasks = ["ingest-a", "ingest-b", "ingest-c"]
+order_edges = [{ from = "ingest-a", to = "ingest-c" }]
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "ingester@1"
+kind = "tool"
+version = "1"
+produces = [{ artifact = "clip", fields = ["frames"] }]
+estimates = [{ metric = "duration_minutes", low = 2.0, likely = 3.0, high = 5.0, provenance = "declared" }]
