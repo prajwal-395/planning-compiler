@@ -714,20 +714,44 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
         return;
     }
     println!(
-        "frontier: {} item{} ({})",
+        "frontier: {} ranked, {} unestimated, {} blocked ({})",
         report.items.len(),
-        if report.items.len() == 1 { "" } else { "s" },
+        report.unestimated.len(),
+        report.blocked.len(),
         loaded.display_path,
     );
-    for item in &report.items {
+    let print_item = |item: &pc_core::FrontierItem| {
+        let mut flags = String::new();
+        if item.critical {
+            flags.push_str(" (critical)");
+        }
+        if !item.ready {
+            flags.push_str(" (blocked)");
+        }
+        if item.tied {
+            flags.push_str(" (tied)");
+        }
+        let score = item
+            .score
+            .map(|score| format!("{score:.3} "))
+            .unwrap_or_default();
         println!(
-            "{:.3} {} [{}]{}: {}",
-            item.score,
-            item.subject,
-            item.kind,
-            if item.critical { " (critical)" } else { "" },
-            item.reason,
+            "{score}{} [{}]{}: {}",
+            item.subject, item.kind, flags, item.reason,
         );
+    };
+    report.items.iter().for_each(print_item);
+    if !report.unestimated.is_empty() {
+        println!(
+            "unestimated (no share of open acceptable weighted cost; structural order, not ranked against the list above):"
+        );
+        report.unestimated.iter().for_each(print_item);
+    }
+    if !report.blocked.is_empty() {
+        println!(
+            "blocked (fails typed contract matching, accepting would be E008; no share, not ranked):"
+        );
+        report.blocked.iter().for_each(print_item);
     }
 }
 

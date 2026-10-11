@@ -169,3 +169,69 @@ report's order. No decision was taken on this divergence in this entry;
 the next planning session decides whether to accept the compiler's
 proposal-first order or the report's value order, and that decision - with
 its output line - is entry 2 material.
+
+### Entry 2 - 2026-10-10, frontier-tie fix read (decision taken)
+
+Maintenance: 1 minute timed read session (wall-clock while running the
+three commands below); no plan or evidence edits in this entry.
+
+Commands run on `examples/self-plan` (`target/debug/pc` built from the
+frontier-tie fix branch, which ranks estimated work by its share of the
+open acceptable weighted cost, lists unestimated work in a separate
+structural group, sinks blocked work, and flags genuine ties instead of
+presenting subject order as priority):
+
+`pc check examples/self-plan`:
+
+```text
+ok: 28 tasks, 12 methods, 6 capabilities, 1 artifacts, 10 evidence (examples/self-plan/plan.toml)
+```
+
+`pc compile examples/self-plan`:
+
+```text
+compiled: ship-compiler (examples/self-plan/plan.toml); makespan 0.000 minutes; parallel width 0
+selection: optimal (2000 ms budget)
+unresolved: dogfood-2wk, live-ren-cycle, post-mvp-01-tasks-axi, post-mvp-02-beads, post-mvp-03-taskmaster, post-mvp-04-skill-scan, post-mvp-05-mcp, post-mvp-06-proposer, post-mvp-07-pareto, post-mvp-08-scheduling, post-mvp-09-sqlite, post-mvp-10-rewrite, post-mvp-11-mining
+```
+
+`pc frontier examples/self-plan` (6 ranked, 11 unestimated, 0 blocked; ties flagged,
+blocked work sinks):
+
+```text
+frontier: 6 ranked, 11 unestimated, 0 blocked (examples/self-plan/plan.toml)
+0.284 method:sched-via-aries [proposal] (critical) (blocked): proposed by agent:crewmate for task:post-mvp-08-scheduling; awaiting accept or reject; weighted expected cost 190.217 of 335.323 open; blocked by step-8
+0.284 task:post-mvp-08-scheduling [open-task] (critical) (blocked): no accepted method; on the selected path from the root (required by post-mvp); weighted expected cost 190.217 of 335.323 open; blocked by step-8
+0.216 method:store-via-postgres [proposal] (critical) (blocked): proposed by agent:crewmate for task:post-mvp-09-sqlite; awaiting accept or reject; weighted expected cost 145.107 of 335.323 open; blocked by step-8
+0.216 task:post-mvp-09-sqlite [open-task] (critical) (blocked): no accepted method; on the selected path from the root (required by post-mvp); weighted expected cost 145.107 of 335.323 open; blocked by step-8
+0.194 method:sched-via-pumpkin [proposal] (critical) (blocked): proposed by agent:crewmate for task:post-mvp-08-scheduling; awaiting accept or reject; weighted expected cost 130.107 of 335.323 open; blocked by step-8
+0.097 method:store-via-sqlite [proposal] (critical) (blocked): proposed by agent:crewmate for task:post-mvp-09-sqlite; awaiting accept or reject; weighted expected cost 65.047 of 335.323 open; blocked by step-8
+unestimated (no share of open acceptable weighted cost; structural order, not ranked against the list above):
+0.107 task:dogfood-2wk [open-task] (critical): no accepted method; on the selected path from the root (required by step-8)
+0.054 task:live-ren-cycle [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by step-8); blocked by dogfood-2wk; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-01-tasks-axi [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-02-beads [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-03-taskmaster [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-04-skill-scan [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-05-mcp [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-06-proposer [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-07-pareto [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-10-rewrite [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+0.054 task:post-mvp-11-mining [open-task] (critical) (blocked) (tied): no accepted method; on the selected path from the root (required by post-mvp); blocked by step-8; tied at this score with same-kind work; order is subject order, not priority
+```
+
+Changed: the planner works `task:dogfood-2wk` first. It is the only ready
+line on the frontier: `0.107 task:dogfood-2wk [open-task] (critical): no
+accepted method; on the selected path from the root (required by step-8)`
+from `pc frontier examples/self-plan`. Everything else is blocked:
+live-ren-cycle waits on dogfood-2wk, and every post-mvp item waits on
+step-8 through its parent, so none of it runs in parallel yet. Inside the
+ranked group, the backend decisions keep their cost order (Aries 190.217 vs
+Pumpkin 130.107 for scheduling, Postgres 145.107 vs SQLite 65.047 for the
+store, out of 335.323 open). The compiler no longer claims they outrank the
+report's item 01 tasks-axi import, though: item 01 has no estimate, so it
+sits in the unestimated group, which is never ranked against costed work.
+Once step-8 lands, the order between the backends and item 01 stays the
+report's value order (section 4.2) until item 01 carries an estimate. No
+compiler defect surfaced in this read beyond the entry-1 tie the fix
+addresses, so no new finding for firstmate.

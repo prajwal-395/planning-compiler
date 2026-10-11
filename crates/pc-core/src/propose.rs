@@ -708,7 +708,9 @@ pub struct ContextReport {
     /// Evidence staged with proposals for the in-scope capabilities: not
     /// counted until the proposal is accepted.
     pub staged: Vec<crate::estimate::StagedEvidence>,
-    /// Frontier entries about the focal task or its methods, ranked order.
+    /// Frontier entries about the focal task or its methods: ranked
+    /// estimated entries first, then unestimated ones in structural order,
+    /// then blocked alternatives.
     pub frontier: Vec<FrontierItem>,
 }
 
@@ -839,6 +841,8 @@ pub fn context(
     let frontier_items: Vec<FrontierItem> = frontier
         .items
         .iter()
+        .chain(&frontier.unestimated)
+        .chain(&frontier.blocked)
         .filter(|item| item.subject == focal_subject || method_subjects.contains(&item.subject))
         .cloned()
         .collect();
@@ -1130,12 +1134,22 @@ pub fn render_context_text(report: &ContextReport) -> String {
         out.push('\n');
     }
     for item in &report.frontier {
+        let mut flags = String::new();
+        if item.critical {
+            flags.push_str(" (critical)");
+        }
+        if !item.ready {
+            flags.push_str(" (blocked)");
+        }
+        if item.tied {
+            flags.push_str(" (tied)");
+        }
+        if item.score.is_some() && !item.estimated {
+            flags.push_str(" (unestimated)");
+        }
         out.push_str(&format!(
             "frontier {} [{}]{}: {}\n",
-            item.subject,
-            item.kind,
-            if item.critical { " (critical)" } else { "" },
-            item.reason
+            item.subject, item.kind, flags, item.reason
         ));
     }
     out

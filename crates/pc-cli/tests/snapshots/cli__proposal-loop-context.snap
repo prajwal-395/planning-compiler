@@ -1,9 +1,8 @@
 ---
 source: crates/pc-cli/tests/cli.rs
-assertion_line: 976
 expression: slice
 ---
-context task:draft (budget 2000 tokens, ~191 used)
+context task:draft (budget 2000 tokens, ~206 used)
 task draft: Draft [open]
   produces: doc[text]
   unresolved: no accepted method
@@ -16,5 +15,5 @@ capability writer@1 [tool v1]
 parent root (Root) via root-all [accepted]
 child outline: Outline [open]
 child write: Write [open]
-frontier method:draft-plan [proposal] (critical): proposed by agent:e2e for task:draft; awaiting accept or reject
-frontier task:draft [open-task] (critical): no accepted method; on the selected path from the root (required by root)
+frontier task:draft [open-task] (critical): no accepted method; on the selected path from the root (required by root); weighted expected cost 4.000 of 8.000 open
+frontier method:draft-plan [proposal] (critical) (unestimated): proposed by agent:e2e for task:draft; awaiting accept or reject

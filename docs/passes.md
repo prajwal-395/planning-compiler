@@ -220,13 +220,39 @@ plan: kinds are `open-task` (reachable work with no accepted method),
 accepting it would be E008) and `unmeasured-critical` (a critical leaf
 whose duration rests on declared guesses).
 
-Every entry scores `share * uncertainty * criticality`: `share` is an
-expected-cost fraction when estimates exist, otherwise the structural share
-`(1 + transitive dependents) / tasks`; `uncertainty` is `1.0` for every v0
-entry (frontier work is unmeasured by construction); `criticality` is `1.0`
-on the selected path from the objective root and `0.5` otherwise. Entries
-sort by score descending, then subject ascending. Only tasks reachable from
-the root through non-rejected methods, and not done or dropped, are ranked;
+Ranked and unestimated entries score
+`share * uncertainty * criticality * readiness`. Estimated entries carry a weighted expected cost (`objective.weights`
+times the P5 effective expected numbers; proposals use their own
+capability, open tasks the largest of their contract-clean pending
+invokes, unmeasured-critical leaves their selected capability) and their
+`share` is that cost over the total weighted cost of open acceptable work:
+per task, the largest cost among its contract-clean pending invokes
+(alternatives, never summed) and its guessed critical capability.
+They rank in `items`. Entries without a weighted estimate go to the
+separate `unestimated` list, scored on the structural share
+`(1 + transitive dependents) / tasks` and never ranked against `items`;
+the text prints them after an `unestimated (...)` label and context marks
+them `(unestimated)`. `uncertainty` is `1.0`, lowered to `0.5` when live
+measured or staged evidence on a weighted metric (`duration_minutes` when
+weights are empty) already backs the capability; `criticality` is `1.0`
+on the selected path from the objective root and `0.5` otherwise (with
+nothing executable yet every reachable task sits on that path, so
+criticality ties and the other factors separate); `readiness` is `1.0`
+when nothing live blocks the entry and `0.5` when it is blocked - an
+accepted decompose orders a live predecessor before it, or a parent
+through an accepted decompose is itself blocked (proposed or derived
+decompositions never order work) - so blocked planning sinks below
+parallel-ready work. Both lists sort by score descending, then kind
+(proposal, open-task, unmeasured-critical), then subject ascending.
+Pending invokes that fail typed contract matching cannot be accepted
+(E008): they never feed the open total, never appear as ranked proposals,
+and are listed once each in the separate `blocked` list by subject, as
+`blocked-alternative` entries with no `share` or `score`, after a
+`blocked (...)` label in the text. Items in one list sharing score and kind are genuinely
+tied: they carry `tied: true`, the text marks them `(tied)` and
+`(blocked)` beside `(critical)`, and their reasons say the order is
+subject order, not priority. Only tasks reachable from the root through
+non-rejected methods, and not done or dropped, are ranked;
 the walk never descends below a done or dropped task, matching compile, and
 this holds for open tasks, proposals and blocked alternatives alike.
 `--json` emits the ranked report. A blocked entry names the dropped fields and the live tasks consuming them.

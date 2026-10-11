@@ -226,34 +226,52 @@ fn self_plan_compiles_and_explains_accepted_work() {
     );
     assert!(text.contains("[basis absolute]"), "{text}");
 
-    // The frontier ranks the pending proposals (scheduling/store backends)
-    // first on the tie, then the in-progress step-8 work, then the
-    // post-MVP list in report order.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .current_dir(workspace_root())
-        .arg("frontier")
-        .arg("examples/self-plan")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let text = String::from_utf8(output.stdout).unwrap();
-    let subjects: Vec<&str> = text
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_whitespace().nth(1))
-        .collect();
+    // The frontier ranks estimated proposals by their share of the open
+    // acceptable weighted cost (scheduling before store, pricey backends
+    // before cheap ones), each followed by its open task. Unestimated work
+    // is a separate structural group, never ranked against costed work:
+    // dogfood-2wk is the only ready item, and everything behind step-8 or
+    // dogfood-2wk inherits the block.
+    let frontier = |json: bool| {
+        let mut cmd = Command::cargo_bin("pc").unwrap();
+        cmd.current_dir(workspace_root())
+            .arg("frontier")
+            .arg("examples/self-plan");
+        if json {
+            cmd.arg("--json");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let report: serde_json::Value = serde_json::from_str(&frontier(true)).unwrap();
+    let subjects = |group: &str| -> Vec<String> {
+        report[group]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["subject"].as_str().unwrap().to_string())
+            .collect()
+    };
     assert_eq!(
-        subjects,
+        subjects("items"),
         [
             "method:sched-via-aries",
-            "method:sched-via-pumpkin",
+            "task:post-mvp-08-scheduling",
             "method:store-via-postgres",
+            "task:post-mvp-09-sqlite",
+            "method:sched-via-pumpkin",
             "method:store-via-sqlite",
+        ],
+        "{report}"
+    );
+    assert_eq!(
+        subjects("unestimated"),
+        [
             "task:dogfood-2wk",
             "task:live-ren-cycle",
             "task:post-mvp-01-tasks-axi",
@@ -263,11 +281,35 @@ fn self_plan_compiles_and_explains_accepted_work() {
             "task:post-mvp-05-mcp",
             "task:post-mvp-06-proposer",
             "task:post-mvp-07-pareto",
-            "task:post-mvp-08-scheduling",
-            "task:post-mvp-09-sqlite",
             "task:post-mvp-10-rewrite",
             "task:post-mvp-11-mining",
         ],
+        "{report}"
+    );
+    let ready: Vec<String> = report["unestimated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(report["items"].as_array().unwrap())
+        .filter(|item| item["ready"] == true)
+        .map(|item| item["subject"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ready, ["task:dogfood-2wk"], "{report}");
+    // Genuine ties say so instead of hiding behind subject order, and
+    // blocked work names what blocks it.
+    let text = frontier(false);
+    assert!(
+        text.contains("frontier: 6 ranked, 11 unestimated, 0 blocked"),
+        "{text}"
+    );
+    assert!(
+        text.contains("task:live-ren-cycle [open-task] (critical) (blocked) (tied)"),
+        "{text}"
+    );
+    assert!(text.contains("blocked by dogfood-2wk"), "{text}");
+    assert!(text.contains("blocked by step-8"), "{text}");
+    assert!(
+        text.contains("weighted expected cost 190.217 of 335.323 open"),
         "{text}"
     );
 }
@@ -527,22 +569,18 @@ fn frontier_golden() {
         .unwrap();
     assert!(json.status.success());
     let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
-    let items = report["items"].as_array().unwrap();
-    assert_eq!(items.len(), 3);
-    let scores: Vec<f64> = items
-        .iter()
-        .map(|item| item["score"].as_f64().unwrap())
-        .collect();
-    let mut ranked = scores.clone();
-    ranked.sort_by(|a, b| b.total_cmp(a));
-    assert_eq!(scores, ranked);
-    let kinds: Vec<&str> = items
-        .iter()
-        .map(|item| item["kind"].as_str().unwrap())
-        .collect();
-    assert!(kinds.contains(&"open-task"));
-    assert!(kinds.contains(&"proposal"));
-    assert!(kinds.contains(&"blocked-alternative"));
+    // The only costed work is the E008-blocked hybrid, which can never be
+    // accepted: it is listed once in the blocked group with no share or
+    // score, and the open task has no estimate to rank.
+    assert!(report["items"].as_array().unwrap().is_empty());
+    let unestimated = report["unestimated"].as_array().unwrap();
+    assert_eq!(unestimated.len(), 1);
+    assert_eq!(unestimated[0]["kind"], "open-task");
+    let blocked = report["blocked"].as_array().unwrap();
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0]["subject"], "method:via-hybrid");
+    assert_eq!(blocked[0]["kind"], "blocked-alternative");
+    assert!(blocked[0]["share"].is_null() && blocked[0]["score"].is_null());
 
     // The frontier is deterministic: two runs give byte-identical JSON.
     let again = Command::cargo_bin("pc")
@@ -554,6 +592,64 @@ fn frontier_golden() {
         .output()
         .unwrap();
     assert_eq!(json.stdout, again.stdout);
+}
+
+/// An E008-blocked method never ranks against acceptable work: with a
+/// cheap contract-clean proposal elsewhere, the blocked hybrid still sits
+/// once in the blocked group with no share, and no ranked share exceeds 1.
+#[test]
+fn blocked_alternatives_stay_out_of_the_ranking() {
+    let dir = scratch_dir("frontier-blocked");
+    let source = workspace_root()
+        .join("examples")
+        .join("transcription-substitution");
+    std::fs::copy(source.join("evidence.jsonl"), dir.join("evidence.jsonl")).unwrap();
+    let mut plan = std::fs::read_to_string(source.join("plan.toml")).unwrap();
+    plan.push_str(
+        r#"
+[[capability]]
+id = "picker@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0, provenance = "declared" }]
+
+[[method]]
+id = "pick-lines"
+task = "select-lines"
+kind = "invoke"
+capability = "picker@1"
+status = "proposed"
+provenance = "agent:test"
+"#,
+    );
+    std::fs::write(dir.join("plan.toml"), plan).unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&pc_ok(&dir, &["frontier", "--json"])).unwrap();
+    let subjects = |group: &str| -> Vec<String> {
+        report[group]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["subject"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        subjects("items"),
+        ["method:pick-lines", "task:select-lines"],
+        "{report}"
+    );
+    assert_eq!(subjects("blocked"), ["method:via-hybrid"], "{report}");
+    assert!(report["blocked"][0]["share"].is_null(), "{report}");
+    assert!(
+        report["blocked"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("transcript.segment_confidence (consumed by select-lines)"),
+        "{report}"
+    );
+    for item in report["items"].as_array().unwrap() {
+        assert!(item["share"].as_f64().unwrap() <= 1.0, "{report}");
+    }
 }
 
 /// Step 6, criterion (a): `pc impact` with the naive accept flags the lost
@@ -1337,7 +1433,7 @@ fn context_budget_fits_and_truncates() {
         "{text}"
     );
     assert!(
-        text.contains("frontier method:via-hybrid [proposal]"),
+        text.contains("frontier method:via-hybrid [blocked-alternative]"),
         "{text}"
     );
     insta::assert_snapshot!("proposal-loop-slice", text);
