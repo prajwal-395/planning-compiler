@@ -577,8 +577,9 @@ fn provenance_line(row: &pc_core::ProvenanceRow) -> String {
 }
 
 /// One text line for a typed contract violation: the dropped fields with
-/// the live tasks consuming them. Shared by impact previews and the joined
-/// (G3) method view so the exposure reads identically in both.
+/// the live tasks consuming them. Shared by `pc check` notes (G2), impact
+/// previews, and the joined (G3) method view so the exposure reads
+/// identically in all of them.
 fn contract_note_line(note: &pc_core::ContractNote) -> String {
     let mut missing = note.missing_outputs.clone();
     missing.extend(note.missing_inputs.iter().cloned());
@@ -749,6 +750,9 @@ fn run_check(path: &std::path::Path, json: bool) {
                 counts.errors,
                 if counts.errors == 1 { "" } else { "s" }
             );
+        }
+        for note in &report.contract_notes {
+            println!("{}", contract_note_line(note));
         }
     }
     if !report.ok() {

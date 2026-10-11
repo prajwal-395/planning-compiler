@@ -657,3 +657,85 @@ fn acceptance_kind_serializes() {
         assert_eq!(kind, back);
     }
 }
+
+#[test]
+fn check_notes_flag_proposed_contract_violation_without_error() {
+    // G2: `pc check` is informational on proposed contract violations. A
+    // proposed invoke that drops a consumed field stays `ok` (exit 0) but
+    // carries a contract note with the same dropped field and consumer the
+    // frontier blocked-alternative entry names.
+    let (text, mut doc) = contracted_doc();
+    let proposed = doc.method.iter_mut().find(|m| m.id == "inv").unwrap();
+    proposed.status = MethodStatus::Proposed;
+    proposed.provenance = "agent:test".to_string();
+    // A live consumer of the dropped field, so the note names it.
+    doc.task.push(Task {
+        id: "consumer".to_string(),
+        title: "consumer".to_string(),
+        state: TaskState::Open,
+        consumes: vec![contract("transcript", &["timings"])],
+        produces: vec![],
+    });
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(
+        report.ok(),
+        "notes never fail check: {:?}",
+        report.diagnostics
+    );
+    assert_eq!(report.contract_notes.len(), 1);
+    let note = &report.contract_notes[0];
+    assert_eq!(note.method, "inv");
+    assert_eq!(note.missing_outputs, vec!["transcript.timings".to_string()]);
+    assert_eq!(note.consumers, vec!["consumer".to_string()]);
+    assert!(
+        report
+            .trace
+            .iter()
+            .any(|e| e.pass == "check-notes" && e.subject == "method:inv" && e.decision == "note"),
+        "notes are traced: {:?}",
+        report.trace
+    );
+}
+
+#[test]
+fn check_notes_ignore_rejected_and_match_frontier_blocked() {
+    // Rejected methods are ignored by every pass, including G2 notes. Live
+    // proposed notes otherwise match the frontier blocked-alternative set.
+    let (text, mut doc) = contracted_doc();
+    let proposed = doc.method.iter_mut().find(|m| m.id == "inv").unwrap();
+    proposed.status = MethodStatus::Proposed;
+    proposed.provenance = "agent:test".to_string();
+    doc.task.push(Task {
+        id: "consumer".to_string(),
+        title: "consumer".to_string(),
+        state: TaskState::Open,
+        consumes: vec![contract("transcript", &["timings"])],
+        produces: vec![],
+    });
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert_eq!(report.contract_notes.len(), 1);
+    let compiled = pc_core::compile(&doc).unwrap();
+    let frontier = pc_core::frontier(&doc, &compiled);
+    let blocked: Vec<&str> = frontier
+        .blocked
+        .iter()
+        .filter(|item| item.kind == "blocked-alternative")
+        .map(|item| item.subject.as_str())
+        .collect();
+    assert_eq!(blocked, vec!["method:inv"]);
+    assert!(
+        frontier
+            .blocked
+            .iter()
+            .any(|item| item.subject == "method:inv" && item.reason.contains("transcript.timings")),
+        "frontier names the same field: {:?}",
+        frontier.blocked
+    );
+
+    // Rejecting the proposal clears both the note and the frontier entry.
+    let rejected = doc.method.iter_mut().find(|m| m.id == "inv").unwrap();
+    rejected.status = MethodStatus::Rejected;
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "got {:?}", report.diagnostics);
+    assert!(report.contract_notes.is_empty());
+}

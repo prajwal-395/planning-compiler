@@ -719,6 +719,69 @@ fn impact_flags_dropped_output_with_consumers() {
     assert_eq!(notes[0]["consumers"], serde_json::json!(["select-lines"]));
 }
 
+/// Gap G2: `pc check` flags a proposed contract violation informationally.
+/// The synthetic transcription fixture stays `ok` (exit 0) but reports the
+/// same dropped field and consumer the frontier blocked-alternative and the
+/// impact contract note name.
+#[test]
+fn check_flags_proposed_contract_violation_without_failing() {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("check")
+        .arg("examples/transcription-substitution/plan.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "check notes never fail the plan: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("ok:"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "contract method:via-hybrid: would drop transcript.segment_confidence (consumed by task:select-lines)"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        String::from_utf8(output.stderr).unwrap().is_empty(),
+        "notes go to stdout, errors to stderr"
+    );
+
+    // `--json` carries the same note structurally, beside an empty
+    // diagnostics list so `ok` stays true.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("check")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 0);
+    let notes = report["contract_notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["method"], "via-hybrid");
+    assert_eq!(notes[0]["task"], "transcribe-footage");
+    assert_eq!(notes[0]["capability"], "voz-hybrid@1");
+    assert_eq!(
+        notes[0]["missing_outputs"],
+        serde_json::json!(["transcript.segment_confidence"])
+    );
+    assert_eq!(notes[0]["consumers"], serde_json::json!(["select-lines"]));
+    let trace = report["trace"].as_array().unwrap();
+    assert!(
+        trace.iter().any(|e| e["pass"] == "check-notes"
+            && e["subject"] == "method:via-hybrid"
+            && e["decision"] == "note"),
+        "notes are traced"
+    );
+}
+
 /// Step 6: `pc impact` refuses changes that name nothing or recommit work.
 #[test]
 fn impact_rejects_bad_changes() {

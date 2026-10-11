@@ -165,16 +165,7 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
 
     // Pending invokes on live tasks, their weighted costs, and the ones
     // that fail typed contract matching (accepting them would be E008).
-    let mut pending: Vec<&pc_ir::Method> = doc
-        .method
-        .iter()
-        .filter(|m| {
-            matches!(m.status, MethodStatus::Proposed | MethodStatus::Derived)
-                && m.kind == pc_ir::MethodKind::Invoke
-                && live.contains(&m.task)
-        })
-        .collect();
-    pending.sort_by(|a, b| a.id.cmp(&b.id));
+    let pending = pending_invokes(doc, &live);
     let mut proposal_cost: BTreeMap<&str, f64> = BTreeMap::new();
     let mut contract_notes: BTreeMap<&str, crate::impact::ContractNote> = BTreeMap::new();
     for method in &pending {
@@ -556,10 +547,30 @@ fn selected_path(doc: &PlanDoc, compiled: &CompiledPlan) -> BTreeSet<String> {
     visited
 }
 
+/// Proposed or derived invoke methods on `live` tasks, sorted by id: the
+/// pending set behind both frontier blocked alternatives and `pc check`
+/// contract notes.
+pub(crate) fn pending_invokes<'a>(
+    doc: &'a PlanDoc,
+    live: &BTreeSet<String>,
+) -> Vec<&'a pc_ir::Method> {
+    let mut pending: Vec<&pc_ir::Method> = doc
+        .method
+        .iter()
+        .filter(|m| {
+            matches!(m.status, MethodStatus::Proposed | MethodStatus::Derived)
+                && m.kind == pc_ir::MethodKind::Invoke
+                && live.contains(&m.task)
+        })
+        .collect();
+    pending.sort_by(|a, b| a.id.cmp(&b.id));
+    pending
+}
+
 /// Tasks reachable from `root` through non-rejected decompose methods,
 /// excluding done and dropped tasks. Like compile, the walk never descends
 /// below a done or dropped task, so their subtrees are not live either.
-fn live_tasks(doc: &PlanDoc, root: &str) -> BTreeSet<String> {
+pub(crate) fn live_tasks(doc: &PlanDoc, root: &str) -> BTreeSet<String> {
     let tasks: BTreeMap<&str, &pc_ir::Task> = doc.task.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut live = BTreeSet::new();
     let mut stack = vec![root];

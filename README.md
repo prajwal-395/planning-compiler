@@ -60,7 +60,7 @@ Adapters (`pc-adapter-*`) arrive after the MVP.
 
 ```sh
 pc check [path]    # run P1-P5; exit 0 clean, 1 diagnostics, 2 usage
-pc check [path] --json   # full report: diagnostics, counts, trace
+pc check [path] --json   # full report: diagnostics, counts, trace, contract notes
 pc compile [path]  # effective totals with predicted-vs-measured columns
 pc explain <id> [path]   # per-decision trail plus capability provenance
 pc record <evidence.json> [path]  # append one observation to evidence.jsonl

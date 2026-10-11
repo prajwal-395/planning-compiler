@@ -75,6 +75,11 @@ pub struct Report {
     pub counts: Counts,
     /// Pass decisions in deterministic order.
     pub trace: Vec<TraceEvent>,
+    /// Informational contract notes for proposed/derived methods that would
+    /// fail E008 if accepted (G2). Same content as the frontier
+    /// blocked-alternative entries; never affects `ok()` or the exit code.
+    #[serde(default)]
+    pub contract_notes: Vec<crate::impact::ContractNote>,
 }
 
 impl Report {
@@ -1850,6 +1855,22 @@ impl Pass for EstimatePass {
     }
 }
 
+/// Informational contract notes for proposed or derived invoke methods that
+/// would fail E008 if accepted (G2): the capability does not cover the
+/// task's contract. Ranges over the same pending set as the frontier
+/// blocked-alternative entries, via the shared
+/// [`crate::frontier::pending_invokes`] and
+/// [`crate::impact::contract_note_for`], so anyone reading only `pc check`
+/// sees the flag. Never an error: `ok()` stays true and the exit code is
+/// unchanged.
+fn contract_notes_for_check(doc: &PlanDoc) -> Vec<crate::impact::ContractNote> {
+    let live = crate::frontier::live_tasks(doc, &doc.objective.root_task);
+    crate::frontier::pending_invokes(doc, &live)
+        .into_iter()
+        .filter_map(|method| crate::impact::contract_note_for(doc, method))
+        .collect()
+}
+
 /// Run P1-P5 over a parsed document and build the sorted report.
 ///
 /// `file` is the display path used in diagnostics and `text` the raw source
@@ -1886,6 +1907,15 @@ pub fn check(
     for pass in &passes {
         pass.run(&mut ctx);
     }
+    let contract_notes = contract_notes_for_check(ctx.doc);
+    for note in &contract_notes {
+        ctx.trace.push(TraceEvent {
+            pass: "check-notes".to_string(),
+            subject: format!("method:{}", note.method),
+            decision: "note".to_string(),
+            reason: note.frontier_reason(),
+        });
+    }
     ctx.diagnostics.sort_by(|a, b| {
         a.code
             .cmp(&b.code)
@@ -1913,5 +1943,6 @@ pub fn check(
         diagnostics: std::mem::take(&mut ctx.diagnostics),
         counts,
         trace: std::mem::take(&mut ctx.trace),
+        contract_notes,
     }
 }

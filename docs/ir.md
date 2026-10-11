@@ -113,6 +113,10 @@ Contracts are **typed consumes/produces matching only**. For a committed
 2. Everything C consumes must come from T's own consumables or plan
    `external_inputs`.
 
+A proposed or derived invoke that would violate the same rule is a
+hypothesis, not an error: `pc check` reports it as an informational contract
+note (see P2 scope notes in `passes.md`).
+
 Dataflow (E009): every field a live task consumes must be produced by
 *another* live task or declared in `plan.external_inputs`. Self-production
 alone does not satisfy a consumption. The check is global in v0, not
