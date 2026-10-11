@@ -19,6 +19,7 @@ adds across invoked tasks, and failure risk combines as `1 - product(1 - risk)`.
 Each reported range retains low, likely, and high values; capability durations
 also use PERT's `(low + 4*likely + high) / 6` expected value for CPM. Tasks
 without an accepted method remain visible as unresolved.
+How measured totals render as observed ranges is owned by P5 in `passes.md`.
 
 ## Entities
 

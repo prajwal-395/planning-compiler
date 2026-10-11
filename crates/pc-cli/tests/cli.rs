@@ -2335,7 +2335,8 @@ fn proposal_evidence_lifecycle() {
     assert!(accepted.contains("accepted method:via-new"), "{accepted}");
     let compiled = pc_ok(&dir, &["compile"]);
     assert!(
-        compiled.contains("expected 2.000 (predicted 10.000; measured 1/1; basis none)"),
+        compiled
+            .contains("expected 2.000 (predicted 10.000; measured 1/1; basis none; 1 observation)"),
         "{compiled}"
     );
     assert!(!compiled.contains("staged capability:new@1"), "{compiled}");
@@ -2381,6 +2382,173 @@ fn proposal_evidence_lifecycle() {
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(!stderr.contains("warning"), "{stderr}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// G5 end to end: fully measured compile totals label their triple as the
+/// observed P5 range with its observation count, so a wide
+/// machine-contention spread never reads as a point estimate.
+/// Declared-only totals are unchanged.
+#[test]
+fn compile_totals_quote_measured_spread_as_range() {
+    let dir = scratch_dir("observed-range");
+    std::fs::write(
+        dir.join("plan.toml"),
+        r#"ir_version = 0
+
+[plan]
+id = "spread"
+title = "Spread"
+
+[objective]
+root_task = "job"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "job"
+title = "Do the job"
+state = "resolved"
+
+[[method]]
+id = "via-c"
+task = "job"
+kind = "invoke"
+capability = "c@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "c@1"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.10, high = 0.20, provenance = "declared" },
+]
+"#,
+    )
+    .unwrap();
+    // Two synthetic observations with a 4x spread (machine contention, not
+    // a configuration difference): the median alone would hide it.
+    std::fs::write(
+        dir.join("evidence.jsonl"),
+        "{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":2.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T00:00:00Z\",\"source\":\"ci\",\"artifact_hash\":null}\n{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":8.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T01:00:00Z\",\"source\":\"ci\",\"artifact_hash\":null}\n",
+    )
+    .unwrap();
+
+    let compiled = pc_ok(&dir, &["compile"]);
+    assert!(
+        compiled.contains("duration_minutes: observed range low 2.000, likely 5.000, high 8.000, expected 5.000 (predicted 12.333; measured 1/1; basis none; 2 observations)"),
+        "{compiled}"
+    );
+    // The declared-only metric line is unchanged: no label, no count.
+    let risk_line = compiled
+        .lines()
+        .find(|line| line.starts_with("failure_risk:"))
+        .unwrap();
+    assert!(risk_line.starts_with("failure_risk: low "), "{risk_line}");
+    assert!(risk_line.ends_with("measured 0/1)"), "{risk_line}");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&pc_ok(&dir, &["compile", "--json"])).unwrap();
+    assert_eq!(
+        json["basis"]["duration_minutes"]["measured_observations"], 2,
+        "{json}"
+    );
+    assert_eq!(
+        json["basis"]["failure_risk"]["measured_observations"], 0,
+        "{json}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// G5 partial case: when only some nodes are measured the bounds mix in
+/// declared guesses, so the triple is never labelled as observed; the
+/// observation count still names the measured part.
+#[test]
+fn compile_totals_never_label_partly_declared_bounds_observed() {
+    let dir = scratch_dir("partly-observed");
+    std::fs::write(
+        dir.join("plan.toml"),
+        r#"ir_version = 0
+
+[plan]
+id = "partly"
+title = "Partly"
+
+[objective]
+root_task = "root"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "root"
+title = "Root"
+state = "decomposed"
+
+[[task]]
+id = "a"
+title = "Measured step"
+state = "resolved"
+
+[[task]]
+id = "b"
+title = "Declared step"
+state = "resolved"
+
+[[method]]
+id = "root-all"
+task = "root"
+kind = "decompose"
+subtasks = ["a", "b"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-c"
+task = "a"
+kind = "invoke"
+capability = "c@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-d"
+task = "b"
+kind = "invoke"
+capability = "d@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "c@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16.0, provenance = "declared" }]
+
+[[capability]]
+id = "d@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16.0, provenance = "declared" }]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("evidence.jsonl"),
+        "{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":2.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T00:00:00Z\",\"source\":\"ci\",\"artifact_hash\":null}\n{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":8.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T01:00:00Z\",\"source\":\"ci\",\"artifact_hash\":null}\n",
+    )
+    .unwrap();
+
+    let compiled = pc_ok(&dir, &["compile"]);
+    let line = compiled
+        .lines()
+        .find(|line| line.starts_with("duration_minutes:"))
+        .unwrap();
+    assert!(!line.contains("observed"), "{line}");
+    assert!(
+        line.ends_with("(predicted 12.333; measured 1/2; basis none; 2 observations)"),
+        "{line}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -2431,7 +2599,7 @@ estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0,
 
     let compiled = pc_ok(&dir, &["compile"]);
     assert!(
-        compiled.contains("measured 1/1; basis distance-from:old@1)"),
+        compiled.contains("measured 1/1; basis distance-from:old@1; 5 observations)"),
         "{compiled}"
     );
     let explained = pc_ok(&dir, &["explain", "capability:c@1"]);

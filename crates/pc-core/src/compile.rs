@@ -64,6 +64,12 @@ pub struct MetricBasis {
     /// missing basis reported as `"none"`. Empty when nothing is measured:
     /// declared guesses carry no basis.
     pub bases: Vec<String>,
+    /// Live observations behind the measured nodes for this metric. Zero
+    /// when nothing is measured. When every node is measured the effective
+    /// range bounds roll up the P5 spread, so totals quote them as an
+    /// observed range instead of letting the median read as a point value;
+    /// partly measured bounds mix in declared guesses and are not observed.
+    pub measured_observations: u64,
 }
 
 /// One provenance row: declared guesses beside measured evidence for a
@@ -577,6 +583,17 @@ pub fn compile_with_budget(
         predicted_full.insert("duration_minutes".into(), predicted_duration);
     }
     let mut basis = BTreeMap::new();
+    // Live observations per measured (capability, metric): the counts the
+    // totals' observed ranges rest on. Summed, because one basis family
+    // carries one measured profile and roll-ups span capabilities.
+    let mut observations_by_capability: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for profile in &estimated.profiles {
+        if let Some(measured) = &profile.measured {
+            *observations_by_capability
+                .entry((profile.capability.clone(), profile.metric.clone()))
+                .or_default() += measured.observations;
+        }
+    }
     for metric in totals.keys() {
         let total_nodes = nodes
             .iter()
@@ -601,6 +618,26 @@ pub fn compile_with_budget(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        // Live observations behind this metric's measured nodes, so the
+        // totals line can quote the effective bounds as an observed range
+        // instead of letting the median read as a point value.
+        let measured_capabilities = nodes
+            .iter()
+            .filter(|n| {
+                n.estimates.contains_key(metric)
+                    && measured.contains(&(n.capability.clone(), metric.clone()))
+            })
+            .map(|n| n.capability.clone())
+            .collect::<BTreeSet<_>>();
+        let measured_observations: u64 = measured_capabilities
+            .iter()
+            .map(|capability| {
+                observations_by_capability
+                    .get(&(capability.clone(), metric.clone()))
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum();
         basis.insert(
             metric.clone(),
             MetricBasis {
@@ -609,6 +646,7 @@ pub fn compile_with_budget(
                 measured_nodes,
                 total_nodes,
                 bases,
+                measured_observations,
             },
         );
     }

@@ -329,9 +329,23 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
         } else {
             format!("; basis {}", column.bases.join(", "))
         };
+        // Fully measured totals label their triple as the observed P5
+        // range, so a wide machine-contention spread never reads as a point
+        // estimate; any measured total names its live observation count.
+        let label = if column.measured_nodes > 0 && column.measured_nodes == column.total_nodes {
+            "observed range "
+        } else {
+            ""
+        };
+        let observations = match (column.measured_nodes, column.measured_observations) {
+            (0, _) => String::new(),
+            (_, 1) => "; 1 observation".to_string(),
+            (_, n) => format!("; {n} observations"),
+        };
         println!(
-            "{}: low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{}{})",
+            "{}: {}low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (predicted {:.3}; measured {}/{}{}{})",
             metric_label(metric),
+            label,
             range.low,
             range.likely,
             range.high,
@@ -340,6 +354,7 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
             column.measured_nodes,
             column.total_nodes,
             bases,
+            observations,
         );
     }
     let mut timed: Vec<_> = result.timings.iter().collect();

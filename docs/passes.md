@@ -163,12 +163,19 @@ validated observation to the sibling `evidence.jsonl`, refusing anything
 `pc compile` and `pc explain` show predicted versus measured: per-metric
 lines carry the declared-only prediction beside the effective total with a
 measured/total node count, plus the sorted unique typed bases behind the
-measured nodes (`; basis ...`, omitted for declared-only totals),
+measured nodes (`; basis ...`, omitted for declared-only totals).
+Measured totals also append the live observation count behind the
+measured nodes (`; <n> observations`), and when every node is measured the
+triple is labelled `observed range low ..., likely ..., high ...`, so a wide
+machine-contention spread reads as a range instead of letting the median
+read as a point value. Partly measured bounds mix in declared guesses and
+carry no label; declared-only totals are unchanged.
 `pc explain capability:<id>` renders the
 provenance report (predicted triple vs measured triple, observation and
 stale counts, contradiction flag, and the row's basis:
 `[basis none]` when the evidence predates basis typing), and `--json` carries the same rows:
-`pc compile --json` adds the per-metric basis (including `bases`), and
+`pc compile --json` adds the per-metric basis (including `bases` and the
+live observation count `measured_observations`), and
 `pc explain --json` emits
 an object with the decision `rows`, the capability's `provenance` rows
 (empty for non-capability targets; `basis` is the `declared`/`measured(n)`
