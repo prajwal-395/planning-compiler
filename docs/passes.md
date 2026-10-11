@@ -208,7 +208,10 @@ Unresolved tasks are listed with zero rolled work;
 this pass never chooses among methods. Money sums across invoked work and
 failure risk combines independent task risks as `1 - product(1 - risk)`.
 `pc explain` lists each selected method's assumptions and each executable
-task's slack and critical status.
+task's slack and critical status. `pc explain method:<id>` joins that
+method's assumptions (from the IR, so proposed methods show them too) with
+its invoked capability's provenance rows and its contract exposure, so one
+view carries assumptions, measurement basis and dropped-field consumers.
 
 ## P8: frontier (step 6)
 
@@ -285,10 +288,18 @@ the same mistake in two files counts once), with the same distance label.
 Sides that fail check still
 diff structurally; only an unreadable plan or a P6/P7 failure exits 1.
 
-`pc explain` is unchanged apart from provenance: measured rows now name
+`pc explain` joins the same contract exposure into the method view:
+`pc explain method:<id>` renders the method's status first, then its
+assumptions beside its invoked capability's provenance rows (predicted vs measured with typed
+bases and sources, plus staged holdings while proposed) and the typed
+contract note naming dropped fields and their consumers - the same line
+`pc impact` previews and `pc frontier` ranks as a blocked alternative, so
+verifying a substitution takes one command. A rejected method is refused,
+since every pass ignores it. Measured rows name
 their sorted unique evidence sources beside the observation count, so a
 measurement basis such as "distance from the incumbent" is visible wherever
-the numbers are.
+the numbers are. `--json` adds the matching `contract_notes` array beside
+`rows`, `provenance`, `unattributed_tasks` and `staged_evidence`.
 
 ## Proposal loop (step 7)
 

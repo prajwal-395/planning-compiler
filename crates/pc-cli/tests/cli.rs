@@ -972,6 +972,118 @@ fn transcription_substitution_criteria() {
     }
 }
 
+/// Gap G3: `explain method:` joins one view from the method's assumptions,
+/// its capability's measurement basis and its contract exposure, so one
+/// command carries what used to take `explain method` plus `explain
+/// capability` plus `pc impact`. Synthetic fixture only; no Ren figures.
+#[test]
+fn explain_method_joins_provenance_and_contract() {
+    let explain = |target: &str, plan: &std::path::Path, json: bool| {
+        let mut cmd = Command::cargo_bin("pc").unwrap();
+        cmd.arg("explain").arg(target).arg(plan);
+        if json {
+            cmd.arg("--json");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let decided = workspace_root().join("examples/transcription-substitution/decided.toml");
+    let proposed = workspace_root().join("examples/transcription-substitution/plan.toml");
+
+    // Accepted method: assumptions beside the invoked capability's live
+    // measured-vs-predicted provenance with sources and basis labels.
+    let text = explain("method:via-hybrid", &decided, false);
+    assert!(
+        text.starts_with("method:via-hybrid: status (accepted)\n"),
+        "{text}"
+    );
+    assert!(text.contains("method:via-hybrid: assumes ("), "{text}");
+    assert!(
+        text.contains(
+            "provenance voz-hybrid@1 duration_minutes: predicted 13.000/15.000/19.000 vs measured 3.000/4.000/5.000 (n=3, sources: reel-eval) [contradicts declared] [basis none]"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "provenance voz-hybrid@1 accuracy_distance_from_incumbent: predicted none vs measured 0.080/0.100/0.120 (n=2, sources: distance-from-incumbent) [basis none]"
+        ),
+        "{text}"
+    );
+    // The decided contract holds the hybrid's outputs, so no exposure line.
+    assert!(!text.contains("contract method:via-hybrid"), "{text}");
+
+    // Proposed method: the same assumptions (the trace only walks the
+    // accepted plan, so these were missing before the join) beside the
+    // staged holdings and the contract exposure, worded exactly as the
+    // impact preview and frontier entry word it.
+    let text = explain("method:via-hybrid", &proposed, false);
+    assert!(
+        text.starts_with("method:via-hybrid: status (proposed)\n"),
+        "{text}"
+    );
+    assert!(text.contains("method:via-hybrid: assumes ("), "{text}");
+    assert!(
+        text.contains(
+            "staged capability:voz-hybrid@1 duration_minutes: 3 observations staged for proposal method:via-hybrid, not counted until accepted"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "contract method:via-hybrid: would drop transcript.segment_confidence (consumed by task:select-lines)"
+        ),
+        "{text}"
+    );
+
+    // The JSON view carries the same join structurally.
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("method:via-hybrid", &decided, true)).unwrap();
+    let provenance = value["provenance"].as_array().unwrap();
+    assert_eq!(provenance.len(), 3);
+    assert!(
+        provenance
+            .iter()
+            .all(|row| row["capability"] == "voz-hybrid@1"),
+        "{provenance:?}"
+    );
+    assert_eq!(value["contract_notes"].as_array().unwrap().len(), 0);
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("method:via-hybrid", &proposed, true)).unwrap();
+    let rows = value["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0]["decision"], "status");
+    assert_eq!(rows[0]["reason"], "proposed");
+    let notes = value["contract_notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["method"], "via-hybrid");
+    assert_eq!(
+        notes[0]["missing_outputs"],
+        serde_json::json!(["transcript.segment_confidence"])
+    );
+    assert_eq!(notes[0]["consumers"], serde_json::json!(["select-lines"]));
+
+    // A rejected method is ignored by every pass, so the joined view refuses
+    // it instead of surfacing its contract exposure as a live concern.
+    let dir = scratch_dir("explain-rejected");
+    std::fs::copy(&proposed, dir.join("plan.toml")).unwrap();
+    assert_eq!(
+        pc_ok(&dir, &["reject", "via-hybrid"]),
+        "rejected method:via-hybrid\n"
+    );
+    let stderr = pc_fails(&dir, &["explain", "method:via-hybrid"]);
+    assert!(
+        stderr.contains("`method:via-hybrid` is rejected and ignored by every pass"),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A scratch plan directory for `pc record` tests, under the system temp
 /// dir so the worktree stays clean.
 fn scratch_dir(name: &str) -> PathBuf {

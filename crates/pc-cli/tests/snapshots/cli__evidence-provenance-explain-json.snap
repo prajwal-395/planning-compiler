@@ -3,6 +3,7 @@ source: crates/pc-cli/tests/cli.rs
 expression: "String::from_utf8(output.stdout).unwrap()"
 ---
 {
+  "contract_notes": [],
   "provenance": [
     {
       "basis": "measured(3)",

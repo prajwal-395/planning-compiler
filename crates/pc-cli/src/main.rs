@@ -394,15 +394,27 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
     } else {
         format!("task:{target}")
     };
-    let rows: Vec<_> = result
+    let mut rows: Vec<_> = result
         .trace
         .iter()
         .filter(|row| row.subject == target)
         .cloned()
         .collect();
+    // G3: `explain method:` joins one view from the method's assumptions,
+    // its capability's measurement basis and its contract exposure, so
+    // verifying a substitution takes one command instead of `explain
+    // method` plus `explain capability` plus `pc impact`.
+    let method = target.strip_prefix("method:").and_then(|id| {
+        loaded
+            .doc
+            .method
+            .iter()
+            .find(|candidate| candidate.id == id)
+    });
     // Capability targets also render the P5 provenance report: declared
-    // guesses beside measured evidence, one row per metric.
-    let provenance: Vec<_> = match target.strip_prefix("capability:") {
+    // guesses beside measured evidence, one row per metric. Method targets
+    // join their invoked capability's rows beside their own assumptions.
+    let mut provenance: Vec<_> = match target.strip_prefix("capability:") {
         Some(capability) => result
             .provenance
             .iter()
@@ -411,6 +423,44 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
             .collect(),
         None => Vec::new(),
     };
+    if let Some(method) = method {
+        if method.status == pc_ir::MethodStatus::Rejected {
+            eprintln!("error: `{target}` is rejected and ignored by every pass");
+            std::process::exit(1);
+        }
+        rows.insert(
+            0,
+            pc_core::CompileTrace {
+                subject: target.clone(),
+                decision: "status".to_string(),
+                reason: pc_core::status_str(method.status).to_string(),
+            },
+        );
+        if let Some(capability) = method.capability.as_deref() {
+            provenance.extend(
+                result
+                    .provenance
+                    .iter()
+                    .filter(|row| row.capability == capability)
+                    .cloned(),
+            );
+        }
+        // The trace only walks the selected accepted plan, so a proposed or
+        // unselected method's hand-written assumptions would otherwise be
+        // missing here: carry them beside the measurements.
+        for assumption in &method.assumptions {
+            if !rows
+                .iter()
+                .any(|row| row.decision == "assumes" && row.reason == *assumption)
+            {
+                rows.push(pc_core::CompileTrace {
+                    subject: target.clone(),
+                    decision: "assumes".to_string(),
+                    reason: assumption.clone(),
+                });
+            }
+        }
+    }
     let unattributed: Vec<_> = result
         .unattributed_tasks
         .iter()
@@ -433,7 +483,21 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
         })
         .cloned()
         .collect();
-    if rows.is_empty() && provenance.is_empty() && unattributed.is_empty() && staged.is_empty() {
+    // Contract exposure: the same typed note P8 ranks as a blocked
+    // alternative and P9 previews, so the consumer list sits beside the
+    // assumptions and measurements. Empty when the contract holds.
+    let contract_notes: Vec<_> = match method {
+        Some(found) => pc_core::contract_note_for(&loaded.doc, found)
+            .into_iter()
+            .collect(),
+        None => Vec::new(),
+    };
+    if rows.is_empty()
+        && provenance.is_empty()
+        && unattributed.is_empty()
+        && staged.is_empty()
+        && contract_notes.is_empty()
+    {
         eprintln!("error: no explanation for `{target}` in reachable accepted plan");
         std::process::exit(1);
     }
@@ -445,6 +509,7 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
                 "provenance": provenance,
                 "unattributed_tasks": unattributed,
                 "staged_evidence": staged,
+                "contract_notes": contract_notes,
             }))
             .unwrap_or_default()
         );
@@ -452,45 +517,8 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
         for row in rows {
             println!("{}: {} ({})", row.subject, row.decision, row.reason);
         }
-        for row in provenance {
-            let predicted = row.predicted.map_or("none".to_string(), |p| {
-                format!("{:.3}/{:.3}/{:.3}", p.low, p.likely, p.high)
-            });
-            let measured = row
-                .measured
-                .map_or("no measured evidence".to_string(), |m| {
-                    let stale = if row.stale > 0 {
-                        format!(", {} stale", row.stale)
-                    } else {
-                        String::new()
-                    };
-                    let sources = if row.sources.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", sources: {}", row.sources.join(", "))
-                    };
-                    format!(
-                        "{:.3}/{:.3}/{:.3} (n={}{stale}{sources})",
-                        m.low, m.likely, m.high, row.observations,
-                    )
-                });
-            let contradicts = if row.contradicts_declared {
-                " [contradicts declared]"
-            } else {
-                ""
-            };
-            // Declared-only rows carry no measurement to type; measured
-            // rows always name their basis (`none` when the evidence
-            // predates basis typing) so a distance never reads as accuracy.
-            let basis = match (&row.measured, &row.measurement_basis) {
-                (Some(_), Some(b)) => format!(" [basis {b}]"),
-                (Some(_), None) => " [basis none]".to_string(),
-                (None, _) => String::new(),
-            };
-            println!(
-                "provenance {} {}: predicted {predicted} vs measured {measured}{contradicts}{basis}",
-                row.capability, row.metric,
-            );
+        for row in &provenance {
+            println!("{}", provenance_line(row));
         }
         for entry in &unattributed {
             println!("{}", unattributed_line(entry));
@@ -498,7 +526,79 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
         for entry in &staged {
             println!("{}", entry.line());
         }
+        for note in &contract_notes {
+            println!("{}", contract_note_line(note));
+        }
     }
+}
+
+/// One text line for a P5 provenance row: declared guesses beside measured
+/// evidence. Shared by capability explanations and the joined (G3) method
+/// view so the measurement basis reads identically in both.
+fn provenance_line(row: &pc_core::ProvenanceRow) -> String {
+    let predicted = row.predicted.map_or("none".to_string(), |p| {
+        format!("{:.3}/{:.3}/{:.3}", p.low, p.likely, p.high)
+    });
+    let measured = row
+        .measured
+        .map_or("no measured evidence".to_string(), |m| {
+            let stale = if row.stale > 0 {
+                format!(", {} stale", row.stale)
+            } else {
+                String::new()
+            };
+            let sources = if row.sources.is_empty() {
+                String::new()
+            } else {
+                format!(", sources: {}", row.sources.join(", "))
+            };
+            format!(
+                "{:.3}/{:.3}/{:.3} (n={}{stale}{sources})",
+                m.low, m.likely, m.high, row.observations,
+            )
+        });
+    let contradicts = if row.contradicts_declared {
+        " [contradicts declared]"
+    } else {
+        ""
+    };
+    // Declared-only rows carry no measurement to type; measured
+    // rows always name their basis (`none` when the evidence
+    // predates basis typing) so a distance never reads as accuracy.
+    let basis = match (&row.measured, &row.measurement_basis) {
+        (Some(_), Some(b)) => format!(" [basis {b}]"),
+        (Some(_), None) => " [basis none]".to_string(),
+        (None, _) => String::new(),
+    };
+    format!(
+        "provenance {} {}: predicted {predicted} vs measured {measured}{contradicts}{basis}",
+        row.capability, row.metric,
+    )
+}
+
+/// One text line for a typed contract violation: the dropped fields with
+/// the live tasks consuming them. Shared by impact previews and the joined
+/// (G3) method view so the exposure reads identically in both.
+fn contract_note_line(note: &pc_core::ContractNote) -> String {
+    let mut missing = note.missing_outputs.clone();
+    missing.extend(note.missing_inputs.iter().cloned());
+    let consumers = if note.consumers.is_empty() {
+        "no live task consumes them".to_string()
+    } else {
+        format!(
+            "consumed by {}",
+            note.consumers
+                .iter()
+                .map(|c| format!("task:{c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    format!(
+        "contract method:{}: would drop {} ({consumers})",
+        note.method,
+        missing.join(", "),
+    )
 }
 
 /// Handler for `pc record`.
@@ -827,25 +927,7 @@ fn run_impact(
         eprintln!("{}", pc_core::render_human(diag));
     }
     for note in &report.contract_notes {
-        let mut missing = note.missing_outputs.clone();
-        missing.extend(note.missing_inputs.iter().cloned());
-        let consumers = if note.consumers.is_empty() {
-            "no live task consumes them".to_string()
-        } else {
-            format!(
-                "consumed by {}",
-                note.consumers
-                    .iter()
-                    .map(|c| format!("task:{c}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        println!(
-            "contract method:{}: would drop {} ({consumers})",
-            note.method,
-            missing.join(", "),
-        );
+        println!("{}", contract_note_line(note));
     }
     for change in &report.selection_changes {
         println!(

@@ -28,7 +28,10 @@ pub use estimate::{
     basis_name, estimate,
 };
 pub use frontier::{FrontierItem, FrontierReport, frontier};
-pub use impact::{Change, DiffReport, ImpactError, ImpactReport, delta_bases, diff, impact};
+pub use impact::{
+    Change, ContractNote, DiffReport, ImpactError, ImpactReport, contract_note_for, delta_bases,
+    diff, impact, status_str,
+};
 pub use passes::{
     Counts, Ctx, EstimatePass, MatchPass, Pass, Report, ResolvePass, SharePass, TraceEvent,
     ValidatePass, check,

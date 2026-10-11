@@ -38,7 +38,10 @@ without an accepted method remain visible as unresolved.
   `proposed` methods are hypotheses for the step-7 loop and `rejected`
   methods are ignored by every pass. `provenance` is `human:<name>`,
   `agent:<name>`, `llm:<model>` or `pass:<name>`; `assumptions` are listed
-  for `explain` (step 2) to surface. Agents stage methods as `proposed` with
+  for `explain` (step 2) to surface. `pc explain method:<id>` renders the
+  assumptions beside the invoked capability's P5 provenance (live rows, or
+  staged holdings while proposed) and the typed contract exposure: dropped
+  fields with the live tasks consuming them. Agents stage methods as `proposed` with
   `pc propose` and decide them with `pc accept`/`pc reject`; the P3 matcher
   stages `derived` proposals the same commands decide.
 - **Capability.** `kind` is `agent`, `tool`, `workflow`, `skill` or
@@ -113,7 +116,8 @@ Contracts are **typed consumes/produces matching only**. For a committed
 Dataflow (E009): every field a live task consumes must be produced by
 *another* live task or declared in `plan.external_inputs`. Self-production
 alone does not satisfy a consumption. The check is global in v0, not
-ordering-aware.
+ordering-aware. The same typed violation is what `pc explain method:<id>`
+renders as its contract exposure (see `passes.md` P9).
 
 ## Formats
 
