@@ -2867,6 +2867,194 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `pc init` scaffolds a minimal valid plan that passes `pc check`.
+#[test]
+fn init_scaffolds_minimal_valid_plan() {
+    let parent = scratch_dir("init-scaffold");
+    let dir = parent.join("new-plan");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("initialized plan at"), "{stdout}");
+    assert!(stdout.contains("plan.toml"), "{stdout}");
+
+    // The scaffold parses as a plan and checks clean.
+    let text = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
+    let doc = pc_ir::from_toml(&text).unwrap();
+    assert_eq!(doc.task.len(), 1);
+    assert_eq!(doc.objective.root_task, "start");
+    let check = pc_ok(&dir, &["check"]);
+    assert!(check.contains("ok: 1 tasks"), "{check}");
+
+    // `--json` emits the created plan path.
+    let other = parent.join("json-plan");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&other)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        value["plan"].as_str().unwrap().ends_with("plan.toml"),
+        "{value}"
+    );
+    let check = pc_ok(&other, &["check"]);
+    assert!(check.contains("ok: 1 tasks"), "{check}");
+    std::fs::remove_dir_all(&parent).unwrap();
+}
+
+/// A bare `pc init` scaffolds `.plan/`, and a bare `pc check` finds it.
+#[test]
+fn bare_init_then_bare_check_uses_dot_plan() {
+    let dir = scratch_dir("init-bare");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&dir)
+        .arg("init")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.join(".plan").join("plan.toml").is_file());
+    assert!(!dir.join("plan.toml").exists());
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&dir)
+        .arg("check")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("ok: 1 tasks"), "{stdout}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A bare `pc init` beside an existing `./plan.toml` refuses rather than
+/// creating a `.plan/` that would shadow it.
+#[test]
+fn bare_init_refuses_beside_root_plan() {
+    let dir = scratch_dir("init-bare-root");
+    let first = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&dir)
+        .arg("init")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("plan.toml"), "{stderr}");
+    assert!(stderr.contains("refusing to overwrite"), "{stderr}");
+    assert!(!dir.join(".plan").exists(), "refusal wrote nothing");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Bare commands fall back to `./plan.toml` when `.plan/` holds no plan.
+#[test]
+fn bare_check_ignores_empty_dot_plan() {
+    let dir = scratch_dir("check-empty-dot-plan");
+    let first = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    std::fs::create_dir(dir.join(".plan")).unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&dir)
+        .arg("check")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("ok: 1 tasks"), "{stdout}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc init` refuses to overwrite an existing plan and writes nothing.
+#[test]
+fn init_refuses_to_overwrite_existing_plan() {
+    let dir = scratch_dir("init-refusal");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let before = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("already exists"), "{stderr}");
+    assert!(stderr.contains("refusing to overwrite"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("plan.toml")).unwrap(),
+        before,
+        "refusal wrote nothing"
+    );
+
+    // A sibling `plan.json` counts as an existing plan too.
+    let other = scratch_dir("init-refusal-json");
+    std::fs::write(other.join("plan.json"), "{\"ir_version\": 0}").unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("init")
+        .arg(&other)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("already exists"), "{stderr}");
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&other).unwrap();
+}
 /// G4 end to end: the typed basis surfaces in compile, explain and diff;
 /// subjects measuring one capability pool under one basis, and a record
 /// mixing in another basis is refused naming both subjects.

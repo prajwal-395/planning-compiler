@@ -21,11 +21,23 @@ struct Cli {
 /// decides them while the core stays model-free.
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Scaffold a minimal valid plan directory (a `plan.toml` that passes
+    /// `pc check`). Refuses to overwrite an existing plan.
+    Init {
+        /// Directory to scaffold the plan in. Defaults to `.plan`, which
+        /// every other command picks up when run without a path; the
+        /// default also refuses when the current directory holds a plan.
+        /// The plan file is created as `<dir>/plan.toml`.
+        path: Option<PathBuf>,
+        /// Emit the created plan path as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run passes P1-P5 over a plan file or directory.
     Check {
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the full report (diagnostics, counts, trace) as JSON.
         #[arg(long)]
         json: bool,
@@ -41,9 +53,9 @@ enum Commands {
     },
     /// Roll up accepted methods and analyze the critical path.
     Compile {
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the full compiled plan as JSON.
         #[arg(long)]
         json: bool,
@@ -55,9 +67,9 @@ enum Commands {
     Explain {
         /// Entity id, optionally prefixed with task:, method:, or capability:.
         target: String,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit matching explanation records as JSON.
         #[arg(long)]
         json: bool,
@@ -69,16 +81,16 @@ enum Commands {
     Record {
         /// JSON file holding one evidence object.
         evidence: PathBuf,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
     },
     /// Rank unresolved work (P8): open tasks, pending proposals,
     /// unmeasured critical-path cost and blocked alternatives.
     Frontier {
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the ranked frontier as JSON.
         #[arg(long)]
         json: bool,
@@ -90,9 +102,9 @@ enum Commands {
     Impact {
         /// JSON file holding the change (accept_method, add_evidence).
         change: PathBuf,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the impact report as JSON.
         #[arg(long)]
         json: bool,
@@ -119,9 +131,9 @@ enum Commands {
     Propose {
         /// JSON file holding the patch (add_task, add_method, add_capability).
         patch: PathBuf,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the staged operations as JSON.
         #[arg(long)]
         json: bool,
@@ -132,9 +144,9 @@ enum Commands {
     Accept {
         /// Proposed or derived method id, optionally prefixed with method:.
         method: String,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the decision as JSON.
         #[arg(long)]
         json: bool,
@@ -144,9 +156,9 @@ enum Commands {
     Reject {
         /// Proposed or derived method id, optionally prefixed with method:.
         method: String,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the decision as JSON.
         #[arg(long)]
         json: bool,
@@ -157,9 +169,9 @@ enum Commands {
     Context {
         /// Task id, optionally prefixed with task:.
         task: String,
-        /// Plan file or directory. Defaults to the current directory.
-        #[arg(default_value = ".")]
-        path: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
         /// Emit the fitted slice as JSON.
         #[arg(long)]
         json: bool,
@@ -169,49 +181,68 @@ enum Commands {
     },
 }
 
+/// Resolve an optional plan path: an explicit path passes through
+/// untouched; otherwise `.plan` when that directory holds a plan file,
+/// else `.`.
+fn plan_path(path: Option<PathBuf>) -> PathBuf {
+    path.unwrap_or_else(|| {
+        let default = PathBuf::from(".plan");
+        if default.is_dir() && pc_store::resolve_plan_file(&default).is_ok() {
+            default
+        } else {
+            PathBuf::from(".")
+        }
+    })
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Check { path, json } => run_check(&path, json),
+        Commands::Init { path, json } => run_init(path, json),
+        Commands::Check { path, json } => run_check(&plan_path(path), json),
         Commands::Schema { out, patch } => run_schema(out.as_deref(), patch),
         Commands::Compile {
             path,
             json,
             selection_time_budget_ms,
-        } => run_compile(&path, json, selection_time_budget_ms),
+        } => run_compile(&plan_path(path), json, selection_time_budget_ms),
         Commands::Explain {
             target,
             path,
             json,
             selection_time_budget_ms,
-        } => run_explain(&path, &target, json, selection_time_budget_ms),
-        Commands::Record { evidence, path } => run_record(&evidence, &path),
+        } => run_explain(&plan_path(path), &target, json, selection_time_budget_ms),
+        Commands::Record { evidence, path } => run_record(&evidence, &plan_path(path)),
         Commands::Frontier {
             path,
             json,
             selection_time_budget_ms,
-        } => run_frontier(&path, json, selection_time_budget_ms),
+        } => run_frontier(&plan_path(path), json, selection_time_budget_ms),
         Commands::Impact {
             change,
             path,
             json,
             selection_time_budget_ms,
-        } => run_impact(&change, &path, json, selection_time_budget_ms),
+        } => run_impact(&change, &plan_path(path), json, selection_time_budget_ms),
         Commands::Diff {
             a,
             b,
             json,
             selection_time_budget_ms,
         } => run_diff(&a, &b, json, selection_time_budget_ms),
-        Commands::Propose { patch, path, json } => run_propose(&patch, &path, json),
-        Commands::Accept { method, path, json } => run_decide(&method, &path, json, true),
-        Commands::Reject { method, path, json } => run_decide(&method, &path, json, false),
+        Commands::Propose { patch, path, json } => run_propose(&patch, &plan_path(path), json),
+        Commands::Accept { method, path, json } => {
+            run_decide(&method, &plan_path(path), json, true)
+        }
+        Commands::Reject { method, path, json } => {
+            run_decide(&method, &plan_path(path), json, false)
+        }
         Commands::Context {
             task,
             path,
             json,
             budget,
-        } => run_context(&task, &path, json, budget),
+        } => run_context(&task, &plan_path(path), json, budget),
     }
 }
 
@@ -772,6 +803,151 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
         }
     }
 }
+/// Plan id for a fresh scaffold: the target directory's name, sanitized
+/// to a stable id (`cargo init` names the package after the directory).
+/// Falls back to `my-plan` for `.`, `/`, and names with no usable characters.
+fn scaffold_plan_id(dir: &std::path::Path) -> String {
+    let raw = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let mut id = String::new();
+    for ch in raw.to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            id.push(ch);
+        } else if ch == '-' || ch == '_' {
+            id.push('-');
+        } else if id.ends_with('-') || id.is_empty() {
+            continue;
+        } else {
+            id.push('-');
+        }
+    }
+    let id = id.trim_matches('-').to_string();
+    if id.is_empty() {
+        "my-plan".to_string()
+    } else {
+        id
+    }
+}
+
+/// Minimal valid plan: one open root task, no methods or capabilities.
+/// `pc check` passes on it; the agent proposal loop (`propose`/`accept`)
+/// grows it from here.
+fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
+    pc_ir::PlanDoc {
+        ir_version: pc_ir::IR_VERSION,
+        plan: pc_ir::PlanMeta {
+            id: plan_id.to_string(),
+            title: "My plan".to_string(),
+            description: String::new(),
+            external_inputs: Vec::new(),
+        },
+        objective: pc_ir::Objective {
+            root_task: "start".to_string(),
+            weights: std::collections::BTreeMap::from([("duration_minutes".to_string(), 1.0)]),
+            budget_usd: None,
+            deadline: None,
+            quality_floor: None,
+            acceptance: vec![pc_ir::AcceptanceCriterion {
+                kind: pc_ir::AcceptanceKind::Manual,
+                description: "Someone signs off.".to_string(),
+                command: None,
+                metric: None,
+                op: None,
+                value: None,
+            }],
+        },
+        artifact: Vec::new(),
+        resource: Vec::new(),
+        task: vec![pc_ir::Task {
+            id: "start".to_string(),
+            title: "Start".to_string(),
+            state: pc_ir::TaskState::Open,
+            consumes: Vec::new(),
+            produces: Vec::new(),
+        }],
+        method: Vec::new(),
+        capability: Vec::new(),
+        evidence: Vec::new(),
+    }
+}
+
+/// Handler for `pc init`.
+fn run_init(path: Option<PathBuf>, json: bool) {
+    let defaulted = path.is_none();
+    let path = path.unwrap_or_else(|| PathBuf::from(".plan"));
+    let path = path.as_path();
+    if path.is_file() {
+        eprintln!(
+            "error: cannot scaffold a plan in `{}`: not a directory",
+            path.display()
+        );
+        std::process::exit(1);
+    }
+    // Refuse to overwrite: an existing plan file under the target directory
+    // wins over any scaffold, so a stray `pc init` never clobbers work. A
+    // defaulted `.plan` also guards the current directory, whose plan a new
+    // `.plan/` would otherwise shadow for bare commands.
+    let mut guarded = vec![path];
+    if defaulted {
+        guarded.push(std::path::Path::new("."));
+    }
+    for dir in guarded {
+        if let Ok(existing) = pc_store::resolve_plan_file(dir) {
+            eprintln!(
+                "error: plan already exists at `{}`: refusing to overwrite",
+                existing.display()
+            );
+            std::process::exit(1);
+        }
+    }
+    if let Err(e) = std::fs::create_dir_all(path) {
+        eprintln!("error[E000]: cannot create `{}`: {e}", path.display());
+        std::process::exit(1);
+    }
+    let plan_id = scaffold_plan_id(path);
+    let doc = scaffold_doc(&plan_id);
+    let text = match pc_ir::to_toml(&doc) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error[E000]: cannot render scaffold plan: {e}");
+            std::process::exit(1);
+        }
+    };
+    let file = path.join("plan.toml");
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()));
+    match written {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!(
+                "error: plan already exists at `{}`: refusing to overwrite",
+                file.display()
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("error[E000]: cannot write `{}`: {e}", file.display());
+            std::process::exit(1);
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "plan": file.display().to_string(),
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    println!("initialized plan at {}", file.display());
+}
+
 /// Handler for `pc check`.
 fn run_check(path: &std::path::Path, json: bool) {
     let loaded = match pc_store::load(path) {

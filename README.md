@@ -46,7 +46,7 @@ crates/pc-ir/     IR types, TOML+JSON serde, JSON Schemas (plan + patch)
 crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, P8 frontier, P9 impact/diff, step-7 proposal loop, diagnostics
 crates/pc-select/ P6 exact ILP method selection with greedy fallback
 crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan writer, evidence JSONL append/read
-crates/pc-cli/    pc binary (check, compile, explain, record, frontier, impact, diff, propose, accept, reject, context, schema)
+crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, impact, diff, propose, accept, reject, context, schema)
 crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
@@ -60,6 +60,7 @@ Adapters (`pc-adapter-*`) arrive after the MVP.
 ## Use
 
 ```sh
+pc init [path]     # scaffold .plan/plan.toml (or <path>/plan.toml) that passes pc check; refuses to overwrite
 pc check [path]    # run P1-P5; exit 0 clean, 1 diagnostics, 2 usage
 pc check [path] --json   # full report: diagnostics, counts, trace, contract notes
 pc compile [path]  # effective totals with predicted-vs-measured columns
@@ -74,6 +75,10 @@ pc reject <method> [path]  # flip a proposed/derived method to rejected
 pc context <task> [path] [--budget N]  # budget-fitted slice for the next decomposition
 pc schema [--patch] [--out file]   # emit the canonical JSON Schema (plan or patch)
 ```
+
+Without a `[path]`, commands use `.plan/` when it holds a plan file and the
+current directory otherwise, so a bare `pc check` finds what a bare `pc init`
+made. A bare `pc init` refuses when the current directory already holds a plan.
 
 For tool-only agents, `pc-mcp` (`cargo run -q -p pc-mcp`) is a read-only
 MCP stdio server whose `check`, `compile` and `frontier` tools take a plan
