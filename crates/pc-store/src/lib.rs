@@ -2,7 +2,7 @@
 //!
 //! State is text files: a `plan.toml` (or `plan.json`) plus an optional
 //! sibling `evidence.jsonl`. This crate owns the filesystem layout; passes
-//! P1-P2 in `pc-core` own validation. There is no database in v0.
+//! P1-P5 in `pc-core` own validation; [`LoadedPlan::check`] runs them. There is no database in v0.
 
 use pc_ir::{Evidence, PlanDoc, canonical_unit};
 use std::path::{Path, PathBuf};
@@ -20,6 +20,27 @@ pub struct LoadedPlan {
     pub evidence_file: Option<String>,
     /// 1-based `evidence.jsonl` line of each record appended to `doc.evidence`.
     pub evidence_lines: Vec<u32>,
+}
+
+impl LoadedPlan {
+    /// Run passes P1-P5 over a copy of the document.
+    ///
+    /// Returns the passed copy (carrying P3 derived proposals, P4 share
+    /// merges and P1 unit canonicalization) plus its report. The copy is
+    /// what compile, frontier and explain run over; it must never be
+    /// written back to the plan file.
+    pub fn check(&self) -> (PlanDoc, pc_core::passes::Report) {
+        let mut doc = self.doc.clone();
+        let evidence_log = self
+            .evidence_file
+            .as_deref()
+            .map(|file| pc_core::passes::EvidenceLog {
+                file,
+                lines: &self.evidence_lines,
+            });
+        let report = pc_core::passes::check(&self.display_path, &self.text, &mut doc, evidence_log);
+        (doc, report)
+    }
 }
 
 /// Errors reading a plan from disk. The CLI renders these as `error[E000]`

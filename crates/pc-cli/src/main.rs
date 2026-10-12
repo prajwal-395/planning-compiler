@@ -223,15 +223,7 @@ fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passe
             std::process::exit(1);
         }
     };
-    let mut doc = loaded.doc.clone();
-    let evidence_log = loaded
-        .evidence_file
-        .as_deref()
-        .map(|file| pc_core::passes::EvidenceLog {
-            file,
-            lines: &loaded.evidence_lines,
-        });
-    let report = pc_core::passes::check(&loaded.display_path, &loaded.text, &mut doc, evidence_log);
+    let (doc, report) = loaded.check();
     if !report.ok() {
         for diag in &report.diagnostics {
             eprintln!("{}", pc_core::render_human(diag));
@@ -754,15 +746,7 @@ fn run_check(path: &std::path::Path, json: bool) {
             std::process::exit(1);
         }
     };
-    let mut doc = loaded.doc;
-    let evidence_log = loaded
-        .evidence_file
-        .as_deref()
-        .map(|file| pc_core::passes::EvidenceLog {
-            file,
-            lines: &loaded.evidence_lines,
-        });
-    let report = pc_core::passes::check(&loaded.display_path, &loaded.text, &mut doc, evidence_log);
+    let (_, report) = loaded.check();
     if json {
         println!(
             "{}",
@@ -1016,15 +1000,7 @@ fn load_side(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passes::
             std::process::exit(1);
         }
     };
-    let mut doc = loaded.doc.clone();
-    let evidence_log = loaded
-        .evidence_file
-        .as_deref()
-        .map(|file| pc_core::passes::EvidenceLog {
-            file,
-            lines: &loaded.evidence_lines,
-        });
-    let report = pc_core::passes::check(&loaded.display_path, &loaded.text, &mut doc, evidence_log);
+    let (doc, report) = loaded.check();
     let mut loaded = loaded;
     loaded.doc = doc;
     (loaded, report)
@@ -1169,30 +1145,6 @@ fn load_pristine(path: &std::path::Path) -> pc_store::LoadedPlan {
     }
 }
 
-/// Probe-check a copy of the pristine plan.
-///
-/// Returns the checked copy (carrying the P3 derived proposals `accept` and
-/// `reject` can materialize) plus its report. Step-7 edits require a clean
-/// plan first: a dirty plan means a hand edit or an older write broke it,
-/// and layering a decision on top would only hide the breakage.
-fn checked_copy(loaded: &pc_store::LoadedPlan) -> (pc_ir::PlanDoc, pc_core::passes::Report) {
-    let mut probed = loaded.doc.clone();
-    let evidence_log = loaded
-        .evidence_file
-        .as_deref()
-        .map(|file| pc_core::passes::EvidenceLog {
-            file,
-            lines: &loaded.evidence_lines,
-        });
-    let report = pc_core::passes::check(
-        &loaded.display_path,
-        &loaded.text,
-        &mut probed,
-        evidence_log,
-    );
-    (probed, report)
-}
-
 /// Refuse a write when the plan under edit is already dirty.
 fn require_clean(report: &pc_core::passes::Report) {
     if report.ok() {
@@ -1289,7 +1241,7 @@ fn run_propose(patch_path: &std::path::Path, path: &std::path::Path, json: bool)
         }
     };
     let loaded = load_pristine(path);
-    let (_, report) = checked_copy(&loaded);
+    let (_, report) = loaded.check();
     require_clean(&report);
     if let Err(e) = pc_core::validate_patch(&loaded.doc, &patch) {
         eprintln!("error: invalid patch: {e}");
@@ -1305,7 +1257,7 @@ fn run_propose(patch_path: &std::path::Path, path: &std::path::Path, json: bool)
 /// Handler for `pc accept` and `pc reject`.
 fn run_decide(id: &str, path: &std::path::Path, json: bool, accept: bool) {
     let loaded = load_pristine(path);
-    let (checked_doc, report) = checked_copy(&loaded);
+    let (checked_doc, report) = loaded.check();
     require_clean(&report);
     let id = id.strip_prefix("method:").unwrap_or(id);
     let mut edited = loaded.doc.clone();

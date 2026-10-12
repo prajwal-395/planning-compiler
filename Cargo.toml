@@ -6,6 +6,7 @@ members = [
     "crates/pc-select",
     "crates/pc-store",
     "crates/pc-cli",
+    "crates/pc-mcp",
 ]
 
 [workspace.package]
