@@ -152,7 +152,12 @@ fn self_plan_compiles_and_explains_accepted_work() {
     // Every finished step is a done leaf and no remaining task has an
     // accepted method, so there is no executable work to roll up: makespan
     // 0 with no metric totals, and the open step-8/post-MVP work listed.
-    assert!(text.contains("makespan 0.000 minutes"), "{text}");
+    assert!(
+        text.contains(
+            "makespan low 0.000, likely 0.000, high 0.000, expected 0.000 (optimistic) minutes"
+        ),
+        "{text}"
+    );
     assert!(text.contains("parallel width 0"), "{text}");
     assert!(!text.contains("duration_minutes:"), "{text}");
     assert!(text.contains("unresolved: dogfood-2wk"), "{text}");
@@ -359,9 +364,65 @@ fn parallel_critical_tasks_are_not_chained() {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("makespan 5.000 minutes"), "{text}");
+    assert!(
+        text.contains(
+            "makespan low 5.000, likely 5.000, high 5.000, expected 5.000 (optimistic) minutes"
+        ),
+        "{text}"
+    );
     assert!(text.contains("critical tasks: a, b\n"), "{text}");
     assert!(!text.contains("->"), "{text}");
+}
+
+/// Compile reports the low/likely/high makespan range in text and JSON,
+/// matching the duration total and labelling the PERT expectation optimistic.
+/// Fails on the old single-value `makespan <expected> minutes` output.
+#[test]
+fn compile_reports_makespan_range() {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root().join("tests").join("fixtures"))
+        .arg("compile")
+        .arg("evidence-flip")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains(
+            "makespan low 9.000, likely 10.000, high 11.000, expected 10.000 (optimistic) minutes"
+        ),
+        "{text}"
+    );
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root().join("tests").join("fixtures"))
+        .arg("compile")
+        .arg("evidence-flip")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["makespan_range"],
+        serde_json::json!({"low": 9.0, "likely": 10.0, "high": 11.0, "expected": 10.0}),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        value["makespan_range"], value["totals"]["duration_minutes"],
+        "makespan range matches the duration total, which already carried a range"
+    );
+    assert_eq!(
+        value["makespan_minutes"],
+        value["makespan_range"]["expected"]
+    );
 }
 
 /// Diagnostics for `evidence.jsonl` records point at the log line.
@@ -1314,7 +1375,12 @@ fn proposal_loop_agent_play() {
     // Fully selected: outline runs, then write (2.0 + 4.0 expected minutes),
     // with review in parallel.
     let compiled = pc_ok(&dir, &["compile"]);
-    assert!(compiled.contains("makespan 6.000 minutes"), "{compiled}");
+    assert!(
+        compiled.contains(
+            "makespan low 3.000, likely 6.000, high 9.000, expected 6.000 (optimistic) minutes"
+        ),
+        "{compiled}"
+    );
     assert!(!compiled.contains("unresolved:"), "{compiled}");
     let json = pc_ok(&dir, &["compile", "--json"]);
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();

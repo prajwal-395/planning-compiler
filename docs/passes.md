@@ -216,7 +216,22 @@ chosen method or the missing estimate that made them ineligible.
 It preserves three-point estimates, uses PERT expected durations for CPM,
 reports earliest/latest times, slack, critical tasks, parallel width (tasks
 with zero expected duration are not counted), and the
-low/likely/high makespan. Roll-ups and durations run on the P5 effective
+low/likely/high makespan. The text headline reads
+`compiled: <root> (<path>); makespan low <L>, likely <M>, high <H>,
+expected <E> (optimistic) minutes; parallel width <W>`: the low, likely
+and high spans are the CPM makespan over each executable task's low,
+likely and high durations, and the expected span is the CPM makespan over
+each task's PERT expected duration. The expected span is labelled
+`(optimistic)` because CPM over expectations ignores PERT merge bias (the
+exact duration distribution is #P-complete); it equals `makespan_minutes`
+in `--json`, while `makespan_range` carries the full
+`{low, likely, high, expected}` triple in both. `makespan_range` matches
+`totals["duration_minutes"]` whenever executable work exists (both are the
+same CPM range; the totals line quotes it with its predicted-versus-measured
+basis), and is the zero range when no executable work exists. The `plan /
+analyzed` trace row records the same range as
+`P7 CPM makespan low <L>, likely <M>, high <H>, expected <E> (optimistic)
+minutes; parallel width <W>`. Roll-ups and durations run on the P5 effective
 estimates, with the declared-only prediction beside each total.
 Unresolved tasks are listed with zero rolled work;
 this pass never chooses among methods. Money sums across invoked work and

@@ -130,8 +130,17 @@ pub struct CompiledPlan {
     /// Evidence for subjects not in the plan, held until the subject is
     /// proposed. Sorted by `(subject, metric, basis)`.
     pub pending_evidence: Vec<crate::estimate::PendingEvidence>,
-    /// Expected duration in minutes, equal to the CPM makespan.
+    /// Expected duration in minutes, equal to the CPM makespan over PERT
+    /// expected task durations. This is the optimistic PERT estimate: CPM
+    /// over expectations ignores merge bias, so the text labels it
+    /// `(optimistic)`. Kept for compatibility; prefer `makespan_range`.
     pub makespan_minutes: f64,
+    /// Low, likely, high and expected makespan in minutes: the CPM span over
+    /// each task's low, likely, high and PERT expected durations. Matches
+    /// `totals["duration_minutes"]` when executable work exists (zero range
+    /// otherwise). The `expected` equals `makespan_minutes` and carries the
+    /// same optimistic PERT bias.
+    pub makespan_range: EstimateRange,
     /// Maximum number of simultaneously executable leaf tasks. Tasks with
     /// zero expected duration occupy no time and are not counted.
     pub parallel_width: usize,
@@ -572,6 +581,7 @@ pub fn compile_with_budget(
     let predicted_totals = rollup(&nodes, |n| &n.predicted);
     let (duration, timings, width) = cpm(&nodes, &edges)?;
     let makespan = duration.expected;
+    let makespan_range = duration;
     if !nodes.is_empty() {
         totals.insert("duration_minutes".into(), duration);
     }
@@ -672,7 +682,10 @@ pub fn compile_with_budget(
     trace.push(CompileTrace {
         subject: "plan".into(),
         decision: "analyzed".into(),
-        reason: format!("P7 CPM makespan {makespan:.3} minutes; parallel width {width}"),
+        reason: format!(
+            "P7 CPM makespan low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (optimistic) minutes; parallel width {width}",
+            makespan_range.low, makespan_range.likely, makespan_range.high, makespan,
+        ),
     });
     // Provenance report: every measured profile plus every used
     // capability's metrics, sorted by (capability, metric, basis) as
@@ -778,6 +791,7 @@ pub fn compile_with_budget(
         staged_evidence: estimated.staged,
         pending_evidence: estimated.pending,
         makespan_minutes: makespan,
+        makespan_range,
         parallel_width: width,
         timings,
         unresolved_tasks: unresolved.into_iter().collect(),

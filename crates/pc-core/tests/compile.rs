@@ -66,6 +66,25 @@ fn cap(id: &str, minutes: f64) -> Capability {
         resources: vec![],
     }
 }
+fn cap_range(id: &str, low: f64, likely: f64, high: f64) -> Capability {
+    Capability {
+        id: id.into(),
+        kind: CapabilityKind::Tool,
+        version: "1".into(),
+        consumes: vec![],
+        produces: vec![],
+        estimates: vec![Estimate {
+            metric: "duration_minutes".into(),
+            low,
+            likely,
+            high,
+            provenance: EstimateProvenance::Declared,
+            observations: None,
+            window: None,
+        }],
+        resources: vec![],
+    }
+}
 fn doc(tasks: Vec<Task>, methods: Vec<Method>, caps: Vec<Capability>) -> PlanDoc {
     PlanDoc {
         ir_version: 0,
@@ -134,6 +153,51 @@ fn textbook_cpm_forward_backward_and_parallel_width() {
     assert_eq!(compiled.timings["b"].slack, 3.0);
     assert!(compiled.timings["c"].critical);
     assert_eq!(compiled.totals["duration_minutes"].expected, 12.0);
+}
+
+#[test]
+fn makespan_reports_low_likely_high_range() {
+    // Two sequential tasks with wide triples: the makespan range must span
+    // the CPM over each bound, not collapse to the single expected value.
+    // Fails on the old single-value output (no `makespan_range` to assert).
+    let plan = doc(
+        vec![
+            task("root", TaskState::Decomposed),
+            task("a", TaskState::Resolved),
+            task("b", TaskState::Resolved),
+        ],
+        vec![
+            decompose("r", "root", &["a", "b"], &[("a", "b")]),
+            invoke("ia", "a", "ca"),
+            invoke("ib", "b", "cb"),
+        ],
+        vec![
+            cap_range("ca", 1.0, 2.0, 9.0),
+            cap_range("cb", 3.0, 4.0, 5.0),
+        ],
+    );
+    let compiled = compile(&plan).unwrap();
+    let range = compiled.makespan_range;
+    assert_eq!(range.low, 4.0, "critical-path low span");
+    assert_eq!(range.likely, 6.0, "critical-path likely span");
+    assert_eq!(range.high, 14.0, "critical-path high span");
+    assert_eq!(
+        compiled.makespan_minutes, range.expected,
+        "legacy single value stays the (optimistic) expected span"
+    );
+    assert_eq!(
+        compiled.totals["duration_minutes"], range,
+        "makespan range matches the duration total, which already carried a range"
+    );
+    assert!(
+        compiled.trace.iter().any(|row| row.subject == "plan"
+            && row.decision == "analyzed"
+            && row.reason.contains("low 4.000")
+            && row.reason.contains("likely 6.000")
+            && row.reason.contains("high 14.000")
+            && row.reason.contains("(optimistic)")),
+        "trace names the range and the optimistic PERT bias"
+    );
 }
 
 #[test]

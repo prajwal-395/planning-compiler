@@ -311,8 +311,14 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
         return;
     }
     println!(
-        "compiled: {} ({}); makespan {:.3} minutes; parallel width {}",
-        result.root_task, loaded.display_path, result.makespan_minutes, result.parallel_width
+        "compiled: {} ({}); makespan low {:.3}, likely {:.3}, high {:.3}, expected {:.3} (optimistic) minutes; parallel width {}",
+        result.root_task,
+        loaded.display_path,
+        result.makespan_range.low,
+        result.makespan_range.likely,
+        result.makespan_range.high,
+        result.makespan_minutes,
+        result.parallel_width
     );
     println!(
         "selection: {} ({} ms budget)",
