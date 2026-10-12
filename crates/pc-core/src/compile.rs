@@ -116,6 +116,20 @@ pub struct ProvenanceRow {
     pub sources: Vec<String>,
 }
 
+/// Estimated remaining work behind `pc compile`'s open-work line: the open
+/// tasks the P8 frontier already values, plus the open tasks it cannot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenWorkSummary {
+    /// Sum of the frontier's per-task weighted expected costs over the
+    /// estimated open tasks (largest contract-clean pending invoke per
+    /// task). Zero when no open task has an estimate.
+    pub estimated_weighted_cost: f64,
+    /// Unresolved live tasks with a frontier estimate, in lexical order.
+    pub estimated_tasks: Vec<String>,
+    /// Unresolved live tasks with no frontier estimate, in lexical order.
+    pub unestimated_tasks: Vec<String>,
+}
+
 /// Roll-ups and CPM timing for the reachable accepted plan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledPlan {
@@ -167,6 +181,11 @@ pub struct CompiledPlan {
     /// Chosen method per needed task: the P6 selection P8 and P9 read
     /// without re-solving.
     pub selection: BTreeMap<String, String>,
+    /// Estimated remaining open work from the P8 frontier's own numbers:
+    /// the summed weighted cost over estimated open tasks beside the open
+    /// tasks with no estimate, so a zero makespan beside open work no
+    /// longer reads as done. Never changes the makespan or its meaning.
+    pub open_work: OpenWorkSummary,
 }
 
 /// One stable explanation record from compilation.
@@ -792,6 +811,12 @@ pub fn compile_with_budget(
             });
         }
     }
+    let unresolved_tasks: Vec<String> = unresolved.into_iter().collect();
+    // The open-work line reuses the P8 frontier's own per-task estimates,
+    // so a zero makespan beside open work reads as remaining work, not
+    // done. It never changes the makespan or its meaning, and the ranking
+    // itself is untouched.
+    let open_work = crate::frontier::open_work(doc, &doc.objective.root_task, &unresolved_tasks);
     Ok(CompiledPlan {
         root_task: doc.objective.root_task.clone(),
         totals,
@@ -804,11 +829,12 @@ pub fn compile_with_budget(
         makespan_range,
         parallel_width: width,
         timings,
-        unresolved_tasks: unresolved.into_iter().collect(),
+        unresolved_tasks,
         trace,
         selection_status: selection_status(&selection.optimality),
         selection_time_budget_ms: selection.time_budget.as_millis() as u64,
         selection: selection.methods,
+        open_work,
     })
 }
 

@@ -20,15 +20,15 @@ pub mod passes;
 pub mod propose;
 
 pub use compile::{
-    CompileError, CompileTrace, CompiledPlan, EstimateRange, MetricBasis, ProvenanceRow,
-    TaskTiming, compile, compile_with_budget,
+    CompileError, CompileTrace, CompiledPlan, EstimateRange, MetricBasis, OpenWorkSummary,
+    ProvenanceRow, TaskTiming, compile, compile_with_budget,
 };
 pub use diagnostic::{Diagnostic, render_human};
 pub use estimate::{
     BasisConflict, EstimateReport, PendingEvidence, StagedEvidence, UnattributedTaskEvidence,
     basis_name, estimate,
 };
-pub use frontier::{FrontierItem, FrontierReport, frontier};
+pub use frontier::{FrontierItem, FrontierReport, frontier, open_work};
 pub use impact::{
     Change, ContractNote, DiffReport, ImpactError, ImpactReport, contract_note_for, delta_bases,
     diff, impact, status_str,

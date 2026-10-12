@@ -234,7 +234,13 @@ analyzed` trace row records the same range as
 minutes; parallel width <W>`. Roll-ups and durations run on the P5 effective
 estimates, with the declared-only prediction beside each total.
 Unresolved tasks are listed with zero rolled work;
-this pass never chooses among methods. Money sums across invoked work and
+this pass never chooses among methods. `pc compile` also prints an
+open-work line (and `open_work` in `--json`): the P8 frontier's summed
+weighted cost over the estimated open tasks beside the count of open
+tasks with no estimate, so a zero makespan beside open work reads as
+remaining work, not done. The line never changes the makespan or its
+meaning, and the frontier ranking itself is untouched.
+Money sums across invoked work and
 failure risk combines independent task risks as `1 - product(1 - risk)`.
 `pc explain` lists each selected method's assumptions and each executable
 task's slack and critical status. `pc explain method:<id>` joins that

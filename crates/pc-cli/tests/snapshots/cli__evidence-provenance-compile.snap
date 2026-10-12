@@ -7,3 +7,4 @@ selection: optimal (2000 ms budget)
 duration_minutes: observed range low 9.000, likely 10.000, high 11.000, expected 10.000 (predicted 10.000; measured 1/1; basis none; 3 observations)
 critical tasks: job
 slack job: 0.000 minutes (critical)
+open work: estimated weighted cost 0.000 across 0 tasks; 0 open tasks unestimated

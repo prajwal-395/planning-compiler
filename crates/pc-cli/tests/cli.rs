@@ -319,6 +319,94 @@ fn self_plan_compiles_and_explains_accepted_work() {
     );
 }
 
+/// Item pc-open-work-headline: `pc compile` on the self-plan states the
+/// estimated remaining open work beside the zero makespan, in text and
+/// `--json`, without changing the makespan or its meaning.
+#[test]
+fn self_plan_compile_reports_open_work() {
+    let mut compile = Command::cargo_bin("pc").unwrap();
+    compile.current_dir(workspace_root());
+    compile.arg("compile").arg("examples/self-plan");
+    let output = compile.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    // The zero is correct per the IR (unresolved tasks roll zero work), so
+    // the open-work line must sit beside it: estimated frontier work plus
+    // the unestimated count, never a changed makespan.
+    assert!(
+        text.contains(
+            "makespan low 0.000, likely 0.000, high 0.000, expected 0.000 (optimistic) minutes"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "open work: estimated weighted cost 335.323 across 2 tasks; 11 open tasks unestimated"
+        ),
+        "{text}"
+    );
+
+    let mut json = Command::cargo_bin("pc").unwrap();
+    json.current_dir(workspace_root());
+    let output = json
+        .arg("compile")
+        .arg("examples/self-plan")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["makespan_minutes"], serde_json::json!(0.0));
+    let open = &report["open_work"];
+    let cost = open["estimated_weighted_cost"].as_f64().unwrap();
+    assert!(
+        (cost - 335.323).abs() < 0.01,
+        "estimated open cost {cost} should match the frontier open total"
+    );
+    assert_eq!(
+        open["estimated_tasks"],
+        serde_json::json!(["post-mvp-08-scheduling", "post-mvp-09-sqlite"]),
+        "{open}"
+    );
+    let unestimated: Vec<String> = open["unestimated_tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(unestimated.len(), 11, "{open}");
+    assert!(unestimated.contains(&"dogfood-2wk".to_string()), "{open}");
+    assert!(
+        unestimated.contains(&"post-mvp-01-tasks-axi".to_string()),
+        "{open}"
+    );
+    assert!(
+        unestimated.contains(&"post-mvp-11-mining".to_string()),
+        "{open}"
+    );
+    // Every unresolved task is accounted for exactly once.
+    let mut accounted: Vec<serde_json::Value> = open["estimated_tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(open["unestimated_tasks"].as_array().unwrap().iter())
+        .cloned()
+        .collect();
+    let mut unresolved: Vec<serde_json::Value> =
+        report["unresolved_tasks"].as_array().unwrap().clone();
+    accounted.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    unresolved.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    assert_eq!(accounted, unresolved, "{open}");
+}
+
 /// The next dogfood decision (accepting a pending backend proposal) keeps
 /// the self-plan feasible: every proposed capability declares the cost and
 /// risk the objective's budget and quality floor require.

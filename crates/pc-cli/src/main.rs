@@ -291,6 +291,23 @@ fn pending_line(entry: &pc_core::PendingEvidence) -> String {
     )
 }
 
+/// One text line for the estimated remaining open work in compile output:
+/// the frontier's summed weighted cost over estimated open tasks beside
+/// the count of open tasks with no estimate, so a zero makespan beside
+/// open work no longer reads as done.
+fn open_work_line(summary: &pc_core::OpenWorkSummary) -> String {
+    let estimated = summary.estimated_tasks.len();
+    let unestimated = summary.unestimated_tasks.len();
+    format!(
+        "open work: estimated weighted cost {:.3} across {} {}; {} open {} unestimated",
+        summary.estimated_weighted_cost,
+        estimated,
+        if estimated == 1 { "task" } else { "tasks" },
+        unestimated,
+        if unestimated == 1 { "task" } else { "tasks" },
+    )
+}
+
 fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
     let (loaded, _) = load_checked(path);
     let result = match pc_core::compile_with_budget(
@@ -387,6 +404,7 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
     if !result.unresolved_tasks.is_empty() {
         println!("unresolved: {}", result.unresolved_tasks.join(", "));
     }
+    println!("{}", open_work_line(&result.open_work));
     for entry in &result.unattributed_tasks {
         println!("{}", unattributed_line(entry));
     }

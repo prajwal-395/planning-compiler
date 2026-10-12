@@ -383,6 +383,64 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
     }
 }
 
+/// Estimated remaining open work for `pc compile`'s open-work line, using
+/// the frontier's own numbers: the summed per-task weighted expected cost
+/// over the unresolved live tasks that carry a contract-clean pending
+/// estimate, beside the unresolved live tasks with no such estimate.
+/// Blocked alternatives never feed the total, matching the ranking, and
+/// this never re-ranks anything.
+#[must_use]
+pub fn open_work(
+    doc: &PlanDoc,
+    root_task: &str,
+    unresolved_tasks: &[String],
+) -> crate::compile::OpenWorkSummary {
+    let live = live_tasks(doc, root_task);
+    let estimated = crate::estimate(doc);
+    let effective = estimated.effective_map();
+    let pending = pending_invokes(doc, &live);
+    // Per-task largest cost among contract-clean pending invokes with a
+    // weighted estimate, mirroring the ranked group's open total but
+    // restricted to open tasks below.
+    let mut task_cost: BTreeMap<String, f64> = BTreeMap::new();
+    for method in &pending {
+        if crate::impact::contract_note_for(doc, method).is_some() {
+            continue;
+        }
+        let Some(cost) = method
+            .capability
+            .as_deref()
+            .and_then(|cap| capability_cost(cap, &effective, &doc.objective.weights))
+        else {
+            continue;
+        };
+        let entry = task_cost.entry(method.task.clone()).or_insert(cost);
+        *entry = entry.max(cost);
+    }
+    let mut estimated_tasks = Vec::new();
+    let mut unestimated_tasks = Vec::new();
+    let mut total = 0.0;
+    let mut unresolved: Vec<&String> = unresolved_tasks.iter().collect();
+    unresolved.sort();
+    for id in unresolved {
+        if !live.contains(id) {
+            continue;
+        }
+        match task_cost.get(id) {
+            Some(cost) => {
+                total += cost;
+                estimated_tasks.push(id.clone());
+            }
+            None => unestimated_tasks.push(id.clone()),
+        }
+    }
+    crate::compile::OpenWorkSummary {
+        estimated_weighted_cost: total,
+        estimated_tasks,
+        unestimated_tasks,
+    }
+}
+
 /// Sort one group and flag its genuine ties: entries sharing score and kind
 /// keep subject order, not priority, and the reason says so instead of
 /// hiding behind the sort.
