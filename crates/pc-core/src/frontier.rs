@@ -112,6 +112,31 @@ pub struct FrontierItem {
     pub reason: String,
 }
 
+impl FrontierItem {
+    /// One text line naming the entry, its kind and its flags, shared by
+    /// `pc context` and `pc explain task:` so both read identically.
+    #[must_use]
+    pub fn line(&self) -> String {
+        let mut flags = String::new();
+        if self.critical {
+            flags.push_str(" (critical)");
+        }
+        if !self.ready {
+            flags.push_str(" (blocked)");
+        }
+        if self.tied {
+            flags.push_str(" (tied)");
+        }
+        if self.score.is_some() && !self.estimated {
+            flags.push_str(" (unestimated)");
+        }
+        format!(
+            "frontier {} [{}]{}: {}",
+            self.subject, self.kind, flags, self.reason
+        )
+    }
+}
+
 /// Deterministically ranked unresolved work, best first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrontierReport {

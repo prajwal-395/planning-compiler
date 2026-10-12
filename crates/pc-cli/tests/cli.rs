@@ -1296,6 +1296,167 @@ fn explain_method_joins_provenance_and_contract() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// R5: `explain task:` joins the task's selection, its slack/criticality
+/// timing and the frontier entries touching it (the same entries `pc
+/// context` assembles), with text and `--json` agreeing. Other subject
+/// kinds are out of scope: their output stays byte-identical.
+#[test]
+fn explain_task_shows_selection_timing_and_frontier() {
+    let explain = |target: &str, plan: &std::path::Path, json: bool| {
+        let mut cmd = Command::cargo_bin("pc").unwrap();
+        cmd.arg("explain").arg(target).arg(plan);
+        if json {
+            cmd.arg("--json");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let context = |task: &str, plan: &std::path::Path| {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg("context")
+            .arg(task)
+            .arg(plan)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let decided = workspace_root().join("examples/transcription-substitution/decided.toml");
+    let proposed = workspace_root().join("examples/transcription-substitution/plan.toml");
+
+    // Accepted critical leaf: the trace rows carry selection and timing,
+    // each stated exactly once in text.
+    let text = explain("task:transcribe-footage", &decided, false);
+    let count = |text: &str, needle: &str| text.matches(needle).count();
+    assert_eq!(
+        count(
+            &text,
+            "task:transcribe-footage: accepted (uses method:via-hybrid)"
+        ),
+        1,
+        "{text}"
+    );
+    assert_eq!(count(&text, "via-hybrid"), 1, "{text}");
+    assert_eq!(
+        count(
+            &text,
+            "task:transcribe-footage: critical (slack 0.000 minutes;"
+        ),
+        1,
+        "{text}"
+    );
+    assert_eq!(count(&text, "slack"), 1, "{text}");
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("task:transcribe-footage", &decided, true)).unwrap();
+    assert_eq!(value["selection"], "via-hybrid");
+    assert_eq!(value["timing"]["critical"], true);
+    assert_eq!(value["timing"]["slack"], 0.0);
+    assert_eq!(value["frontier"].as_array().unwrap().len(), 0);
+    // Text and JSON agree on the timing numbers.
+    assert!(
+        text.contains(&format!(
+            "earliest {:.3}-{:.3}",
+            value["timing"]["earliest_start"].as_f64().unwrap(),
+            value["timing"]["earliest_finish"].as_f64().unwrap(),
+        )),
+        "{text}"
+    );
+
+    // Unresolved open task: the frontier entry touching it renders beside
+    // the unresolved row, identically to `pc context`.
+    let text = explain("task:emit-confidence-notice", &decided, false);
+    assert_eq!(
+        count(
+            &text,
+            "task:emit-confidence-notice: unresolved (no accepted method)"
+        ),
+        1,
+        "{text}"
+    );
+    assert_eq!(count(&text, "unresolved"), 1, "{text}");
+    let context_text = context("emit-confidence-notice", &decided);
+    let context_frontier: Vec<&str> = context_text
+        .lines()
+        .filter(|line| line.starts_with("frontier "))
+        .collect();
+    assert_eq!(context_frontier.len(), 1);
+    assert!(
+        text.contains(context_frontier[0]),
+        "explain misses context frontier line:\n{text}\n{context_text}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("task:emit-confidence-notice", &decided, true)).unwrap();
+    assert_eq!(value["selection"], serde_json::Value::Null);
+    assert_eq!(value["timing"], serde_json::Value::Null);
+    let frontier = value["frontier"].as_array().unwrap();
+    assert_eq!(frontier.len(), 1);
+    assert_eq!(frontier[0]["subject"], "task:emit-confidence-notice");
+    assert_eq!(frontier[0]["kind"], "open-task");
+    // The text frontier line carries the same reason the JSON does.
+    assert!(
+        text.contains(frontier[0]["reason"].as_str().unwrap()),
+        "{text}"
+    );
+
+    // A task touched by a blocked proposal surfaces the blocked
+    // alternative, worded exactly as the context entry words it.
+    let text = explain("task:transcribe-footage", &proposed, false);
+    assert!(
+        text.contains(
+            "frontier method:via-hybrid [blocked-alternative] (critical): accepting it would drop transcript.segment_confidence (consumed by select-lines)"
+        ),
+        "{text}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("task:transcribe-footage", &proposed, true)).unwrap();
+    let frontier = value["frontier"].as_array().unwrap();
+    assert!(
+        frontier
+            .iter()
+            .any(|item| item["subject"] == "method:via-hybrid"
+                && item["kind"] == "blocked-alternative"),
+        "{frontier:?}"
+    );
+
+    // Out of scope guard: method and capability views carry no task join.
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("method:via-hybrid", &decided, true)).unwrap();
+    for key in ["selection", "timing", "frontier"] {
+        assert_eq!(value.get(key), None, "{key} leaked into method view");
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&explain("capability:whisperx@3", &decided, true)).unwrap();
+    for key in ["selection", "timing", "frontier"] {
+        assert_eq!(value.get(key), None, "{key} leaked into capability view");
+    }
+
+    // Unknown tasks still fail like before.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("explain")
+        .arg("task:nope")
+        .arg(&decided)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("no explanation for `task:nope` in reachable accepted plan"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A scratch plan directory for `pc record` tests, under the system temp
 /// dir so the worktree stays clean.
 fn scratch_dir(name: &str) -> PathBuf {

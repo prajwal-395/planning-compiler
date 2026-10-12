@@ -247,6 +247,12 @@ task's slack and critical status. `pc explain method:<id>` joins that
 method's assumptions (from the IR, so proposed methods show them too) with
 its invoked capability's provenance rows and its contract exposure, so one
 view carries assumptions, measurement basis and dropped-field consumers.
+`pc explain task:<id>` joins that task's selection, its slack/critical
+timing and the frontier entries touching it (the same entries `pc context`
+assembles for the task), so one view carries selection, schedule position
+and remaining planning work. Text states each fact once (the trace rows carry
+selection and timing, followed by `frontier` lines); `--json` adds
+`selection`, `timing` and `frontier` keys for task targets only.
 
 ## P8: frontier (step 6)
 

@@ -523,30 +523,65 @@ fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_
             .collect(),
         None => Vec::new(),
     };
+    // R5: `explain task:` joins the task's selection, its slack/criticality
+    // and the frontier entries touching it, reusing the `pc context`
+    // assembly so both commands filter frontier identically. Other subject
+    // kinds are untouched: their output stays byte-identical.
+    let task_context = target.strip_prefix("task:").and_then(|id| {
+        let frontier_report = pc_core::frontier(&loaded.doc, &result);
+        pc_core::context(&loaded.doc, &result, &frontier_report, id).ok()
+    });
+    let timing = task_context
+        .as_ref()
+        .and_then(|ctx| result.timings.get(&ctx.task.id));
     if rows.is_empty()
         && provenance.is_empty()
         && unattributed.is_empty()
         && staged.is_empty()
         && contract_notes.is_empty()
+        && task_context.as_ref().is_none_or(|ctx| {
+            ctx.task.selected_method.is_none() && timing.is_none() && ctx.frontier.is_empty()
+        })
     {
         eprintln!("error: no explanation for `{target}` in reachable accepted plan");
         std::process::exit(1);
     }
     if json {
+        let mut view = serde_json::json!({
+            "rows": rows,
+            "provenance": provenance,
+            "unattributed_tasks": unattributed,
+            "staged_evidence": staged,
+            "contract_notes": contract_notes,
+        });
+        if let Some(ctx) = &task_context {
+            view["selection"] = serde_json::json!(ctx.task.selected_method);
+            view["timing"] = serde_json::json!(timing);
+            view["frontier"] = serde_json::json!(ctx.frontier);
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "rows": rows,
-                "provenance": provenance,
-                "unattributed_tasks": unattributed,
-                "staged_evidence": staged,
-                "contract_notes": contract_notes,
-            }))
-            .unwrap_or_default()
+            serde_json::to_string_pretty(&view).unwrap_or_default()
         );
     } else {
+        let selection_stated = rows
+            .iter()
+            .any(|row| matches!(row.decision.as_str(), "accepted" | "unresolved" | "skipped"));
         for row in rows {
             println!("{}: {} ({})", row.subject, row.decision, row.reason);
+        }
+        if let Some(ctx) = &task_context {
+            if !selection_stated {
+                match &ctx.task.selected_method {
+                    Some(chosen) => println!("{target}: selected (uses method:{chosen})"),
+                    None => {
+                        println!("{target}: not selected (unreachable from the objective root)")
+                    }
+                }
+            }
+            for item in &ctx.frontier {
+                println!("{}", item.line());
+            }
         }
         for row in &provenance {
             println!("{}", provenance_line(row));

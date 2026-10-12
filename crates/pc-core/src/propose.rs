@@ -1134,23 +1134,8 @@ pub fn render_context_text(report: &ContextReport) -> String {
         out.push('\n');
     }
     for item in &report.frontier {
-        let mut flags = String::new();
-        if item.critical {
-            flags.push_str(" (critical)");
-        }
-        if !item.ready {
-            flags.push_str(" (blocked)");
-        }
-        if item.tied {
-            flags.push_str(" (tied)");
-        }
-        if item.score.is_some() && !item.estimated {
-            flags.push_str(" (unestimated)");
-        }
-        out.push_str(&format!(
-            "frontier {} [{}]{}: {}\n",
-            item.subject, item.kind, flags, item.reason
-        ));
+        out.push_str(&item.line());
+        out.push('\n');
     }
     out
 }
