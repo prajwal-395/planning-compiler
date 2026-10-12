@@ -299,7 +299,8 @@ re-checked and, when clean, recompiled with P5-P7 under
 `--selection-time-budget-ms`. The report carries the applied operations,
 the affected tasks (seed tasks plus their transitive ancestors and
 descendants through non-rejected decompose edges, one dataflow hop to
-producers and consumers of their fields), the fresh diagnostics, contract notes naming dropped fields and
+producers and consumers of their fields, ordered by graph distance from
+the seeds nearest first with task-id tie order), the fresh diagnostics, contract notes naming dropped fields and
 their consumers, and the selection, totals and makespan movements when both
 sides compile. Totals movements label `accuracy_distance_from_incumbent` as
 a distance from the incumbent, never absolute accuracy. A change that introduces diagnostics still exits 0: the

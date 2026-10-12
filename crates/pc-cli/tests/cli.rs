@@ -736,7 +736,7 @@ fn impact_flags_dropped_output_with_consumers() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("affected tasks: select-lines, ship-reels, transcribe-footage"),
+        stdout.contains("affected tasks: transcribe-footage, select-lines, ship-reels"),
         "{stdout}"
     );
     assert!(
@@ -768,7 +768,7 @@ fn impact_flags_dropped_output_with_consumers() {
     );
     assert_eq!(
         report["affected_tasks"],
-        serde_json::json!(["select-lines", "ship-reels", "transcribe-footage"])
+        serde_json::json!(["transcribe-footage", "select-lines", "ship-reels"])
     );
     let notes = report["contract_notes"].as_array().unwrap();
     assert_eq!(notes.len(), 1);

@@ -7,8 +7,9 @@
 //!
 //! Impact lists affected tasks by reverse reachability (decompose ancestors
 //! and descendants, plus one dataflow hop to the producers and consumers of
-//! the touched tasks' fields) plus recompile, so a substitution that drops
-//! an output names the consumers that would break.
+//! the touched tasks' fields), ordered by graph distance from the changed
+//! seeds nearest first with task-id tie order, plus recompile, so a
+//! substitution that drops an output names the consumers that would break.
 //!
 //! A [`Change`] is the JSON document `pc impact` reads:
 //!
@@ -339,7 +340,8 @@ pub fn delta_bases(delta: &MetricDelta) -> String {
 pub struct ImpactReport {
     /// Notes for each applied operation, in deterministic order.
     pub applied: Vec<String>,
-    /// Reachable tasks depending on (or depended on by) the change, sorted.
+    /// Reachable tasks depending on (or depended on by) the change, ordered
+    /// by graph distance from the changed seeds nearest first (ties by id).
     pub affected_tasks: Vec<String>,
     /// Check diagnostics over the modified plan. Empty means the change is
     /// contract-clean.
@@ -437,8 +439,20 @@ pub fn impact(
 /// Tasks affected by a change: the seed tasks it touches directly, their
 /// transitive ancestors and descendants through non-rejected decompose
 /// edges, their dataflow neighbours (tasks producing a field a seed
-/// consumes, or consuming a field a seed produces). Sorted.
+/// consumes, or consuming a field a seed produces). Ordered by graph
+/// distance from the changed seeds, nearest first; ties break by task id
+/// so the order is stable and deterministic.
 fn affected(modified: &PlanDoc, change: &Change) -> Vec<String> {
+    let seeds = direct_seeds(modified, change);
+    let distances = distances_from_seeds(modified, &seeds);
+    let mut out: Vec<(usize, String)> = distances.into_iter().map(|(id, d)| (d, id)).collect();
+    out.sort();
+    out.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Seed tasks a change touches directly: the tasks of accepted methods and
+/// the tasks behind evidence subjects.
+fn direct_seeds(modified: &PlanDoc, change: &Change) -> BTreeSet<String> {
     let mut seeds = BTreeSet::new();
     let tasks_with_invoke: BTreeMap<&str, Vec<&str>> = {
         let mut map: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -480,18 +494,17 @@ fn affected(modified: &PlanDoc, change: &Change) -> Vec<String> {
             _ => {}
         }
     }
-    // One dataflow hop: producers of what the seeds consume, and consumers
-    // of what the seeds produce. A dropped-output substitution affects its
-    // consumers even when no decomposition edge links them.
-    seeds = with_dataflow_neighbours(modified, &seeds);
-    closure(modified, &seeds)
+    seeds
 }
 
-/// Expand `seeds` by one dataflow hop over live tasks: for every artifact
+/// One dataflow hop out of each seed over live tasks: for every artifact
 /// field a seed produces, the tasks consuming it; for every field it
 /// consumes, the tasks producing it. Dropped tasks are abandoned work and
 /// are never neighbours.
-fn with_dataflow_neighbours(doc: &PlanDoc, seeds: &BTreeSet<String>) -> BTreeSet<String> {
+fn dataflow_neighbours(
+    doc: &PlanDoc,
+    seeds: &BTreeSet<String>,
+) -> BTreeMap<String, BTreeSet<String>> {
     let mut produced: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut consumed: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for task in &doc.task {
@@ -516,53 +529,83 @@ fn with_dataflow_neighbours(doc: &PlanDoc, seeds: &BTreeSet<String>) -> BTreeSet
         }
     }
     let by_id: BTreeMap<&str, &pc_ir::Task> = doc.task.iter().map(|t| (t.id.as_str(), t)).collect();
-    let mut expanded = seeds.clone();
+    let mut out = BTreeMap::new();
     for seed in seeds {
         let Some(task) = by_id.get(seed.as_str()).copied() else {
             continue;
         };
+        let mut hops = BTreeSet::new();
         for item in task.produces.iter().chain(&task.consumes) {
             for field in &item.fields {
                 let key = (item.artifact.clone(), field.clone());
-                expanded.extend(produced.get(&key).iter().flat_map(|v| v.iter()).cloned());
-                expanded.extend(consumed.get(&key).iter().flat_map(|v| v.iter()).cloned());
+                hops.extend(produced.get(&key).iter().flat_map(|v| v.iter()).cloned());
+                hops.extend(consumed.get(&key).iter().flat_map(|v| v.iter()).cloned());
             }
         }
+        hops.remove(seed);
+        out.insert(seed.clone(), hops);
     }
-    expanded
+    out
 }
 
-/// Transitive closure of `seeds` through non-rejected decompose edges, both
-/// directions, restricted to tasks in the plan. Sorted.
-fn closure(doc: &PlanDoc, seeds: &BTreeSet<String>) -> Vec<String> {
+/// Graph distance of every affected task from the changed `seeds`, over
+/// tasks in the plan: seeds are 0, their decompose parents/children and
+/// one-hop dataflow neighbours are 1, and so on through non-rejected
+/// decompose edges in both directions. Dataflow edges are followed only out
+/// of the seeds, one hop: a dropped-output substitution affects its
+/// consumers even when no decomposition edge links them.
+fn distances_from_seeds(doc: &PlanDoc, seeds: &BTreeSet<String>) -> BTreeMap<String, usize> {
+    use std::collections::VecDeque;
     let present: BTreeSet<&str> = doc.task.iter().map(|t| t.id.as_str()).collect();
-    let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    let mut parents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut neighbours: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for method in &doc.method {
         if method.kind != MethodKind::Decompose || method.status == MethodStatus::Rejected {
             continue;
         }
         for sub in &method.subtasks {
-            children
+            neighbours
                 .entry(method.task.as_str())
                 .or_default()
-                .push(sub.as_str());
-            parents
+                .insert(sub.as_str());
+            neighbours
                 .entry(sub.as_str())
                 .or_default()
-                .push(method.task.as_str());
+                .insert(method.task.as_str());
         }
     }
-    let mut seen = BTreeSet::new();
-    let mut stack: Vec<&str> = seeds.iter().map(String::as_str).collect();
-    while let Some(id) = stack.pop() {
-        if !present.contains(id) || !seen.insert(id) {
-            continue;
+    let dataflow = dataflow_neighbours(doc, seeds);
+    let mut dist: BTreeMap<String, usize> = BTreeMap::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+    for seed in seeds {
+        if present.contains(seed.as_str()) {
+            dist.insert(seed.clone(), 0);
+            queue.push_back(seed.as_str());
         }
-        stack.extend(children.get(id).cloned().unwrap_or_default());
-        stack.extend(parents.get(id).cloned().unwrap_or_default());
     }
-    seen.into_iter().map(str::to_string).collect()
+    while let Some(id) = queue.pop_front() {
+        let cur = dist[id];
+        let hops = if cur == 0 { dataflow.get(id) } else { None };
+        let nexts = hops
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .map(|next| (next, 1))
+            .chain(
+                neighbours
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .map(|next| (*next, cur + 1)),
+            );
+        for (next, d) in nexts {
+            if !present.contains(next) || dist.contains_key(next) {
+                continue;
+            }
+            dist.insert(next.to_string(), d);
+            queue.push_back(next);
+        }
+    }
+    dist
 }
 
 /// One method status movement between two plans.
@@ -867,7 +910,7 @@ estimates = [{ metric = "duration_minutes", low = 2.0, likely = 3.0, high = 4.0,
         );
         assert_eq!(
             report.affected_tasks,
-            vec!["downstream".to_string(), "job".to_string()]
+            vec!["job".to_string(), "downstream".to_string()]
         );
         assert_eq!(report.contract_notes.len(), 1);
         let note = &report.contract_notes[0];
@@ -875,6 +918,115 @@ estimates = [{ metric = "duration_minutes", low = 2.0, likely = 3.0, high = 4.0,
         assert_eq!(note.missing_outputs, vec!["artifact.dropped".to_string()]);
         assert_eq!(note.consumers, vec!["downstream".to_string()]);
         assert!(report.revised.is_none());
+    }
+
+    #[test]
+    fn affected_tasks_rank_by_distance_with_seed_first_on_a_chain() {
+        const CHAIN: &str = r#"
+ir_version = 0
+
+[plan]
+id = "chain"
+title = "chain"
+
+[objective]
+root_task = "t0"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "t0"
+title = "T0"
+state = "decomposed"
+
+[[task]]
+id = "t1"
+title = "T1"
+state = "decomposed"
+
+[[task]]
+id = "t2"
+title = "T2"
+state = "decomposed"
+
+[[task]]
+id = "t3"
+title = "T3"
+state = "decomposed"
+
+[[task]]
+id = "t4"
+title = "T4"
+state = "open"
+
+[[method]]
+id = "m0"
+task = "t0"
+kind = "decompose"
+subtasks = ["t1"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "m1"
+task = "t1"
+kind = "decompose"
+subtasks = ["t2"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "m2"
+task = "t2"
+kind = "decompose"
+subtasks = ["t3"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "m3"
+task = "t3"
+kind = "decompose"
+subtasks = ["t4"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "m2-alt"
+task = "t2"
+kind = "invoke"
+capability = "cap@1"
+status = "proposed"
+provenance = "agent:test"
+
+[[capability]]
+id = "cap@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0, provenance = "declared" }]
+"#;
+        let mut plan = pc_ir::from_toml(CHAIN).unwrap();
+        assert!(checked(&mut plan).ok());
+        let change = Change {
+            accept_method: vec!["m2-alt".into()],
+            ..Change::default()
+        };
+        let report = impact(
+            &plan,
+            &change,
+            "plan.toml",
+            &pc_ir::to_toml(&plan).unwrap(),
+            Duration::from_millis(2000),
+        )
+        .unwrap();
+        // The set is unchanged (the whole chain), but the seed leads and
+        // distance grows outward with id order breaking ties.
+        assert_eq!(
+            report.affected_tasks,
+            vec!["t2", "t1", "t3", "t0", "t4"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
