@@ -31,7 +31,12 @@ How measured totals render as observed ranges is owned by P5 in `passes.md`.
   `produces` lists of `{ artifact, fields }`. States: `open`, `decomposed`,
   `resolved`, `done`, `dropped`. The compiler reads `done` from imports and
   never sets it; `dropped` tasks are abandoned and skipped by contract and
-  dataflow checks.
+  dataflow checks. `tasks_axi` carries opaque tasks-axi `backlog.md`
+  passthrough (section, repo, kind, priority, holds, date gates, body) whose
+  values no pass reads (P4 never shares a task carrying it), so a backlog
+  round-trips byte-identical instead of being refused or dropped;
+  `plan.tasks_axi_sections` preserves the file's section order including
+  empty sections.
 - **Method.** `kind` is `decompose { subtasks, order_edges }` or
   `invoke { capability }`. `status` is `accepted`, `proposed`, `derived` or
   `rejected`. `accepted`/`derived` methods are checked, and only `accepted`

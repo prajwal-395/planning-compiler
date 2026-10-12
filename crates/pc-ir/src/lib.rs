@@ -83,6 +83,11 @@ pub struct PlanMeta {
     /// Artifact fields the world provides, so dataflow need not produce them.
     #[serde(default)]
     pub external_inputs: Vec<ContractItem>,
+    /// tasks-axi section names in file order, preserved so export restores
+    /// sections even when they hold no items. Empty for plans that did not
+    /// come from an import; every pass ignores it.
+    #[serde(default)]
+    pub tasks_axi_sections: Vec<String>,
 }
 
 /// Root task plus constraints, weights and acceptance criteria.
@@ -185,6 +190,47 @@ pub struct Task {
     /// Typed outputs this task promises downstream.
     #[serde(default)]
     pub produces: Vec<ContractItem>,
+    /// tasks-axi `backlog.md` passthrough: fields with no IR counterpart
+    /// (section, repo, kind, priority, holds, date gates, body). No pass reads
+    /// its values, so a backlog round-trips byte-identical instead of being
+    /// refused or dropped. `None` for tasks that did not come from an import.
+    #[serde(default)]
+    pub tasks_axi: Option<TasksAxiMeta>,
+}
+
+/// Opaque tasks-axi `backlog.md` metadata carried through the IR.
+///
+/// The compiler never reads these fields; P4 only keys on their presence,
+/// so every backlog row stays distinct work. The `pc-adapter-tasks-axi`
+/// import/export pair maps them to and from the canonical backlog line
+/// (`(repo: R)`, `(kind: K)`, `(priority: N)`, `(since D)`, the closed date,
+/// `(hold: H)`, `(hold-kind: K)`, `(hold-until: D)`, section and body) so
+/// unmappable fields survive untouched.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, default)]
+pub struct TasksAxiMeta {
+    /// Backlog section the item lived in, e.g. `"Queued"`.
+    pub section: String,
+    /// `(repo: ...)` value, when present.
+    pub repo: Option<String>,
+    /// `(kind: ...)` value, when present.
+    pub kind: Option<String>,
+    /// `(priority: ...)` value, when present.
+    pub priority: Option<i64>,
+    /// `(since ...)` date (`YYYY-MM-DD`), when present.
+    pub created: Option<String>,
+    /// Closed date (`YYYY-MM-DD`), when present. Export labels it from the
+    /// title: `(merged D)` for a PR link, `(reported D)` for a report path,
+    /// `(done D)` otherwise.
+    pub closed: Option<String>,
+    /// `(hold: ...)` reason, when present.
+    pub hold_reason: Option<String>,
+    /// `(hold-kind: ...)` value, when present.
+    pub hold_kind: Option<String>,
+    /// `(hold-until: ...)` date gate, when present.
+    pub hold_until: Option<String>,
+    /// Indented body text with `\n` line breaks, without trailing newline.
+    pub body: Option<String>,
 }
 
 /// Lifecycle states for a task.

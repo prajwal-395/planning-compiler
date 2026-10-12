@@ -1077,6 +1077,7 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
             id: "leaf".into(),
             title: "Leaf".into(),
             state: TaskState::Open,
+            tasks_axi: None,
             consumes: vec![],
             produces: vec![],
         });
@@ -1215,6 +1216,7 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
             id: "producer".into(),
             title: "Producer".into(),
             state: TaskState::Resolved,
+            tasks_axi: None,
             consumes: vec![],
             produces: vec![pc_ir::ContractItem {
                 artifact: "artifact".into(),
@@ -1257,6 +1259,7 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
             id: "orphan".into(),
             title: "Orphan".into(),
             state: TaskState::Open,
+            tasks_axi: None,
             consumes: vec![],
             produces: vec![],
         });
@@ -1290,6 +1293,7 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
             id: "child".into(),
             title: "Child".into(),
             state: TaskState::Open,
+            tasks_axi: None,
             consumes: vec![],
             produces: vec![],
         });

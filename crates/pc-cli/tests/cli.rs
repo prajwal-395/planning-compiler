@@ -3285,3 +3285,273 @@ fn json_floats_round_to_text_precision() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_rounded(&value, "impact");
 }
+
+/// Copy the tasks-axi 10-item backlog fixture to a scratch dir.
+fn tasks_axi_scratch(name: &str) -> PathBuf {
+    let dir = scratch_dir(name);
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("tasks-axi")
+            .join("backlog.md"),
+        dir.join("backlog.md"),
+    )
+    .unwrap();
+    dir
+}
+
+/// The 10-item backlog subset round-trips through the IR byte-identical:
+/// import, clean check, then export regenerates the exact input bytes.
+#[test]
+fn tasks_axi_round_trip_is_byte_identical() {
+    let dir = tasks_axi_scratch("tasks-axi-roundtrip");
+    let backlog = dir.join("backlog.md");
+    let plan = dir.join("plan");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(&backlog)
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("imported 10 tasks"), "{stdout}");
+    assert!(plan.join("plan.toml").is_file());
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("check")
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("ok: 11 tasks"), "{stdout}");
+
+    let exported = dir.join("roundtrip.md");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("export-tasks-axi")
+        .arg(&exported)
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("exported 10 tasks"), "{stdout}");
+
+    assert_eq!(
+        std::fs::read(&backlog).unwrap(),
+        std::fs::read(&exported).unwrap(),
+        "export must regenerate the backlog byte-identical"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc import-tasks-axi` refuses to overwrite an existing plan.
+#[test]
+fn tasks_axi_import_refuses_overwrite() {
+    let dir = tasks_axi_scratch("tasks-axi-overwrite");
+    let backlog = dir.join("backlog.md");
+    let plan = dir.join("plan");
+
+    let first = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(&backlog)
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    let before = std::fs::read(plan.join("plan.toml")).unwrap();
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(&backlog)
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("refusing to overwrite"), "{stderr}");
+    assert_eq!(
+        std::fs::read(plan.join("plan.toml")).unwrap(),
+        before,
+        "refusal wrote nothing"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc import-tasks-axi` refuses a non-backlog file loudly and writes nothing.
+#[test]
+fn tasks_axi_import_refuses_garbage() {
+    let dir = scratch_dir("tasks-axi-garbage");
+    let backlog = dir.join("backlog.md");
+    std::fs::write(
+        &backlog,
+        "# Backlog\n\n## Queued\nJust a note, no task here.\n",
+    )
+    .unwrap();
+    let plan = dir.join("plan");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(&backlog)
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unexpected line"), "{stderr}");
+    assert!(!plan.join("plan.toml").exists(), "refusal wrote nothing");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc export-tasks-axi` refuses dropped tasks loudly: tasks-axi has no
+/// counterpart for them, so they are never silently skipped.
+#[test]
+fn tasks_axi_export_refuses_dropped() {
+    let dir = scratch_dir("tasks-axi-dropped");
+    let plan = dir.join("plan");
+    std::fs::create_dir_all(&plan).unwrap();
+    std::fs::write(
+        plan.join("plan.toml"),
+        "ir_version = 0\n\n[plan]\nid = \"x\"\ntitle = \"x\"\n\n[objective]\nroot_task = \"backlog-root\"\n\n[[task]]\nid = \"backlog-root\"\ntitle = \"Backlog\"\nstate = \"decomposed\"\n\n[[task]]\nid = \"t1\"\ntitle = \"Gone\"\nstate = \"dropped\"\n\n[task.tasks_axi]\nsection = \"Queued\"\n\n[[method]]\nid = \"backlog-decompose\"\ntask = \"backlog-root\"\nkind = \"decompose\"\nsubtasks = [\"t1\"]\nstatus = \"accepted\"\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("export-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("t1"), "{stderr}");
+    assert!(stderr.contains("dropped"), "{stderr}");
+    assert!(!dir.join("backlog.md").exists(), "refusal wrote nothing");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Every backlog row is distinct work: two rows with the same title and
+/// state but different repos and holds stay two tasks through P4, so both
+/// reach compile and the frontier.
+#[test]
+fn tasks_axi_same_title_rows_stay_distinct() {
+    let dir = scratch_dir("tasks-axi-same-title");
+    let backlog = dir.join("backlog.md");
+    std::fs::write(
+        &backlog,
+        "# Backlog\n\n## Queued\n- [ ] a - Bump deps (repo: x)\n- [ ] b - Bump deps (repo: y) (hold: waiting)\n",
+    )
+    .unwrap();
+    let plan = dir.join("plan");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(&backlog)
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = |verb: &str| -> serde_json::Value {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg(verb)
+            .arg(&plan)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+
+    let compiled = json("compile");
+    assert_eq!(
+        compiled["unresolved_tasks"],
+        serde_json::json!(["a", "b"]),
+        "{compiled}"
+    );
+    let frontier = json("frontier");
+    let subjects: Vec<&str> = frontier["unestimated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, ["task:a", "task:b"], "{frontier}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc import-tasks-axi` refuses any existing plan file in the target
+/// directory, not just `plan.toml`, so it never shadows a `plan.json`.
+#[test]
+fn tasks_axi_import_refuses_existing_json_plan() {
+    let dir = tasks_axi_scratch("tasks-axi-json-plan");
+    let plan = dir.join("plan");
+    std::fs::create_dir_all(&plan).unwrap();
+    std::fs::write(plan.join("plan.json"), "{}").unwrap();
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("refusing to overwrite"), "{stderr}");
+    assert!(stderr.contains("plan.json"), "{stderr}");
+    assert!(!plan.join("plan.toml").exists(), "refusal wrote nothing");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A bare `pc import-tasks-axi` refuses when the current directory already
+/// holds a plan, which a new `.plan/` would shadow for bare commands.
+#[test]
+fn tasks_axi_import_default_refuses_cwd_plan() {
+    let dir = tasks_axi_scratch("tasks-axi-cwd-plan");
+    std::fs::write(dir.join("plan.toml"), "ir_version = 0\n").unwrap();
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&dir)
+        .arg("import-tasks-axi")
+        .arg("backlog.md")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("refusing to overwrite"), "{stderr}");
+    assert!(!dir.join(".plan").exists(), "refusal wrote nothing");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

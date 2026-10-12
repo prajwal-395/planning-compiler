@@ -5,6 +5,7 @@ members = [
     "crates/pc-core",
     "crates/pc-select",
     "crates/pc-store",
+    "crates/pc-adapter-tasks-axi",
     "crates/pc-cli",
     "crates/pc-mcp",
 ]
@@ -31,6 +32,7 @@ pc-ir = { path = "crates/pc-ir", version = "0.1.0" }
 pc-core = { path = "crates/pc-core", version = "0.1.0" }
 pc-select = { path = "crates/pc-select", version = "0.1.0" }
 pc-store = { path = "crates/pc-store", version = "0.1.0" }
+pc-adapter-tasks-axi = { path = "crates/pc-adapter-tasks-axi", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

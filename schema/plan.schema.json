@@ -574,6 +574,14 @@
           "description": "Stable plan id, e.g. `\"self-plan\"`.",
           "type": "string"
         },
+        "tasks_axi_sections": {
+          "default": [],
+          "description": "tasks-axi section names in file order, preserved so export restores sections even when they hold no items. Empty for plans that did not come from an import; every pass ignores it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "title": {
           "description": "Human title.",
           "type": "string"
@@ -642,6 +650,18 @@
           ],
           "description": "Lifecycle state. The compiler reads `done`, never sets it."
         },
+        "tasks_axi": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TasksAxiMeta"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "tasks-axi `backlog.md` passthrough: fields with no IR counterpart (section, repo, kind, priority, holds, date gates, body). No pass reads its values, so a backlog round-trips byte-identical instead of being refused or dropped. `None` for tasks that did not come from an import."
+        },
         "title": {
           "description": "Human title.",
           "type": "string"
@@ -693,6 +713,91 @@
           "type": "string"
         }
       ]
+    },
+    "TasksAxiMeta": {
+      "additionalProperties": false,
+      "description": "Opaque tasks-axi `backlog.md` metadata carried through the IR.\n\nThe compiler never reads these fields; P4 only keys on their presence, so every backlog row stays distinct work. The `pc-adapter-tasks-axi` import/export pair maps them to and from the canonical backlog line (`(repo: R)`, `(kind: K)`, `(priority: N)`, `(since D)`, the closed date, `(hold: H)`, `(hold-kind: K)`, `(hold-until: D)`, section and body) so unmappable fields survive untouched.",
+      "properties": {
+        "body": {
+          "default": null,
+          "description": "Indented body text with `\\n` line breaks, without trailing newline.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closed": {
+          "default": null,
+          "description": "Closed date (`YYYY-MM-DD`), when present. Export labels it from the title: `(merged D)` for a PR link, `(reported D)` for a report path, `(done D)` otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created": {
+          "default": null,
+          "description": "`(since ...)` date (`YYYY-MM-DD`), when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hold_kind": {
+          "default": null,
+          "description": "`(hold-kind: ...)` value, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hold_reason": {
+          "default": null,
+          "description": "`(hold: ...)` reason, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hold_until": {
+          "default": null,
+          "description": "`(hold-until: ...)` date gate, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "default": null,
+          "description": "`(kind: ...)` value, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "default": null,
+          "description": "`(priority: ...)` value, when present.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo": {
+          "default": null,
+          "description": "`(repo: ...)` value, when present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "section": {
+          "default": "",
+          "description": "Backlog section the item lived in, e.g. `\"Queued\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     }
   },
   "description": "A plan file: one TOML (`plan.toml`) or JSON (`plan.json`) document.",

@@ -179,6 +179,27 @@ enum Commands {
         #[arg(long, default_value_t = pc_core::DEFAULT_CONTEXT_BUDGET_TOKENS)]
         budget: u64,
     },
+    /// Import a tasks-axi `backlog.md` file into a plan directory.
+    /// Backlog items become tasks (holds, kinds, repos, priorities, date
+    /// gates and bodies ride along as passthrough); `blocked-by:` edges
+    /// become order edges. Refuses to overwrite an existing plan.
+    ImportTasksAxi {
+        /// Backlog file to read.
+        backlog: PathBuf,
+        /// Plan directory to write `<dir>/plan.toml` into. Defaults to
+        /// `.plan`.
+        path: Option<PathBuf>,
+    },
+    /// Export a plan directory back into a tasks-axi `backlog.md` file.
+    /// Imported passthrough renders back untouched, so an unedited plan
+    /// regenerates its backlog byte-identical.
+    ExportTasksAxi {
+        /// Backlog file to write (overwritten).
+        backlog: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
+    },
 }
 
 /// Resolve an optional plan path: an explicit path passes through
@@ -243,6 +264,10 @@ fn main() {
             json,
             budget,
         } => run_context(&task, &plan_path(path), json, budget),
+        Commands::ImportTasksAxi { backlog, path } => run_import_tasks_axi(&backlog, path),
+        Commands::ExportTasksAxi { backlog, path } => {
+            run_export_tasks_axi(&backlog, &plan_path(path))
+        }
     }
 }
 
@@ -842,6 +867,7 @@ fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
             title: "My plan".to_string(),
             description: String::new(),
             external_inputs: Vec::new(),
+            tasks_axi_sections: Vec::new(),
         },
         objective: pc_ir::Objective {
             root_task: "start".to_string(),
@@ -866,6 +892,7 @@ fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
             state: pc_ir::TaskState::Open,
             consumes: Vec::new(),
             produces: Vec::new(),
+            tasks_axi: None,
         }],
         method: Vec::new(),
         capability: Vec::new(),
@@ -873,23 +900,23 @@ fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
     }
 }
 
-/// Handler for `pc init`.
-fn run_init(path: Option<PathBuf>, json: bool) {
+/// Resolve the directory a new plan is written to (default `.plan`),
+/// exiting when it is a file or a plan already exists there.
+fn new_plan_dir(path: Option<PathBuf>) -> PathBuf {
     let defaulted = path.is_none();
     let path = path.unwrap_or_else(|| PathBuf::from(".plan"));
-    let path = path.as_path();
     if path.is_file() {
         eprintln!(
-            "error: cannot scaffold a plan in `{}`: not a directory",
+            "error: cannot write a plan in `{}`: not a directory",
             path.display()
         );
         std::process::exit(1);
     }
     // Refuse to overwrite: an existing plan file under the target directory
-    // wins over any scaffold, so a stray `pc init` never clobbers work. A
+    // wins over a new plan, so a stray command never clobbers work. A
     // defaulted `.plan` also guards the current directory, whose plan a new
     // `.plan/` would otherwise shadow for bare commands.
-    let mut guarded = vec![path];
+    let mut guarded = vec![path.as_path()];
     if defaulted {
         guarded.push(std::path::Path::new("."));
     }
@@ -902,6 +929,13 @@ fn run_init(path: Option<PathBuf>, json: bool) {
             std::process::exit(1);
         }
     }
+    path
+}
+
+/// Handler for `pc init`.
+fn run_init(path: Option<PathBuf>, json: bool) {
+    let path = new_plan_dir(path);
+    let path = path.as_path();
     if let Err(e) = std::fs::create_dir_all(path) {
         eprintln!("error[E000]: cannot create `{}`: {e}", path.display());
         std::process::exit(1);
@@ -1529,4 +1563,107 @@ fn run_context(task: &str, path: &std::path::Path, json: bool, budget: u64) {
         return;
     }
     print!("{}", pc_core::render_context_text(&fitted));
+}
+
+/// Handler for `pc import-tasks-axi`.
+fn run_import_tasks_axi(backlog_path: &std::path::Path, path: Option<PathBuf>) {
+    let file = new_plan_dir(path).join("plan.toml");
+    let text = match std::fs::read_to_string(backlog_path) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error[E000]: cannot read `{}`: {e}", backlog_path.display());
+            std::process::exit(1);
+        }
+    };
+    let parsed = match pc_adapter_tasks_axi::parse_backlog(&text) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("error: cannot import `{}`: {e}", backlog_path.display());
+            std::process::exit(1);
+        }
+    };
+    let doc = match pc_adapter_tasks_axi::import_plan(&parsed) {
+        Ok(doc) => doc,
+        Err(e) => {
+            eprintln!("error: cannot import `{}`: {e}", backlog_path.display());
+            std::process::exit(1);
+        }
+    };
+    // The import promises a clean plan: prove it before writing anything.
+    let rendered = match pc_ir::to_toml(&doc) {
+        Ok(rendered) => rendered,
+        Err(e) => {
+            eprintln!("error[E000]: cannot render imported plan: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut probed = doc.clone();
+    let report = pc_core::passes::check(&file.display().to_string(), &rendered, &mut probed, None);
+    if !report.ok() {
+        for diag in &report.diagnostics {
+            eprintln!("{}", pc_core::render_human(diag));
+        }
+        eprintln!("error: imported plan fails check; refusing to write");
+        std::process::exit(1);
+    }
+    if let Some(parent) = file.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+            std::process::exit(1);
+        }
+    }
+    if let Err(e) = std::fs::write(&file, &rendered) {
+        eprintln!("error[E000]: cannot write `{}`: {e}", file.display());
+        std::process::exit(1);
+    }
+    println!(
+        "imported {} tasks from {} to {}",
+        parsed.items.len(),
+        backlog_path.display(),
+        file.display(),
+    );
+}
+
+/// Handler for `pc export-tasks-axi`.
+fn run_export_tasks_axi(backlog_path: &std::path::Path, path: &std::path::Path) {
+    // Export reads the pristine plan: P3/P4 pass mutations must never leak
+    // into the backlog (a merged-away task is still a backlog item).
+    let loaded = match pc_store::load(path) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("error[E000]: {e}");
+            std::process::exit(1);
+        }
+    };
+    let backlog = match pc_adapter_tasks_axi::export_backlog(&loaded.doc) {
+        Ok(backlog) => backlog,
+        Err(e) => {
+            eprintln!("error: cannot export `{}`: {e}", loaded.display_path);
+            std::process::exit(1);
+        }
+    };
+    let text = pc_adapter_tasks_axi::render_backlog(&backlog);
+    if let Some(parent) = backlog_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+            std::process::exit(1);
+        }
+    }
+    if let Err(e) = std::fs::write(backlog_path, &text) {
+        eprintln!(
+            "error[E000]: cannot write `{}`: {e}",
+            backlog_path.display()
+        );
+        std::process::exit(1);
+    }
+    println!(
+        "exported {} tasks from {} to {}",
+        backlog.items.len(),
+        loaded.display_path,
+        backlog_path.display(),
+    );
 }

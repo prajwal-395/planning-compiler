@@ -710,6 +710,7 @@ mod tests {
                 title: "t".into(),
                 description: String::new(),
                 external_inputs: vec![],
+                tasks_axi_sections: Vec::new(),
             },
             objective: pc_ir::Objective {
                 root_task: "root".into(),
@@ -725,6 +726,7 @@ mod tests {
                 id: "root".into(),
                 title: "t".into(),
                 state: pc_ir::TaskState::Resolved,
+                tasks_axi: None,
                 consumes: vec![],
                 produces: vec![],
             }],

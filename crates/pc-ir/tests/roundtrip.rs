@@ -7,7 +7,7 @@
 use pc_ir::{
     AcceptanceCriterion, AcceptanceKind, ArtifactDecl, Capability, CapabilityKind, ContractItem,
     Estimate, EstimateProvenance, Evidence, Method, MethodKind, MethodStatus, Objective, OrderEdge,
-    PlanDoc, PlanMeta, ResourceDecl, Task, TaskState,
+    PlanDoc, PlanMeta, ResourceDecl, Task, TaskState, TasksAxiMeta,
 };
 use proptest::prelude::*;
 use std::collections::BTreeMap;
@@ -71,6 +71,24 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                             state: states[state % states.len()],
                             consumes: contract_of(consumes),
                             produces: contract_of(produces),
+                            // Cover the tasks-axi passthrough in the
+                            // round-trip property on every third task.
+                            tasks_axi: if i % 3 == 0 {
+                                Some(TasksAxiMeta {
+                                    section: "Queued".to_string(),
+                                    repo: Some("planning-compiler".to_string()),
+                                    kind: Some("ship".to_string()),
+                                    priority: Some(2),
+                                    created: Some("2026-10-12".to_string()),
+                                    closed: None,
+                                    hold_reason: Some("waiting on captain".to_string()),
+                                    hold_kind: Some("captain".to_string()),
+                                    hold_until: Some("2026-12-01".to_string()),
+                                    body: Some("line one\n\nline three".to_string()),
+                                })
+                            } else {
+                                None
+                            },
                         }
                     })
                     .collect();
@@ -149,6 +167,7 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                         title: "property".to_string(),
                         description: String::new(),
                         external_inputs: vec![],
+                        tasks_axi_sections: vec!["Queued".to_string(), "Done".to_string()],
                     },
                     objective: Objective {
                         root_task: root,

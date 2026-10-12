@@ -1234,7 +1234,9 @@ impl Pass for MatchPass {
 /// merges distinct work (report section 2.7.1: `transcribe_clip_1` must
 /// never equal `transcribe_clip_2`), and collapses plans whose steps share
 /// an empty contract but do different work. The state keeps finished or
-/// abandoned work from merging into live work and vice versa.
+/// abandoned work from merging into live work and vice versa. A task
+/// carrying backlog passthrough (`tasks_axi`) is one backlog row, which is
+/// always distinct work, so its id joins the form and it never shares.
 fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
     let mut consumes: Vec<(String, Vec<String>)> = task
         .consumes
@@ -1256,12 +1258,16 @@ fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
         })
         .collect();
     produces.sort();
-    serde_json::json!({
+    let mut form = serde_json::json!({
         "title": task.title,
         "state": task.state,
         "consumes": consumes,
         "produces": produces,
-    })
+    });
+    if task.tasks_axi.is_some() {
+        form["backlog_row"] = task.id.clone().into();
+    }
+    form
 }
 
 /// Memoized blake3 content hashes over each task's canonical form plus the

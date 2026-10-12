@@ -28,6 +28,7 @@ fn valid_doc() -> (String, PlanDoc) {
             title: "t".to_string(),
             description: String::new(),
             external_inputs: vec![],
+            tasks_axi_sections: Vec::new(),
         },
         objective: Objective {
             root_task: "root".to_string(),
@@ -49,6 +50,7 @@ fn valid_doc() -> (String, PlanDoc) {
                 id: "root".to_string(),
                 title: "root".to_string(),
                 state: TaskState::Decomposed,
+                tasks_axi: None,
                 consumes: vec![],
                 produces: vec![],
             },
@@ -56,6 +58,7 @@ fn valid_doc() -> (String, PlanDoc) {
                 id: "leaf".to_string(),
                 title: "leaf".to_string(),
                 state: TaskState::Open,
+                tasks_axi: None,
                 consumes: vec![],
                 produces: vec![],
             },
@@ -104,6 +107,7 @@ fn e001_reports_duplicate_task_ids() {
         id: "leaf".to_string(),
         title: "dupe".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -208,6 +212,7 @@ fn e007_reports_order_cycle() {
         id: "b".to_string(),
         title: "b".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -673,6 +678,7 @@ fn check_notes_flag_proposed_contract_violation_without_error() {
         id: "consumer".to_string(),
         title: "consumer".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![contract("transcript", &["timings"])],
         produces: vec![],
     });
@@ -709,6 +715,7 @@ fn check_notes_ignore_rejected_and_match_frontier_blocked() {
         id: "consumer".to_string(),
         title: "consumer".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![contract("transcript", &["timings"])],
         produces: vec![],
     });

@@ -46,7 +46,8 @@ crates/pc-ir/     IR types, TOML+JSON serde, JSON Schemas (plan + patch)
 crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, P8 frontier, P9 impact/diff, step-7 proposal loop, diagnostics
 crates/pc-select/ P6 exact ILP method selection with greedy fallback
 crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan writer, evidence JSONL append/read
-crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, impact, diff, propose, accept, reject, context, schema)
+crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
+crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, schema)
 crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
@@ -55,7 +56,11 @@ tests/fixtures/   golden valid plans + one negative fixture per diagnostic
 docs/             ir.md, passes.md, evidence/ (step-8 dogfood log), adr/
 ```
 
-Adapters (`pc-adapter-*`) arrive after the MVP.
+Adapters (`pc-adapter-*`) convert external backlogs into the IR. The first
+one is `pc-adapter-tasks-axi`, the Firstmate integration: backlog items map
+to tasks, `blocked-by:` maps to order edges, and fields with no IR
+counterpart ride along as passthrough so the backlog round-trips
+byte-identical (`tests/fixtures/tasks-axi/backlog.md`).
 
 ## Use
 
@@ -73,6 +78,8 @@ pc propose <patch.json> [path]  # stage tasks, methods, capabilities as proposed
 pc accept <method> [path]  # flip a proposed/derived method to accepted
 pc reject <method> [path]  # flip a proposed/derived method to rejected
 pc context <task> [path] [--budget N]  # budget-fitted slice for the next decomposition
+pc import-tasks-axi <backlog.md> [dir]  # import a tasks-axi backlog into <dir>/plan.toml (refuses to overwrite)
+pc export-tasks-axi <backlog.md> [path]  # export a plan back into backlog.md (byte-identical when unedited)
 pc schema [--patch] [--out file]   # emit the canonical JSON Schema (plan or patch)
 ```
 

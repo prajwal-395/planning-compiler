@@ -23,6 +23,7 @@ fn doc() -> (String, PlanDoc) {
             title: "test".to_string(),
             description: String::new(),
             external_inputs: vec![],
+            tasks_axi_sections: Vec::new(),
         },
         objective: Objective {
             root_task: "root".to_string(),
@@ -40,6 +41,7 @@ fn doc() -> (String, PlanDoc) {
             id: "root".to_string(),
             title: "root".to_string(),
             state: TaskState::Resolved,
+            tasks_axi: None,
             consumes: vec![],
             produces: vec![],
         }],
@@ -143,6 +145,7 @@ fn p5_attributes_capability_method_and_task_subjects() {
         id: "leaf".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Resolved,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -185,6 +188,7 @@ fn p5_task_evidence_with_several_accepted_capabilities_is_unattributed() {
         id: "leaf".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Resolved,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -226,6 +230,7 @@ fn p5_evidence_for_a_merged_away_task_still_counts() {
         id: "leaf".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -233,6 +238,7 @@ fn p5_evidence_for_a_merged_away_task_still_counts() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });

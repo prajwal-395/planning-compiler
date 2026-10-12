@@ -11,6 +11,7 @@ fn task(id: &str, state: TaskState) -> Task {
         id: id.into(),
         title: id.into(),
         state,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     }
@@ -93,6 +94,7 @@ fn doc(tasks: Vec<Task>, methods: Vec<Method>, caps: Vec<Capability>) -> PlanDoc
             title: "test".into(),
             description: String::new(),
             external_inputs: vec![],
+            tasks_axi_sections: Vec::new(),
         },
         objective: Objective {
             root_task: "root".into(),

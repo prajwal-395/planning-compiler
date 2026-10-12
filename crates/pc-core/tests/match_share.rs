@@ -30,6 +30,7 @@ fn base_doc() -> PlanDoc {
             title: "test".to_string(),
             description: String::new(),
             external_inputs: vec![],
+            tasks_axi_sections: Vec::new(),
         },
         objective: Objective {
             root_task: "root".to_string(),
@@ -49,6 +50,7 @@ fn base_doc() -> PlanDoc {
                 id: "root".to_string(),
                 title: "root".to_string(),
                 state: TaskState::Decomposed,
+                tasks_axi: None,
                 consumes: vec![],
                 produces: vec![],
             },
@@ -56,6 +58,7 @@ fn base_doc() -> PlanDoc {
                 id: "leaf".to_string(),
                 title: "leaf".to_string(),
                 state: TaskState::Open,
+                tasks_axi: None,
                 consumes: vec![],
                 produces: vec![contract("transcript", &["words"])],
             },
@@ -296,6 +299,7 @@ fn p4_does_not_merge_different_titles_with_same_contract() {
         id: "clip-1".to_string(),
         title: "Transcribe clip 1".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -303,6 +307,7 @@ fn p4_does_not_merge_different_titles_with_same_contract() {
         id: "clip-2".to_string(),
         title: "Transcribe clip 2".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -331,6 +336,7 @@ fn p4_does_not_merge_across_states() {
         id: "leaf-done".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Done,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -350,6 +356,7 @@ fn p4_preserves_subtask_order_of_untouched_methods() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -357,6 +364,7 @@ fn p4_preserves_subtask_order_of_untouched_methods() {
         id: "zeta".to_string(),
         title: "zeta".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["timings"])],
     });
@@ -381,6 +389,7 @@ fn p4_merges_identical_tasks() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -405,6 +414,7 @@ fn p4_does_not_merge_same_title_different_contract() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words", "timings"])],
     });
@@ -424,6 +434,7 @@ fn p4_does_not_merge_different_consumes() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![contract("transcript", &["timings"])],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -441,6 +452,7 @@ fn p4_rewrites_objective_root() {
         id: "root-dup".to_string(),
         title: "root".to_string(),
         state: TaskState::Decomposed,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -470,6 +482,7 @@ fn p4_rewrites_method_references() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -499,6 +512,7 @@ fn p4_deduplicates_invoke_methods_after_merge() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -532,6 +546,7 @@ fn p4_merge_is_deterministic_regardless_of_input_order() {
         id: "a".to_string(),
         title: "a".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -539,6 +554,7 @@ fn p4_merge_is_deterministic_regardless_of_input_order() {
         id: "b".to_string(),
         title: "b".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -561,6 +577,7 @@ fn task(id: &str, title: &str, state: TaskState) -> Task {
         id: id.into(),
         title: title.into(),
         state,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![],
     }
@@ -677,6 +694,7 @@ fn p4_dedup_after_merge_keeps_accepted_over_derived() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -711,6 +729,7 @@ fn p4_rewrites_evidence_subjects_of_merged_tasks() {
         id: "leaf-dup".to_string(),
         title: "leaf".to_string(),
         state: TaskState::Open,
+        tasks_axi: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
