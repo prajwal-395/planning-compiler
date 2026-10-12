@@ -226,10 +226,13 @@ pub struct MetricDelta {
     /// Metric name.
     pub metric: String,
     /// Expected value before.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub before: f64,
     /// Expected value after.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub after: f64,
     /// After minus before.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub delta: f64,
     /// Sorted unique typed bases behind the measured nodes before, with
     /// the missing basis reported as `"none"`. Empty when declared-only.
@@ -248,6 +251,7 @@ pub struct PlanSummary {
     /// Sorted unique typed bases behind each metric's measured nodes.
     pub bases: BTreeMap<String, Vec<String>>,
     /// Expected makespan in minutes.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub makespan_minutes: f64,
 }
 
@@ -359,6 +363,7 @@ pub struct ImpactReport {
     /// Expected-value movement per metric, when both sides compile.
     pub totals_delta: Vec<MetricDelta>,
     /// Makespan movement in minutes, when both sides compile.
+    #[serde(serialize_with = "crate::json::ser_opt_f64_3")]
     pub makespan_delta: Option<f64>,
     /// Contract violations the change would introduce, with consumers.
     pub contract_notes: Vec<ContractNote>,
@@ -666,10 +671,13 @@ pub struct DiffReport {
     /// Method-choice differences, when both sides compile.
     pub selection_changes: Vec<SelectionChange>,
     /// Makespan before, when the first plan compiles.
+    #[serde(serialize_with = "crate::json::ser_opt_f64_3")]
     pub makespan_before: Option<f64>,
     /// Makespan after, when the second plan compiles.
+    #[serde(serialize_with = "crate::json::ser_opt_f64_3")]
     pub makespan_after: Option<f64>,
     /// After minus before, when both plans compile.
+    #[serde(serialize_with = "crate::json::ser_opt_f64_3")]
     pub makespan_delta: Option<f64>,
     /// Expected-value movement per metric, when both compile.
     pub totals_delta: Vec<MetricDelta>,

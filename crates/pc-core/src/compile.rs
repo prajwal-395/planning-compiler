@@ -19,14 +19,18 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EstimateRange {
     /// Optimistic estimate.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub low: f64,
     /// Most likely estimate.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub likely: f64,
     /// Pessimistic estimate.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub high: f64,
     /// PERT weighted expected estimate, `(low + 4*likely + high) / 6`. For
     /// rolled-up `duration_minutes` it is instead the CPM makespan over each
     /// task's expected duration, so it need not match this range's own PERT.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub expected: f64,
 }
 
@@ -34,14 +38,19 @@ pub struct EstimateRange {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskTiming {
     /// Earliest start in expected minutes.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub earliest_start: f64,
     /// Earliest finish in expected minutes.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub earliest_finish: f64,
     /// Latest start without delaying the makespan.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub latest_start: f64,
     /// Latest finish without delaying the makespan.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub latest_finish: f64,
     /// Slack in expected minutes.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub slack: f64,
     /// Whether this task lies on at least one critical path.
     pub critical: bool,
@@ -134,6 +143,7 @@ pub struct CompiledPlan {
     /// expected task durations. This is the optimistic PERT estimate: CPM
     /// over expectations ignores merge bias, so the text labels it
     /// `(optimistic)`. Kept for compatibility; prefer `makespan_range`.
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub makespan_minutes: f64,
     /// Low, likely, high and expected makespan in minutes: the CPM span over
     /// each task's low, likely, high and PERT expected durations. Matches

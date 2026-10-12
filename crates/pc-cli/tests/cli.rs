@@ -2721,3 +2721,130 @@ estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0,
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&other).unwrap();
 }
+
+/// D3: `compile`, `frontier`, `impact` and `diff --json` round floats to the
+/// text renderer's 3-decimal precision. Regression on
+/// examples/transcription-substitution, where `failure_risk.low` printed as
+/// 0.050000000000000044 and a diff's `failure_risk.before` as
+/// 0.10833333333333332.
+#[test]
+fn json_floats_round_to_text_precision() {
+    fn assert_rounded(value: &serde_json::Value, ctx: &str) {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    let rounded = (f * 1000.0).round() / 1000.0;
+                    assert!(
+                        (f - rounded).abs() < f64::EPSILON,
+                        "{ctx}: float {f} carries more than 3 decimals"
+                    );
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    assert_rounded(item, ctx);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, item) in map {
+                    assert_rounded(item, &format!("{ctx}.{key}"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("compile")
+        .arg("examples/transcription-substitution")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !raw.contains("0.050000000000000044"),
+        "unrounded float leaked into compile --json:\n{raw}"
+    );
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(value["totals"]["failure_risk"]["low"], 0.05, "{value}");
+    assert_eq!(value["totals"]["failure_risk"]["likely"], 0.1, "{value}");
+    assert_eq!(value["totals"]["failure_risk"]["high"], 0.2, "{value}");
+    assert_eq!(
+        value["totals"]["failure_risk"]["expected"], 0.108,
+        "{value}"
+    );
+    assert_rounded(&value, "compile");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("frontier")
+        .arg("examples/transcription-substitution")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !raw.contains("0.3333333333333333"),
+        "unrounded float leaked into frontier --json:\n{raw}"
+    );
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let entry = &value["unestimated"][0];
+    assert_eq!(entry["score"], 0.333, "{value}");
+    assert_eq!(entry["share"], 0.667, "{value}");
+    assert_rounded(&value, "frontier");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("diff")
+        .arg("examples/transcription-substitution/decided.toml")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let delta = |metric: &str| {
+        value["totals_delta"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["metric"] == metric)
+            .unwrap_or_else(|| panic!("no {metric} delta in {value}"))
+            .clone()
+    };
+    let accuracy = delta("accuracy_distance_from_incumbent");
+    assert_eq!(accuracy["before"], 0.1, "{value}");
+    assert_eq!(accuracy["delta"], -0.1, "{value}");
+    assert_eq!(delta("failure_risk")["before"], 0.108, "{value}");
+    assert_rounded(&value, "diff");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root())
+        .arg("impact")
+        .arg("examples/transcription-substitution/changes/accept-hybrid.json")
+        .arg("examples/transcription-substitution/plan.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_rounded(&value, "impact");
+}

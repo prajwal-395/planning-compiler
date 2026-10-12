@@ -15,6 +15,7 @@ pub mod diagnostic;
 pub mod estimate;
 pub mod frontier;
 pub mod impact;
+pub mod json;
 pub mod passes;
 pub mod propose;
 

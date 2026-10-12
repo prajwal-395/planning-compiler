@@ -86,13 +86,16 @@ pub struct FrontierItem {
     /// Ranking score within the entry's group:
     /// `share * uncertainty * criticality * readiness`. `None` for blocked
     /// alternatives, which are not ranked.
+    #[serde(serialize_with = "crate::json::ser_opt_f64_3")]
     pub score: Option<f64>,
     /// Share of the objective: the weighted expected cost over the total of
     /// open acceptable work when `estimated`, otherwise the structural
     /// dependent share. `None` for blocked alternatives.
+    #[serde(serialize_with = "crate::json::ser_opt_f64_3")]
     pub share: Option<f64>,
     /// Uncertainty (`1.0`, or `0.5` when measured or staged evidence on a
     /// weighted metric backs the capability).
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub uncertainty: f64,
     /// Whether the share is a fraction of the open acceptable weighted cost
     /// (ranked in `items`) rather than structural (listed in `unestimated`)
