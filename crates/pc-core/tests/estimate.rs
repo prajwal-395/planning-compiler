@@ -42,6 +42,7 @@ fn doc() -> (String, PlanDoc) {
             title: "root".to_string(),
             state: TaskState::Resolved,
             tasks_axi: None,
+            beads_jsonl: None,
             consumes: vec![],
             produces: vec![],
         }],
@@ -146,6 +147,7 @@ fn p5_attributes_capability_method_and_task_subjects() {
         title: "leaf".to_string(),
         state: TaskState::Resolved,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -189,6 +191,7 @@ fn p5_task_evidence_with_several_accepted_capabilities_is_unattributed() {
         title: "leaf".to_string(),
         state: TaskState::Resolved,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -231,6 +234,7 @@ fn p5_evidence_for_a_merged_away_task_still_counts() {
         title: "leaf".to_string(),
         state: TaskState::Open,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });
@@ -239,6 +243,7 @@ fn p5_evidence_for_a_merged_away_task_still_counts() {
         title: "leaf".to_string(),
         state: TaskState::Open,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
     });

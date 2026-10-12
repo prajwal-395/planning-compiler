@@ -89,6 +89,7 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                             } else {
                                 None
                             },
+                            beads_jsonl: None,
                         }
                     })
                     .collect();

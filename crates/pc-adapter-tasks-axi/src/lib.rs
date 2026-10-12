@@ -779,6 +779,7 @@ pub fn import_plan(backlog: &Backlog) -> Result<PlanDoc, ImportError> {
         consumes: Vec::new(),
         produces: Vec::new(),
         tasks_axi: None,
+        beads_jsonl: None,
     });
     for item in &backlog.items {
         tasks.push(Task {
@@ -803,6 +804,7 @@ pub fn import_plan(backlog: &Backlog) -> Result<PlanDoc, ImportError> {
                 hold_until: item.hold_until.clone(),
                 body: item.body.clone(),
             }),
+            beads_jsonl: None,
         });
     }
     let mut order_edges = Vec::new();

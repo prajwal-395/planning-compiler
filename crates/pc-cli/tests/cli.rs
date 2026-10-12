@@ -3555,3 +3555,43 @@ fn tasks_axi_import_default_refuses_cwd_plan() {
     assert!(!dir.join(".plan").exists(), "refusal wrote nothing");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Synthetic documented Beads JSONL round-trips through the CLI and IR.
+#[test]
+fn beads_jsonl_round_trip_is_byte_identical() {
+    let dir = scratch_dir("beads-roundtrip");
+    let input = workspace_root().join("tests/fixtures/beads/issues.jsonl");
+    let output = dir.join("roundtrip.jsonl");
+    let plan = dir.join("plan");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-beads")
+        .arg(&input)
+        .arg(&plan)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "unlinked dependency: `bd-e5f6` blocks on `external:infra:ci-runner`, which is not in the file; kept in passthrough with no order edge\n",
+        ))
+        .stdout(predicates::str::contains(
+            "unlinked dependency: `bd-e5f6` blocks on `bd-gone`, which is not in the file; kept in passthrough with no order edge\n",
+        ))
+        .stdout(predicates::str::contains("imported 3 Beads issues"));
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("check")
+        .arg(&plan)
+        .assert()
+        .success();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("export-beads")
+        .arg(&output)
+        .arg(&plan)
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(input).unwrap(),
+        std::fs::read(output).unwrap()
+    );
+}

@@ -51,6 +51,7 @@ fn valid_doc() -> (String, PlanDoc) {
                 title: "root".to_string(),
                 state: TaskState::Decomposed,
                 tasks_axi: None,
+                beads_jsonl: None,
                 consumes: vec![],
                 produces: vec![],
             },
@@ -59,6 +60,7 @@ fn valid_doc() -> (String, PlanDoc) {
                 title: "leaf".to_string(),
                 state: TaskState::Open,
                 tasks_axi: None,
+                beads_jsonl: None,
                 consumes: vec![],
                 produces: vec![],
             },
@@ -108,6 +110,7 @@ fn e001_reports_duplicate_task_ids() {
         title: "dupe".to_string(),
         state: TaskState::Open,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -213,6 +216,7 @@ fn e007_reports_order_cycle() {
         title: "b".to_string(),
         state: TaskState::Open,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![],
     });
@@ -679,6 +683,7 @@ fn check_notes_flag_proposed_contract_violation_without_error() {
         title: "consumer".to_string(),
         state: TaskState::Open,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![contract("transcript", &["timings"])],
         produces: vec![],
     });
@@ -716,6 +721,7 @@ fn check_notes_ignore_rejected_and_match_frontier_blocked() {
         title: "consumer".to_string(),
         state: TaskState::Open,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![contract("transcript", &["timings"])],
         produces: vec![],
     });

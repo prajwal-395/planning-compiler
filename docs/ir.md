@@ -37,6 +37,11 @@ How measured totals render as observed ranges is owned by P5 in `passes.md`.
   round-trips byte-identical instead of being refused or dropped;
   `plan.tasks_axi_sections` preserves the file's section order including
   empty sections.
+  `beads_jsonl` carries the original Beads issue record so fields without
+  IR counterparts survive export; id, title and open/done state remain
+  editable (renames reach every dependency naming the issue), `blocks`
+  dependencies between issues in the file rebuild from non-rejected
+  decompose order edges, and other states are refused on export. Both imported row types are distinct work under P4.
 - **Method.** `kind` is `decompose { subtasks, order_edges }` or
   `invoke { capability }`. `status` is `accepted`, `proposed`, `derived` or
   `rejected`. `accepted`/`derived` methods are checked, and only `accepted`

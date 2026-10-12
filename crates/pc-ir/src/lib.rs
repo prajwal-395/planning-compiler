@@ -196,6 +196,10 @@ pub struct Task {
     /// refused or dropped. `None` for tasks that did not come from an import.
     #[serde(default)]
     pub tasks_axi: Option<TasksAxiMeta>,
+    /// Original Beads issue JSONL record, preserved verbatim for lossless export.
+    /// Its presence also keeps this imported issue distinct under P4 sharing.
+    #[serde(default)]
+    pub beads_jsonl: Option<String>,
 }
 
 /// Opaque tasks-axi `backlog.md` metadata carried through the IR.

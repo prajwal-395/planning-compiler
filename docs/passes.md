@@ -92,7 +92,7 @@ touched. Every merge emits a `merged` trace event, every removed method a
 Guards: the title is load-bearing (contract-only equality wrongly merges
 distinct work, e.g. two clips' transcriptions), the state keeps finished or
 abandoned work from merging into live work, a task carrying `tasks_axi`
-passthrough is one backlog row and never shares (its id joins the form), the
+or `beads_jsonl` passthrough is one imported row and never shares (its id joins the form), the
 subtree keeps tasks with
 different decompositions apart, merge groups are tried one at a time in
 canonical-id order and a group is refused with a `kept` trace event when it

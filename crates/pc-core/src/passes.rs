@@ -1235,8 +1235,9 @@ impl Pass for MatchPass {
 /// never equal `transcribe_clip_2`), and collapses plans whose steps share
 /// an empty contract but do different work. The state keeps finished or
 /// abandoned work from merging into live work and vice versa. A task
-/// carrying backlog passthrough (`tasks_axi`) is one backlog row, which is
-/// always distinct work, so its id joins the form and it never shares.
+/// carrying source passthrough (`tasks_axi` or `beads_jsonl`) is one imported
+/// row, which is always distinct work, so its id joins the form and it never
+/// shares.
 fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
     let mut consumes: Vec<(String, Vec<String>)> = task
         .consumes
@@ -1264,7 +1265,7 @@ fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
         "consumes": consumes,
         "produces": produces,
     });
-    if task.tasks_axi.is_some() {
+    if task.tasks_axi.is_some() || task.beads_jsonl.is_some() {
         form["backlog_row"] = task.id.clone().into();
     }
     form

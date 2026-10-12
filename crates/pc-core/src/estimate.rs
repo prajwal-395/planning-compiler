@@ -727,6 +727,7 @@ mod tests {
                 title: "t".into(),
                 state: pc_ir::TaskState::Resolved,
                 tasks_axi: None,
+                beads_jsonl: None,
                 consumes: vec![],
                 produces: vec![],
             }],

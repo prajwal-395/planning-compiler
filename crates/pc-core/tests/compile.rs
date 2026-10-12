@@ -12,6 +12,7 @@ fn task(id: &str, state: TaskState) -> Task {
         title: id.into(),
         state,
         tasks_axi: None,
+        beads_jsonl: None,
         consumes: vec![],
         produces: vec![],
     }

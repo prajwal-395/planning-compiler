@@ -348,6 +348,14 @@
       "additionalProperties": false,
       "description": "A need: what must be true or produced.",
       "properties": {
+        "beads_jsonl": {
+          "default": null,
+          "description": "Original Beads issue JSONL record, preserved verbatim for lossless export. Its presence also keeps this imported issue distinct under P4 sharing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "consumes": {
           "default": [],
           "description": "Typed inputs this task needs from upstream or external inputs.",

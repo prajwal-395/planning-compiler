@@ -200,6 +200,20 @@ enum Commands {
         /// holds a plan file, otherwise the current directory.
         path: Option<PathBuf>,
     },
+    /// Import Beads issue JSONL into a plan directory.
+    ImportBeads {
+        /// Beads JSONL file to read.
+        jsonl: PathBuf,
+        /// Plan directory to write `<dir>/plan.toml` into. Defaults to `.plan`.
+        path: Option<PathBuf>,
+    },
+    /// Export a plan directory to Beads issue JSONL.
+    ExportBeads {
+        /// JSONL file to write (overwritten).
+        jsonl: PathBuf,
+        /// Plan file or directory.
+        path: Option<PathBuf>,
+    },
 }
 
 /// Resolve an optional plan path: an explicit path passes through
@@ -268,6 +282,8 @@ fn main() {
         Commands::ExportTasksAxi { backlog, path } => {
             run_export_tasks_axi(&backlog, &plan_path(path))
         }
+        Commands::ImportBeads { jsonl, path } => run_import_beads(&jsonl, path),
+        Commands::ExportBeads { jsonl, path } => run_export_beads(&jsonl, &plan_path(path)),
     }
 }
 
@@ -893,6 +909,7 @@ fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
             consumes: Vec::new(),
             produces: Vec::new(),
             tasks_axi: None,
+            beads_jsonl: None,
         }],
         method: Vec::new(),
         capability: Vec::new(),
@@ -1665,5 +1682,80 @@ fn run_export_tasks_axi(backlog_path: &std::path::Path, path: &std::path::Path) 
         backlog.items.len(),
         loaded.display_path,
         backlog_path.display(),
+    );
+}
+
+/// Handler for `pc import-beads`.
+fn run_import_beads(input: &std::path::Path, path: Option<PathBuf>) {
+    let file = new_plan_dir(path).join("plan.toml");
+    let text = std::fs::read_to_string(input).unwrap_or_else(|e| {
+        eprintln!("error[E000]: cannot read `{}`: {e}", input.display());
+        std::process::exit(1);
+    });
+    let pc_adapter_beads::Import { doc, unlinked } = pc_adapter_beads::import_jsonl(&text)
+        .unwrap_or_else(|e| {
+            eprintln!("error: cannot import `{}`: {e}", input.display());
+            std::process::exit(1);
+        });
+    let rendered = pc_ir::to_toml(&doc).unwrap_or_else(|e| {
+        eprintln!("error[E000]: cannot render imported plan: {e}");
+        std::process::exit(1);
+    });
+    let mut probe = doc.clone();
+    let report = pc_core::passes::check(&file.display().to_string(), &rendered, &mut probe, None);
+    if !report.ok() {
+        for diag in &report.diagnostics {
+            eprintln!("{}", pc_core::render_human(diag));
+        }
+        eprintln!("error: imported plan fails check; refusing to write");
+        std::process::exit(1);
+    }
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+            std::process::exit(1);
+        });
+    }
+    std::fs::write(&file, rendered).unwrap_or_else(|e| {
+        eprintln!("error[E000]: cannot write `{}`: {e}", file.display());
+        std::process::exit(1);
+    });
+    for dep in &unlinked {
+        println!(
+            "unlinked dependency: `{}` blocks on `{}`, which is not in the file; kept in passthrough with no order edge",
+            dep.issue, dep.depends_on
+        );
+    }
+    println!(
+        "imported {} Beads issues to {}",
+        doc.task.len() - 1,
+        file.display()
+    );
+}
+
+/// Handler for `pc export-beads`.
+fn run_export_beads(output: &std::path::Path, path: &std::path::Path) {
+    let loaded = pc_store::load(path).unwrap_or_else(|e| {
+        eprintln!("error[E000]: {e}");
+        std::process::exit(1);
+    });
+    let text = pc_adapter_beads::export_jsonl(&loaded.doc).unwrap_or_else(|e| {
+        eprintln!("error: cannot export `{}`: {e}", loaded.display_path);
+        std::process::exit(1);
+    });
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+            std::process::exit(1);
+        });
+    }
+    std::fs::write(output, text).unwrap_or_else(|e| {
+        eprintln!("error[E000]: cannot write `{}`: {e}", output.display());
+        std::process::exit(1);
+    });
+    println!(
+        "exported Beads issues from {} to {}",
+        loaded.display_path,
+        output.display()
     );
 }
