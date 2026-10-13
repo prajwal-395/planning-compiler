@@ -213,6 +213,7 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                         basis: None,
                         artifact_hash: None,
                     }],
+                    investigation: vec![],
                 }
             })
     })

@@ -74,6 +74,10 @@ pub const UNCERTAIN_FACTOR: f64 = 1.0;
 /// backs the capability.
 pub const MEASURED_FACTOR: f64 = 0.5;
 
+/// Slack for comparing value-of-information LP results against zero, so
+/// floating-point solver noise never decides a conclusion.
+const SOLVER_TOLERANCE: f64 = 1e-9;
+
 /// One ranked frontier entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrontierItem {
@@ -113,8 +117,12 @@ pub struct FrontierItem {
 }
 
 /// A plan question worth investigating, separate from work ready to execute.
-/// Missing investigation cost and change likelihood stay unknown until the IR
-/// carries evidence for them.
+/// `investigation_cost` carries the explicit `investigation` cost when the
+/// task has a validated model, and `value_of_information` carries the EVSI
+/// interval when every required probability is explicit and
+/// provenance-backed. Unknown probabilities stay unknown (no midpoint is
+/// fabricated), so such models carry no VOI. Change likelihood stays unknown:
+/// the IR carries no likelihood model for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryItem {
     /// Task whose selected approach or alternatives are being investigated.
@@ -131,12 +139,53 @@ pub struct DiscoveryItem {
     pub alternatives: usize,
     /// Number of downstream decisions depending on this task.
     pub downstream_decisions: usize,
-    /// Investigation effort is not represented in the current IR.
+    /// Investigation effort in utility points, from the explicit
+    /// `investigation` model when the task has one.
     pub investigation_cost: Option<f64>,
     /// Likelihood that investigation materially changes the selected plan.
     pub material_change_likelihood: Option<f64>,
+    /// EVSI interval in utility points, when every required probability is
+    /// explicit and provenance-backed.
+    pub value_of_information: Option<ValueOfInformation>,
+    /// Why the task's investigation model yields no `value_of_information`
+    /// (for example an unknown probability); `None` when there is no model
+    /// or the value is known.
+    pub value_of_information_unknown: Option<String>,
     /// Human-readable investigation question.
     pub question: String,
+}
+
+/// Result of evaluating an explicit investigation model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValueOfInformation {
+    /// Lower bound on expected value with information, minus the value of
+    /// the prior-optimal choice and the investigation cost.
+    pub evsi_low: f64,
+    /// Upper bound on expected value with information, minus the value of
+    /// the prior-optimal choice and the investigation cost.
+    pub evsi_high: f64,
+    /// Lower bound on the gain from switching away from the selected method
+    /// on current beliefs alone; never counted as information value.
+    pub switch_gain_low: f64,
+    /// Upper bound on the gain from switching away from the selected method
+    /// on current beliefs alone.
+    pub switch_gain_high: f64,
+    /// Method to implement without investigating: one that beats the
+    /// selected method throughout the bounds, else the selected method.
+    pub preferred_method: String,
+    /// When switching away from the selected method gains throughout the
+    /// bounds but no single method beats it throughout, every method that
+    /// is prior-optimal for some allowed distribution; empty otherwise.
+    pub switch_candidates: Vec<String>,
+    /// Whether investigation has positive value throughout the interval,
+    /// could have positive value, or is dominated by its cost, in which case
+    /// the preferred method is implemented directly (switching to it when it
+    /// differs from the selected method), or, when only `switch_candidates`
+    /// beat the selected method, the selected method is switched away from
+    /// with the replacement depending on the probabilities.
+    pub conclusion: String,
+    /// Human-readable explanation including the decision basis.
+    pub explanation: String,
 }
 
 impl FrontierItem {
@@ -179,8 +228,10 @@ pub struct FrontierReport {
     /// planned: every reachable task has an accepted method and no critical
     /// cost rests on guesses.
     pub blocked: Vec<FrontierItem>,
-    /// Ranked information-acquisition work. Unknown cost and likelihood are
-    /// intentionally null; PC-11 will evaluate value of information.
+    /// Ranked information-acquisition work. Entries with an explicit
+    /// `investigation` model carry its cost and, when every required
+    /// probability is explicit and provenance-backed, its EVSI interval;
+    /// unknown probabilities stay unknown and carry no VOI.
     pub discovery: Vec<DiscoveryItem>,
 }
 
@@ -223,8 +274,7 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
 
     // Discovery candidates come only from structured uncertainty already in
     // the plan: proposed invocation alternatives or selected capabilities
-    // without evidence on an objective-weighted metric. Cost and probability
-    // are not present in this IR and must not be guessed.
+    // without evidence on an objective-weighted metric.
     let mut proposed_by_task: BTreeMap<&str, Vec<&pc_ir::Method>> = BTreeMap::new();
     for method in &doc.method {
         if method.kind == pc_ir::MethodKind::Invoke
@@ -246,6 +296,12 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
                 .map(|method| (task.as_str(), *method))
         })
         .collect();
+    let rejected: BTreeSet<&str> = doc
+        .method
+        .iter()
+        .filter(|method| method.status == MethodStatus::Rejected)
+        .map(|method| method.id.as_str())
+        .collect();
     let mut discovery = Vec::new();
     for task in &live {
         let alternatives = proposed_by_task.get(task.as_str()).map_or(0, Vec::len);
@@ -253,7 +309,11 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
             .get(task.as_str())
             .and_then(|method| method.capability.as_deref());
         let uncertain = selected_cap.is_some() && !backed(selected_cap);
-        if alternatives == 0 && !uncertain {
+        let model = doc.investigation.iter().find(|model| model.task == *task);
+        // An explicit investigation model is itself structured uncertainty:
+        // a task carrying one is a discovery candidate even when the plan
+        // otherwise looks settled.
+        if alternatives == 0 && !uncertain && model.is_none() {
             continue;
         }
         let uncertainty = if backed(selected_cap) {
@@ -268,7 +328,27 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
             (Some(cap), _) => format!(
                 "Investigate whether evidence or another approach changes task:{task} via capability:{cap}"
             ),
-            (_, n) => format!("Investigate the {n} proposed alternative(s) for task:{task}"),
+            (_, n) if n > 0 => {
+                format!("Investigate the {n} proposed alternative(s) for task:{task}")
+            }
+            _ => format!("Investigate the explicit hypotheses for task:{task}"),
+        };
+        let investigation_cost = model
+            .filter(|model| model.cost.is_finite() && model.cost >= 0.0)
+            .map(|model| model.cost);
+        let selected = selected_by_task.get(task.as_str()).map(|m| m.id.as_str());
+        let accepted: Vec<&str> = doc
+            .method
+            .iter()
+            .filter(|m| m.task == *task && m.status == MethodStatus::Accepted)
+            .map(|m| m.id.as_str())
+            .collect();
+        let (value_of_information, value_of_information_unknown) = match model {
+            None => (None, None),
+            Some(model) => match evaluate_voi(model, task, selected, &accepted, &rejected) {
+                Ok(voi) => (Some(voi), None),
+                Err(reason) => (None, Some(reason)),
+            },
         };
         discovery.push(DiscoveryItem {
             subject: format!("task:{task}"),
@@ -276,8 +356,10 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
             uncertainty,
             alternatives,
             downstream_decisions: dependents.get(task).copied().unwrap_or(0),
-            investigation_cost: None,
+            investigation_cost,
             material_change_likelihood: None,
+            value_of_information,
+            value_of_information_unknown,
             question,
         });
     }
@@ -523,6 +605,259 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
         blocked,
         discovery,
     }
+}
+
+/// EVSI for `task`'s investigation model against a baseline: the `selected`
+/// method, else (a task outside the selected plan) the `accepted` method
+/// with the highest worst-case expected value over the bounds, ties broken
+/// by id; E017 guarantees every hypothesis values each accepted method.
+/// Every way the value can stay unknown returns its reason.
+fn evaluate_voi(
+    model: &pc_ir::Investigation,
+    task: &str,
+    selected: Option<&str>,
+    accepted: &[&str],
+    rejected: &BTreeSet<&str>,
+) -> Result<ValueOfInformation, String> {
+    if !model.cost.is_finite() || model.cost < 0.0 || model.cost_source.trim().is_empty() {
+        return Err("investigation cost is not finite, non-negative and sourced".to_string());
+    }
+    if model.hypotheses.is_empty() {
+        return Err("the model has no explicit hypotheses".to_string());
+    }
+    let unsolved = || "the probability bounds could not be solved".to_string();
+    let mut bounds = Vec::new();
+    let mut values: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+    let mut sources = Vec::new();
+    for hypothesis in &model.hypotheses {
+        let id = &hypothesis.id;
+        if id.trim().is_empty() || hypothesis.source.trim().is_empty() {
+            return Err(format!("hypothesis `{id}` lacks an id or provenance"));
+        }
+        let Some(probability) = hypothesis.probability.as_ref() else {
+            return Err(format!(
+                "hypothesis `{id}` has an unknown probability, so EVSI stays unknown"
+            ));
+        };
+        if !probability.low.is_finite()
+            || !probability.high.is_finite()
+            || probability.low < 0.0
+            || probability.high > 1.0
+            || probability.low > probability.high
+            || probability.source.trim().is_empty()
+        {
+            return Err(format!(
+                "hypothesis `{id}` has invalid or unsourced probability bounds"
+            ));
+        }
+        for alternative in &hypothesis.alternatives {
+            if !alternative.value.is_finite() {
+                return Err(format!("hypothesis `{id}` has a non-finite utility"));
+            }
+            if !rejected.contains(alternative.alternative.as_str()) {
+                values
+                    .entry(alternative.alternative.as_str())
+                    .or_default()
+                    .push(alternative.value);
+            }
+        }
+        bounds.push((probability.low, probability.high));
+        sources.push(format!("{} ({})", hypothesis.id, probability.source));
+    }
+    if values.values().any(|row| row.len() != bounds.len()) {
+        return Err("the hypotheses do not value the same alternatives".to_string());
+    }
+    let low_sum: f64 = bounds.iter().map(|bound| bound.0).sum();
+    let high_sum: f64 = bounds.iter().map(|bound| bound.1).sum();
+    if low_sum > 1.0 + f64::EPSILON || high_sum < 1.0 - f64::EPSILON {
+        return Err("the probability bounds admit no distribution summing to 1".to_string());
+    }
+    let (role, selected, scope) = if let Some(selected) = selected {
+        ("selected method", selected, String::new())
+    } else {
+        let mut ranked = Vec::new();
+        for id in accepted {
+            let Some(row) = values.get(id) else {
+                return Err(format!("the hypotheses do not value accepted method {id}"));
+            };
+            ranked.push((*id, expected_bound(&bounds, row, false)));
+        }
+        let Some(&(best, _)) = ranked
+            .iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        else {
+            return Err(
+                "the task has no selected or accepted method to compare against".to_string(),
+            );
+        };
+        let mut names = accepted.to_vec();
+        names.sort_unstable();
+        (
+            "accepted method",
+            best,
+            format!(
+                "; task:{task} is not in the currently selected plan, so the comparison is against accepted method {best}, the highest worst-case expected value among accepted methods {} (ties broken by id)",
+                names.join(", ")
+            ),
+        )
+    };
+    let Some(current) = values.get(selected) else {
+        return Err(format!("the hypotheses do not value {role} {selected}"));
+    };
+    let best: Vec<f64> = (0..bounds.len())
+        .map(|i| {
+            values
+                .values()
+                .map(|row| row[i])
+                .fold(f64::NEG_INFINITY, f64::max)
+        })
+        .collect();
+    let difference =
+        |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x - y).collect() };
+    // EVSI(p) = E_p[max_a V] - max_a E_p[V(a)] = min_a E_p[best - V(a)].
+    let regret: Vec<Vec<f64>> = values.values().map(|row| difference(&best, row)).collect();
+    let evsi_low = regret
+        .iter()
+        .map(|row| expected_bound(&bounds, row, false))
+        .fold(f64::INFINITY, f64::min);
+    let negated: Vec<Vec<f64>> = regret
+        .iter()
+        .map(|row| row.iter().map(|value| -value).collect())
+        .collect();
+    let evsi_high = -minimax_expectation(&bounds, &negated).ok_or_else(unsolved)?;
+    // Switch gain(p) = max_a E_p[V(a) - V(selected)]: the gain from acting on
+    // current beliefs alone, never information value.
+    let advantage: Vec<(&str, Vec<f64>)> = values
+        .iter()
+        .map(|(id, row)| (*id, difference(row, current)))
+        .collect();
+    let switch_low = minimax_expectation(
+        &bounds,
+        &advantage
+            .iter()
+            .map(|(_, row)| row.clone())
+            .collect::<Vec<_>>(),
+    )
+    .ok_or_else(unsolved)?;
+    let switch_high = advantage
+        .iter()
+        .map(|(_, row)| expected_bound(&bounds, row, true))
+        .fold(0.0, f64::max);
+    let preferred = advantage
+        .iter()
+        .map(|(id, row)| (*id, expected_bound(&bounds, row, false)))
+        .filter(|(_, gain)| *gain > SOLVER_TOLERANCE)
+        .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        .map_or(selected, |(id, _)| id);
+    // A method is prior-optimal somewhere in the bounds when
+    // min_p max_b E_p[V(b) - V(a)] <= 0.
+    let switch_candidates: Vec<&str> = if preferred == selected && switch_low > SOLVER_TOLERANCE {
+        values
+            .iter()
+            .filter(|(id, _)| **id != selected)
+            .filter(|(_, row)| {
+                let losses: Vec<Vec<f64>> = values
+                    .values()
+                    .map(|other| difference(other, row))
+                    .collect();
+                minimax_expectation(&bounds, &losses).is_some_and(|loss| loss <= SOLVER_TOLERANCE)
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let low = evsi_low - model.cost;
+    let high = evsi_high - model.cost;
+    let conclusion = if low > 0.0 {
+        "investigation-outweighs-implementation"
+    } else if high > 0.0 {
+        "investigation-may-outweigh-implementation"
+    } else if preferred != selected {
+        "switch-to-preferred-approach"
+    } else if !switch_candidates.is_empty() {
+        "switch-from-selected-approach"
+    } else {
+        "implement-preferred-approach"
+    };
+    let switch = if preferred != selected {
+        format!(
+            "without investigating, implement {preferred} instead of {role} {selected} (gain [{switch_low:.3}, {switch_high:.3}] on current beliefs)"
+        )
+    } else if !switch_candidates.is_empty() {
+        format!(
+            "without investigating, switch away from {role} {selected} (gain [{switch_low:.3}, {switch_high:.3}] on current beliefs); the best replacement depends on the probabilities among {}",
+            switch_candidates.join(", ")
+        )
+    } else {
+        format!(
+            "switching from {role} {selected} gains [{switch_low:.3}, {switch_high:.3}] on current beliefs"
+        )
+    };
+    Ok(ValueOfInformation {
+        evsi_low: low,
+        evsi_high: high,
+        switch_gain_low: switch_low,
+        switch_gain_high: switch_high,
+        preferred_method: preferred.to_string(),
+        switch_candidates: switch_candidates.iter().map(ToString::to_string).collect(),
+        conclusion: conclusion.to_string(),
+        explanation: format!(
+            "EVSI [{low:.3}, {high:.3}] utility points over the prior-optimal choice after cost {:.3} from {}; {switch}{scope}; hypothesis probability sources: {}",
+            model.cost,
+            model.cost_source,
+            sources.join(", ")
+        ),
+    })
+}
+
+/// Extreme of `sum_i p_i * values_i` over every distribution inside the
+/// probability `bounds` that sums to 1: start each hypothesis at its low
+/// bound and hand the remaining mass to the highest values first when
+/// maximizing, the lowest values first when minimizing.
+fn expected_bound(bounds: &[(f64, f64)], values: &[f64], maximize: bool) -> f64 {
+    let mut order: Vec<usize> = (0..bounds.len()).collect();
+    order.sort_by(|&a, &b| {
+        if maximize {
+            values[b].total_cmp(&values[a])
+        } else {
+            values[a].total_cmp(&values[b])
+        }
+    });
+    let mut slack = 1.0 - bounds.iter().map(|bound| bound.0).sum::<f64>();
+    let mut total = 0.0;
+    for i in order {
+        let (low, high) = bounds[i];
+        let extra = slack.min(high - low).max(0.0);
+        slack -= extra;
+        total += (low + extra) * values[i];
+    }
+    total
+}
+
+/// `min_p max_r sum_i p_i * r_i` over distributions inside `bounds` summing
+/// to 1, solved exactly as a linear program.
+fn minimax_expectation(bounds: &[(f64, f64)], rows: &[Vec<f64>]) -> Option<f64> {
+    use good_lp::{Expression, ProblemVariables, Solution, SolverModel, default_solver, variable};
+    let mut vars = ProblemVariables::new();
+    let probabilities: Vec<_> = bounds
+        .iter()
+        .map(|&(low, high)| vars.add(variable().min(low).max(high)))
+        .collect();
+    let ceiling = vars.add(variable());
+    let mut problem = vars
+        .minimise(ceiling)
+        .using(default_solver)
+        .with(probabilities.iter().copied().sum::<Expression>().eq(1.0));
+    for row in rows {
+        let expectation: Expression = probabilities
+            .iter()
+            .zip(row)
+            .map(|(probability, value)| *value * *probability)
+            .sum();
+        problem = problem.with(expectation.leq(ceiling));
+    }
+    problem.solve().ok().map(|solution| solution.value(ceiling))
 }
 
 /// Estimated remaining open work for `pc compile`'s open-work line, using
@@ -1464,6 +1799,407 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
         assert!(!subjects.contains(&"method:below-done"), "{subjects:?}");
         assert!(!subjects.contains(&"task:child"), "{subjects:?}");
         assert!(subjects.contains(&"method:maybe"), "{subjects:?}");
+    }
+
+    /// Base plan for VOI tests: `work` selects accepted `work-keep`, with a
+    /// proposed `work-try` alternative. Hypothesis `h-slow` (keep 10, try 20)
+    /// and `h-fast` (keep 18, try 12) each carry probability [0.4, 0.6]. With
+    /// p = P(h-slow), pre-cost EVSI is min(10p, 6(1 - p)) in [2.4, 3.6] and
+    /// work-try beats work-keep on current beliefs by 16p - 6 in [0.4, 3.6].
+    fn voi_plan(cost: f64) -> PlanDoc {
+        let text = r#"
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "root"
+title = "Root"
+state = "decomposed"
+
+[[task]]
+id = "work"
+title = "Work"
+state = "resolved"
+
+[[method]]
+id = "root-all"
+task = "root"
+kind = "decompose"
+subtasks = ["work"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "work-keep"
+task = "work"
+kind = "invoke"
+capability = "keep@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "work-try"
+task = "work"
+kind = "invoke"
+capability = "try@1"
+status = "proposed"
+provenance = "agent:test"
+
+[[capability]]
+id = "keep@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 2.0, likely = 4.0, high = 6.0, provenance = "declared" }]
+
+[[capability]]
+id = "try@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0, provenance = "declared" }]
+"#;
+        let mut plan: PlanDoc = pc_ir::from_toml(text).unwrap();
+        let probability = |low: f64, high: f64| pc_ir::ProbabilityEstimate {
+            low,
+            high,
+            provenance: pc_ir::EstimateProvenance::Declared,
+            source: "test:calibration".to_string(),
+            observations: None,
+        };
+        let hypothesis =
+            |id: &str, keep: f64, attempt: f64, probability: Option<pc_ir::ProbabilityEstimate>| {
+                pc_ir::InvestigationHypothesis {
+                    id: id.to_string(),
+                    probability,
+                    source: "test:review".to_string(),
+                    alternatives: vec![
+                        pc_ir::HypothesisAlternativeValue {
+                            alternative: "work-keep".to_string(),
+                            value: keep,
+                        },
+                        pc_ir::HypothesisAlternativeValue {
+                            alternative: "work-try".to_string(),
+                            value: attempt,
+                        },
+                    ],
+                }
+            };
+        plan.investigation.push(pc_ir::Investigation {
+            task: "work".to_string(),
+            cost,
+            cost_source: "test:bench".to_string(),
+            hypotheses: vec![
+                hypothesis("h-slow", 10.0, 20.0, Some(probability(0.4, 0.6))),
+                hypothesis("h-fast", 18.0, 12.0, Some(probability(0.4, 0.6))),
+            ],
+        });
+        plan
+    }
+
+    fn discovery_entry<'a>(report: &'a FrontierReport, subject: &str) -> &'a DiscoveryItem {
+        report
+            .discovery
+            .iter()
+            .find(|item| item.subject == subject)
+            .unwrap()
+    }
+
+    fn voi_of(plan: &mut PlanDoc) -> ValueOfInformation {
+        assert!(checked(plan).ok());
+        let compiled = crate::compile(plan).unwrap();
+        let report = frontier(plan, &compiled);
+        discovery_entry(&report, "task:work")
+            .value_of_information
+            .clone()
+            .unwrap()
+    }
+
+    fn assert_interval(actual: (f64, f64), expected: (f64, f64)) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-9 && (actual.1 - expected.1).abs() < 1e-9,
+            "{actual:?} != {expected:?}"
+        );
+    }
+
+    #[test]
+    fn voi_outweighs_implementation_when_gain_exceeds_cost() {
+        // Catches a missing or sign-flipped cost subtraction: EVSI [2.4, 3.6]
+        // minus cost 1 must stay positive throughout.
+        let mut plan = voi_plan(1.0);
+        let voi = voi_of(&mut plan);
+        assert_interval((voi.evsi_low, voi.evsi_high), (1.4, 2.6));
+        assert_eq!(voi.conclusion, "investigation-outweighs-implementation");
+        assert!(voi.explanation.contains("work-keep"), "{}", voi.explanation);
+    }
+
+    #[test]
+    fn voi_measures_information_against_the_prior_optimal_choice() {
+        // Catches measuring EVSI against the selected method: at p = 0.5,
+        // E[keep] = 14 and E[try] = 16, so information is worth 19 - 16 = 3,
+        // not 19 - 14 = 5; the 2 from switching is reported separately.
+        let mut plan = voi_plan(0.0);
+        for hypothesis in &mut plan.investigation[0].hypotheses {
+            let probability = hypothesis.probability.as_mut().unwrap();
+            probability.low = 0.5;
+            probability.high = 0.5;
+        }
+        let voi = voi_of(&mut plan);
+        assert_interval((voi.evsi_low, voi.evsi_high), (3.0, 3.0));
+        assert_interval((voi.switch_gain_low, voi.switch_gain_high), (2.0, 2.0));
+        assert_eq!(voi.preferred_method, "work-try");
+    }
+
+    #[test]
+    fn voi_recommends_switching_when_an_alternative_dominates() {
+        // Catches calling a switch gain information value: work-try beats
+        // work-keep by 10 under every hypothesis, so information is worth
+        // nothing and the advice is to implement work-try directly.
+        let mut plan = voi_plan(1.0);
+        for hypothesis in &mut plan.investigation[0].hypotheses {
+            let keep = hypothesis.alternatives[0].value;
+            hypothesis.alternatives[1].value = keep + 10.0;
+        }
+        let voi = voi_of(&mut plan);
+        assert_interval((voi.evsi_low, voi.evsi_high), (-1.0, -1.0));
+        assert_interval((voi.switch_gain_low, voi.switch_gain_high), (10.0, 10.0));
+        assert_eq!(voi.preferred_method, "work-try");
+        assert_eq!(voi.conclusion, "switch-to-preferred-approach");
+    }
+
+    #[test]
+    fn voi_may_outweigh_when_interval_straddles_cost() {
+        // Catches a collapsed point estimate: EVSI [2.4, 3.6] minus cost 3
+        // straddles zero, so the verdict must stay qualified.
+        let mut plan = voi_plan(3.0);
+        let voi = voi_of(&mut plan);
+        assert_interval((voi.evsi_low, voi.evsi_high), (-0.6, 0.6));
+        assert_eq!(voi.conclusion, "investigation-may-outweigh-implementation");
+    }
+
+    #[test]
+    fn voi_prefers_implementation_when_cost_dominates() {
+        // Catches recommending a probe whose cost exceeds any possible gain;
+        // work-try still beats work-keep throughout, so switch to it.
+        let mut plan = voi_plan(100.0);
+        let voi = voi_of(&mut plan);
+        assert!(voi.evsi_high < 0.0);
+        assert_interval((voi.switch_gain_low, voi.switch_gain_high), (0.4, 3.6));
+        assert_eq!(voi.conclusion, "switch-to-preferred-approach");
+    }
+
+    #[test]
+    fn voi_switches_away_when_no_single_alternative_dominates() {
+        // Catches keeping the selected method when it is prior-optimal under
+        // no allowed belief: relative to work-keep, work-try is (3, -1) and
+        // work-alt is (-1, 3) with p in [0, 1], so some alternative gains at
+        // least 1 everywhere, yet neither wins throughout and EVSI <= 2 < 5.
+        let mut plan = voi_plan(5.0);
+        let mut alt = plan
+            .method
+            .iter()
+            .find(|m| m.id == "work-try")
+            .unwrap()
+            .clone();
+        alt.id = "work-alt".into();
+        plan.method.push(alt);
+        for (hypothesis, (attempt, other)) in plan.investigation[0]
+            .hypotheses
+            .iter_mut()
+            .zip([(3.0, -1.0), (-1.0, 3.0)])
+        {
+            let probability = hypothesis.probability.as_mut().unwrap();
+            probability.low = 0.0;
+            probability.high = 1.0;
+            hypothesis.alternatives[0].value = 0.0;
+            hypothesis.alternatives[1].value = attempt;
+            hypothesis
+                .alternatives
+                .push(pc_ir::HypothesisAlternativeValue {
+                    alternative: "work-alt".to_string(),
+                    value: other,
+                });
+        }
+        let voi = voi_of(&mut plan);
+        assert_interval((voi.evsi_low, voi.evsi_high), (-5.0, -3.0));
+        assert_interval((voi.switch_gain_low, voi.switch_gain_high), (1.0, 3.0));
+        assert_eq!(voi.preferred_method, "work-keep");
+        assert_eq!(voi.switch_candidates, ["work-alt", "work-try"]);
+        assert_eq!(voi.conclusion, "switch-from-selected-approach");
+    }
+
+    #[test]
+    fn voi_bounds_respect_probabilities_summing_to_one() {
+        // Catches bounding each hypothesis independently: with [0.3, 0.9]
+        // bounds, h-fast >= 0.3 caps h-slow at 0.7, so pre-cost EVSI is
+        // min(10p, 6(1 - p)) over p in [0.3, 0.7]: [1.8, 3.75].
+        let mut plan = voi_plan(3.0);
+        for hypothesis in &mut plan.investigation[0].hypotheses {
+            let probability = hypothesis.probability.as_mut().unwrap();
+            probability.low = 0.3;
+            probability.high = 0.9;
+        }
+        let voi = voi_of(&mut plan);
+        assert_interval((voi.evsi_low, voi.evsi_high), (-1.2, 0.75));
+        assert_eq!(voi.conclusion, "investigation-may-outweigh-implementation");
+    }
+
+    #[test]
+    fn voi_stays_unknown_when_a_probability_is_unknown() {
+        // Catches fabricating a midpoint for a missing probability: the
+        // cost is still reported, but no EVSI interval may appear.
+        let mut plan = voi_plan(1.0);
+        plan.investigation[0].hypotheses[1].probability = None;
+        assert!(checked(&mut plan).ok());
+        let compiled = crate::compile(&plan).unwrap();
+        let report = frontier(&plan, &compiled);
+        let entry = discovery_entry(&report, "task:work");
+        assert_eq!(entry.investigation_cost, Some(1.0));
+        assert_eq!(entry.value_of_information, None);
+        assert_eq!(
+            entry.value_of_information_unknown.as_deref(),
+            Some("hypothesis `h-fast` has an unknown probability, so EVSI stays unknown")
+        );
+    }
+
+    #[test]
+    fn voi_stays_unknown_when_bounds_admit_no_distribution() {
+        // Catches emitting EVSI from incoherent bounds (lows sum past 1).
+        let mut plan = voi_plan(1.0);
+        for hypothesis in &mut plan.investigation[0].hypotheses {
+            hypothesis.probability.as_mut().unwrap().low = 0.55;
+        }
+        let compiled = crate::compile(&plan).unwrap();
+        let report = frontier(&plan, &compiled);
+        let entry = discovery_entry(&report, "task:work");
+        assert_eq!(entry.value_of_information, None);
+        assert_eq!(
+            entry.value_of_information_unknown.as_deref(),
+            Some("the probability bounds admit no distribution summing to 1")
+        );
+    }
+
+    /// `voi_plan(1.0)` with `work` reachable only through a proposed
+    /// decomposition, so P6 selects accepted `[other]` and never `work`.
+    fn unselected_voi_plan() -> PlanDoc {
+        let mut plan = voi_plan(1.0);
+        plan.task.push(pc_ir::Task {
+            id: "other".into(),
+            title: "Other".into(),
+            state: pc_ir::TaskState::Resolved,
+            tasks_axi: None,
+            beads_jsonl: None,
+            consumes: Vec::new(),
+            produces: Vec::new(),
+        });
+        let root = plan.method.iter_mut().find(|m| m.id == "root-all").unwrap();
+        root.subtasks = vec!["other".into()];
+        let mut alternative = root.clone();
+        alternative.id = "root-alt".into();
+        alternative.subtasks = vec!["work".into()];
+        alternative.status = MethodStatus::Proposed;
+        plan.method.push(alternative);
+        let mut other = plan
+            .method
+            .iter()
+            .find(|m| m.id == "work-keep")
+            .unwrap()
+            .clone();
+        other.id = "other-run".into();
+        other.task = "other".into();
+        plan.method.push(other);
+        plan
+    }
+
+    #[test]
+    fn voi_compares_unselected_task_against_its_accepted_method() {
+        // Catches a silent empty VOI for a modelled task outside the
+        // selection: root selects accepted [other], and work is reachable
+        // only through proposed decomposition [work], so P6 never selects
+        // work-keep, yet the model still values it.
+        let mut plan = unselected_voi_plan();
+        assert!(checked(&mut plan).ok());
+        let compiled = crate::compile(&plan).unwrap();
+        assert!(!compiled.selection.contains_key("work"));
+        let report = frontier(&plan, &compiled);
+        let entry = discovery_entry(&report, "task:work");
+        assert_eq!(entry.value_of_information_unknown, None);
+        let voi = entry.value_of_information.as_ref().unwrap();
+        assert_interval((voi.evsi_low, voi.evsi_high), (1.4, 2.6));
+        assert_eq!(voi.preferred_method, "work-try");
+        assert!(
+            voi.explanation
+                .contains("task:work is not in the currently selected plan"),
+            "{}",
+            voi.explanation
+        );
+    }
+
+    #[test]
+    fn voi_baseline_for_unselected_task_is_best_accepted_method() {
+        // Catches an id-order baseline: with work-try also accepted, its
+        // worst-case expected value 15.2 beats work-keep's 13.2, so the
+        // comparison is against work-try and both accepted methods are named.
+        let mut plan = unselected_voi_plan();
+        plan.method
+            .iter_mut()
+            .find(|m| m.id == "work-try")
+            .unwrap()
+            .status = MethodStatus::Accepted;
+        assert!(checked(&mut plan).ok());
+        let compiled = crate::compile(&plan).unwrap();
+        let report = frontier(&plan, &compiled);
+        let voi = discovery_entry(&report, "task:work")
+            .value_of_information
+            .clone()
+            .unwrap();
+        assert_interval((voi.evsi_low, voi.evsi_high), (1.4, 2.6));
+        assert_interval((voi.switch_gain_low, voi.switch_gain_high), (0.0, 0.0));
+        assert_eq!(voi.preferred_method, "work-try");
+        assert!(
+            voi.explanation.contains(
+                "against accepted method work-try, the highest worst-case expected value among accepted methods work-keep, work-try (ties broken by id)"
+            ),
+            "{}",
+            voi.explanation
+        );
+    }
+
+    #[test]
+    fn explicit_model_keeps_settled_task_on_discovery_frontier() {
+        // Catches silently dropping an explicit model on a task the plan
+        // otherwise looks settled on (measured selection, no proposals), and
+        // a rejected alternative feeding the gain: only work-keep remains,
+        // so information is worth nothing and the cost decides.
+        let mut plan = voi_plan(1.0);
+        plan.method
+            .iter_mut()
+            .find(|method| method.id == "work-try")
+            .unwrap()
+            .status = MethodStatus::Rejected;
+        plan.evidence.push(pc_ir::Evidence {
+            subject: "capability:keep@1".into(),
+            metric: "duration_minutes".into(),
+            value: 4.0,
+            unit: "minutes".into(),
+            time: "2026-10-01T00:00:00Z".into(),
+            source: "test".into(),
+            basis: None,
+            artifact_hash: None,
+        });
+        assert!(checked(&mut plan).ok());
+        let compiled = crate::compile(&plan).unwrap();
+        let report = frontier(&plan, &compiled);
+        let entry = discovery_entry(&report, "task:work");
+        let voi = entry.value_of_information.as_ref().unwrap();
+        assert_interval((voi.evsi_low, voi.evsi_high), (-1.0, -1.0));
+        assert_eq!(voi.preferred_method, "work-keep");
+        assert_eq!(voi.conclusion, "implement-preferred-approach");
     }
 
     #[test]

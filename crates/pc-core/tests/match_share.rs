@@ -80,6 +80,7 @@ fn base_doc() -> PlanDoc {
         }],
         capability: vec![],
         evidence: vec![],
+        investigation: vec![],
     }
 }
 
@@ -1003,4 +1004,98 @@ fn p4_refuses_merge_into_cycle_that_alternatives_already_reach() {
         );
     }
     assert_eq!(doc.task.len(), 7);
+}
+
+fn investigation_on(task: &str, method: &str) -> pc_ir::Investigation {
+    pc_ir::Investigation {
+        task: task.into(),
+        cost: 1.0,
+        cost_source: "test:bench".into(),
+        hypotheses: vec![pc_ir::InvestigationHypothesis {
+            id: "h".into(),
+            probability: Some(pc_ir::ProbabilityEstimate {
+                low: 1.0,
+                high: 1.0,
+                provenance: pc_ir::EstimateProvenance::Declared,
+                source: "test:calibration".into(),
+                observations: None,
+            }),
+            source: "test:review".into(),
+            alternatives: vec![pc_ir::HypothesisAlternativeValue {
+                alternative: method.into(),
+                value: 5.0,
+            }],
+        }],
+    }
+}
+
+fn assert_modelled_voi(doc: &PlanDoc, task: &str) {
+    let compiled = pc_core::compile(doc).expect("plan must compile");
+    let frontier = pc_core::frontier(doc, &compiled);
+    let entry = frontier
+        .discovery
+        .iter()
+        .find(|item| item.subject == format!("task:{task}"))
+        .expect("modelled task stays on the discovery frontier");
+    assert_eq!(entry.investigation_cost, Some(1.0));
+    assert!(entry.value_of_information.is_some());
+}
+
+#[test]
+fn p4_keeps_task_carrying_an_investigation_model() {
+    // a and a2 are structurally identical, but a2's investigation model
+    // values a2-run; merging would drop the model's task and method, so the
+    // discovery frontier would silently lose its VOI.
+    let text = "test".to_string();
+    let mut doc = base_doc();
+    doc.task = vec![
+        task("root", "root", TaskState::Decomposed),
+        task("a", "Build", TaskState::Open),
+        task("a2", "Build", TaskState::Open),
+    ];
+    doc.method = vec![
+        decompose("m", "root", &["a", "a2"]),
+        invoke("a-run", "a", "build@1"),
+        invoke("a2-run", "a2", "build@1"),
+    ];
+    doc.capability = vec![cap("build@1", vec![], vec![])];
+    doc.investigation = vec![investigation_on("a2", "a2-run")];
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "got {:?}", report.diagnostics);
+    assert!(doc.task.iter().any(|t| t.id == "a2"));
+    assert_modelled_voi(&doc, "a2");
+}
+
+#[test]
+fn p4_keeps_ancestors_of_a_task_carrying_an_investigation_model() {
+    // p and p2 differ only in that p2's subtask a2 carries a model. Merging
+    // p2 into p would leave p two equivalent decompositions, and selecting
+    // [a] would strand a2 off the selection with no VOI.
+    let text = "test".to_string();
+    let mut doc = base_doc();
+    doc.task = vec![
+        task("root", "root", TaskState::Decomposed),
+        task("p", "Group", TaskState::Decomposed),
+        task("p2", "Group", TaskState::Decomposed),
+        task("a", "Build", TaskState::Open),
+        task("a2", "Build", TaskState::Open),
+    ];
+    doc.method = vec![
+        decompose("m", "root", &["p", "p2"]),
+        decompose("p-m", "p", &["a"]),
+        decompose("p2-m", "p2", &["a2"]),
+        invoke("a-run", "a", "build@1"),
+        invoke("a2-run", "a2", "build@1"),
+    ];
+    doc.capability = vec![cap("build@1", vec![], vec![])];
+    doc.investigation = vec![investigation_on("a2", "a2-run")];
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "got {:?}", report.diagnostics);
+    assert!(doc.task.iter().any(|t| t.id == "p2"));
+    assert!(
+        doc.method
+            .iter()
+            .all(|m| m.task != "p" || m.subtasks == ["a"])
+    );
+    assert_modelled_voi(&doc, "a2");
 }

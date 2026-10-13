@@ -860,6 +860,7 @@ pub fn import_plan(backlog: &Backlog) -> Result<PlanDoc, ImportError> {
         }],
         capability: Vec::new(),
         evidence: Vec::new(),
+        investigation: Vec::new(),
     };
     Ok(doc)
 }

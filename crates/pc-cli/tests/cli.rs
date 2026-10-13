@@ -412,7 +412,7 @@ fn dropped_output_golden() {
 fn negative_fixtures_fail_with_their_code() {
     let codes = [
         "E000", "E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "E009", "E010",
-        "E011", "E012", "E013", "E014", "E015", "E016",
+        "E011", "E012", "E013", "E014", "E015", "E016", "E017",
     ];
     for code in codes {
         let name = format!("invalid-{code}.toml");
@@ -4199,6 +4199,132 @@ fn capabilities_report_flags_unmeasured_inventory() {
     assert_eq!(rows[2]["unmeasured"], false);
 }
 
+#[test]
+fn frontier_labels_switch_away_with_its_candidates() {
+    // Relative to accepted m-a, m-b is (3, -1) and m-c is (-1, 3) over
+    // unconstrained probabilities: some alternative always beats m-a but
+    // none does throughout, so the label must name the candidates, not m-a.
+    let dir = scratch_dir("voi-switch-label");
+    std::fs::write(dir.join("plan.toml"), SWITCH_AWAY_PLAN).unwrap();
+    let text = pc_ok(&dir, &["frontier"]);
+    assert!(
+        text.contains("-> switch-from-selected-approach (m-b, m-c):"),
+        "{text}"
+    );
+}
+
+/// A VOI plan whose selected method m-a is prior-optimal nowhere.
+const SWITCH_AWAY_PLAN: &str = r#"ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "root"
+title = "root"
+state = "decomposed"
+
+[[task]]
+id = "leaf"
+title = "leaf"
+state = "open"
+
+[[method]]
+id = "root-all"
+task = "root"
+kind = "decompose"
+subtasks = ["leaf"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "m-a"
+task = "leaf"
+kind = "invoke"
+capability = "a@1"
+status = "accepted"
+provenance = "agent:test"
+
+[[method]]
+id = "m-c"
+task = "leaf"
+kind = "invoke"
+capability = "b@1"
+status = "proposed"
+provenance = "agent:test"
+
+[[method]]
+id = "m-b"
+task = "leaf"
+kind = "invoke"
+capability = "b@1"
+status = "proposed"
+provenance = "agent:test"
+
+[[capability]]
+id = "a@1"
+kind = "tool"
+version = "1"
+
+[[capability]]
+id = "b@1"
+kind = "tool"
+version = "1"
+
+[[investigation]]
+task = "leaf"
+cost = 5.0
+cost_source = "test:bench"
+
+[[investigation.hypotheses]]
+id = "h1"
+source = "test:review"
+
+[investigation.hypotheses.probability]
+low = 0.0
+high = 1.0
+provenance = "declared"
+source = "test:calibration"
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-a"
+value = 0.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-b"
+value = 3.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-c"
+value = -1.0
+
+[[investigation.hypotheses]]
+id = "h2"
+source = "test:review"
+
+[investigation.hypotheses.probability]
+low = 0.0
+high = 1.0
+provenance = "declared"
+source = "test:calibration"
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-a"
+value = 0.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-b"
+value = -1.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-c"
+value = 3.0
+"#;
 /// PC-03: copy a fixture plan (a `.toml` file or a fixture directory) to
 /// a scratch dir so the automatic metrics write lands beside the copy,
 /// never in `tests/fixtures`.

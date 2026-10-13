@@ -387,6 +387,97 @@
       ],
       "type": "object"
     },
+    "HypothesisAlternativeValue": {
+      "additionalProperties": false,
+      "description": "Utility for an implementation under one hypothesis.",
+      "properties": {
+        "alternative": {
+          "description": "Method id for this task; every hypothesis in one investigation must value the same alternative set so EVSI compares like with like.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Expected utility if this implementation runs and the hypothesis holds.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "alternative",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Investigation": {
+      "additionalProperties": false,
+      "description": "Explicit investigation model for one task's implementation decision. Values are objective utility points: higher is better, and the same scale must be used for every alternative and the investigation cost.",
+      "properties": {
+        "cost": {
+          "description": "Investigation effort expressed in the same utility points as outcomes.",
+          "format": "double",
+          "type": "number"
+        },
+        "cost_source": {
+          "description": "Provenance for the investigation cost.",
+          "type": "string"
+        },
+        "hypotheses": {
+          "description": "Explicit mutually exclusive states of the world being investigated.",
+          "items": {
+            "$ref": "#/definitions/InvestigationHypothesis"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "Task this investigation could change.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cost",
+        "cost_source",
+        "hypotheses",
+        "task"
+      ],
+      "type": "object"
+    },
+    "InvestigationHypothesis": {
+      "additionalProperties": false,
+      "description": "A possible state discovered by investigation.",
+      "properties": {
+        "alternatives": {
+          "description": "Expected utility of each available implementation if this hypothesis is true. Higher values are better.",
+          "items": {
+            "$ref": "#/definitions/HypothesisAlternativeValue"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Stable hypothesis identifier.",
+          "type": "string"
+        },
+        "probability": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProbabilityEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Probability bounds. Missing bounds mean probability is unknown."
+        },
+        "source": {
+          "description": "Provenance for the hypothesis and its probability estimate.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alternatives",
+        "id",
+        "source"
+      ],
+      "type": "object"
+    },
     "Method": {
       "additionalProperties": false,
       "description": "One way to achieve a task.\n\n`kind` selects the shape: `decompose` uses `subtasks`/`order_edges`, `invoke` uses `capability`. P2 reports E013 when the shape is mixed.",
@@ -641,6 +732,50 @@
       ],
       "type": "object"
     },
+    "ProbabilityEstimate": {
+      "additionalProperties": false,
+      "description": "A probability estimate with explicit source and optional measured sample count. Bounds are used directly; no midpoint is fabricated by the compiler.",
+      "properties": {
+        "high": {
+          "description": "Upper probability bound in `[0, 1]`, at least `low`.",
+          "format": "double",
+          "type": "number"
+        },
+        "low": {
+          "description": "Lower probability bound in `[0, 1]`.",
+          "format": "double",
+          "type": "number"
+        },
+        "observations": {
+          "description": "Measured sample count behind the bounds, when known.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "provenance": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/EstimateProvenance"
+            }
+          ],
+          "description": "Where the bounds came from."
+        },
+        "source": {
+          "description": "Provenance for the bounds (measurement, calibration run, reviewer).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "high",
+        "low",
+        "provenance",
+        "source"
+      ],
+      "type": "object"
+    },
     "ResourceDecl": {
       "additionalProperties": false,
       "description": "A named capacity, e.g. `\"gpu-1\"`. v0 reports usage only.",
@@ -879,6 +1014,14 @@
       "description": "Recorded observations, folded into measured profiles by P5 without editing declared estimates. Defaults to empty.",
       "items": {
         "$ref": "#/definitions/Evidence"
+      },
+      "type": "array"
+    },
+    "investigation": {
+      "default": [],
+      "description": "Explicit hypotheses and information-acquisition costs used by P8 to evaluate value of information. Defaults to empty.",
+      "items": {
+        "$ref": "#/definitions/Investigation"
       },
       "type": "array"
     },

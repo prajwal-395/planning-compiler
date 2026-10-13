@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 pc-ir.workspace = true
 pc-select.workspace = true
+good_lp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 petgraph.workspace = true

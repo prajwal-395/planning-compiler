@@ -51,6 +51,7 @@ fn doc() -> (String, PlanDoc) {
         method: vec![],
         capability: vec![],
         evidence: vec![],
+        investigation: vec![],
     };
     (text, doc)
 }

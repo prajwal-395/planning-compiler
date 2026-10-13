@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E017]: investigation cost needs provenance
+  --> invalid-E017.toml:17
+found 1 error

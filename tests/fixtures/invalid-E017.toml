@@ -1,0 +1,94 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "root"
+title = "root"
+state = "decomposed"
+
+[[task]]
+id = "leaf"
+title = "leaf"
+state = "open"
+
+[[method]]
+id = "root-all"
+task = "root"
+kind = "decompose"
+subtasks = ["leaf"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "m-a"
+task = "leaf"
+kind = "invoke"
+capability = "a@1"
+status = "accepted"
+provenance = "agent:test"
+
+[[method]]
+id = "m-b"
+task = "leaf"
+kind = "invoke"
+capability = "b@1"
+status = "proposed"
+provenance = "agent:test"
+
+[[capability]]
+id = "a@1"
+kind = "tool"
+version = "1"
+
+[[capability]]
+id = "b@1"
+kind = "tool"
+version = "1"
+
+[[investigation]]
+task = "leaf"
+cost = 1.0
+cost_source = ""
+
+[[investigation.hypotheses]]
+id = "h1"
+source = "test:review"
+
+[investigation.hypotheses.probability]
+low = 0.4
+high = 0.6
+provenance = "declared"
+source = "test:calibration"
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-a"
+value = 10.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-b"
+value = 20.0
+
+[[investigation.hypotheses]]
+id = "h2"
+source = "test:review"
+
+[investigation.hypotheses.probability]
+low = 0.4
+high = 0.6
+provenance = "declared"
+source = "test:calibration"
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-a"
+value = 10.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "m-b"
+value = 20.0

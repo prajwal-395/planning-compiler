@@ -6,7 +6,7 @@
 //! canonicalizes evidence units (only the metric's canonical unit is
 //! accepted, case-insensitively).
 //!
-//! P2 runs the semantic checks E002-E016 over the resolved indexes.
+//! P2 runs the semantic checks E002-E017 over the resolved indexes.
 //! Only methods with status `accepted` or `derived` participate in hierarchy,
 //! contract and compilation checks; `proposed` methods are hypotheses for
 //! step 7 and `rejected` methods are ignored by every pass. `dropped` tasks
@@ -339,7 +339,7 @@ fn canonicalize_evidence_units(ctx: &mut Ctx) {
 
 /// P2: validate the resolved plan.
 ///
-/// Runs checks E002-E016 (E000/E001/E014-units belong to P1). Diagnostics
+/// Runs checks E002-E017 (E000/E001/E014-units belong to P1). Diagnostics
 /// are sorted before the report is built, so output never depends on input
 /// order.
 pub struct ValidatePass;
@@ -369,6 +369,7 @@ impl Pass for ValidatePass {
         check_evidence(ctx);
         check_objective(ctx);
         check_capability_constraints(ctx);
+        check_investigations(ctx);
     }
 }
 
@@ -1180,6 +1181,150 @@ fn check_capability_constraints(ctx: &mut Ctx) {
     }
 }
 
+/// E017: explicit VOI inputs must be finite, sourced, and refer to one task's
+/// available methods, valuing every accepted method P6 may select (at least
+/// one must exist).
+/// Probability intervals must admit a distribution.
+fn check_investigations(ctx: &mut Ctx) {
+    let models = ctx.doc.investigation.clone();
+    let tasks: BTreeSet<String> = ctx.doc.task.iter().map(|task| task.id.clone()).collect();
+    let methods: BTreeMap<String, String> = ctx
+        .doc
+        .method
+        .iter()
+        .map(|method| (method.id.clone(), method.task.clone()))
+        .collect();
+    let mut seen = BTreeSet::new();
+    for model in models {
+        let subject = format!("task:{}", model.task);
+        let selectable: BTreeSet<String> = ctx
+            .doc
+            .method
+            .iter()
+            .filter(|method| method.task == model.task && method.status == MethodStatus::Accepted)
+            .map(|method| method.id.clone())
+            .collect();
+        let mut errors = Vec::new();
+        if !tasks.contains(&model.task) {
+            errors.push("task is undefined".to_string());
+        }
+        if !seen.insert(model.task.clone()) {
+            errors.push("only one investigation model is allowed per task".to_string());
+        }
+        if !model.cost.is_finite() || model.cost < 0.0 {
+            errors.push("investigation cost must be finite and non-negative".to_string());
+        }
+        if model.cost_source.trim().is_empty() {
+            errors.push("investigation cost needs provenance".to_string());
+        }
+        if model.hypotheses.is_empty() {
+            errors.push("at least one explicit hypothesis is required".to_string());
+        }
+        if selectable.is_empty() {
+            errors.push(
+                "task needs an accepted method for the investigation to compare against"
+                    .to_string(),
+            );
+        }
+        let mut ids = BTreeSet::new();
+        let mut expected_alternatives: Option<BTreeSet<String>> = None;
+        let mut low_sum = 0.0;
+        let mut high_sum = 0.0;
+        let mut all_probabilities_known = true;
+        for hypothesis in &model.hypotheses {
+            if hypothesis.id.trim().is_empty() || !ids.insert(hypothesis.id.clone()) {
+                errors.push("hypothesis ids must be non-empty and unique".to_string());
+            }
+            if hypothesis.source.trim().is_empty() {
+                errors.push(format!("hypothesis `{}` needs provenance", hypothesis.id));
+            }
+            if let Some(probability) = &hypothesis.probability {
+                if !probability.low.is_finite()
+                    || !probability.high.is_finite()
+                    || probability.low < 0.0
+                    || probability.high > 1.0
+                    || probability.low > probability.high
+                {
+                    errors.push(format!(
+                        "hypothesis `{}` has invalid probability bounds",
+                        hypothesis.id
+                    ));
+                }
+                if probability.source.trim().is_empty() {
+                    errors.push(format!(
+                        "hypothesis `{}` probability needs provenance",
+                        hypothesis.id
+                    ));
+                }
+                low_sum += probability.low;
+                high_sum += probability.high;
+            } else {
+                all_probabilities_known = false;
+            }
+            if hypothesis.alternatives.is_empty() {
+                errors.push(format!(
+                    "hypothesis `{}` needs alternative values",
+                    hypothesis.id
+                ));
+            }
+            let mut seen = BTreeSet::new();
+            for value in &hypothesis.alternatives {
+                if !value.value.is_finite() {
+                    errors.push(format!(
+                        "hypothesis `{}` has a non-finite utility",
+                        hypothesis.id
+                    ));
+                }
+                if !seen.insert(value.alternative.clone()) {
+                    errors.push(format!(
+                        "hypothesis `{}` repeats alternative `{}`",
+                        hypothesis.id, value.alternative
+                    ));
+                }
+                if methods
+                    .get(&value.alternative)
+                    .is_none_or(|task| task != &model.task)
+                {
+                    errors.push(format!(
+                        "alternative `{}` is not a method for this task",
+                        value.alternative
+                    ));
+                }
+            }
+            for method in selectable.difference(&seen) {
+                errors.push(format!(
+                    "hypothesis `{}` must value accepted method `{method}`",
+                    hypothesis.id
+                ));
+            }
+            // EVSI compares the same implementations under every hypothesis,
+            // so each hypothesis must value the same alternative set.
+            match &expected_alternatives {
+                None => {
+                    expected_alternatives = Some(seen);
+                }
+                Some(expected) if *expected != seen => {
+                    errors.push(format!(
+                        "hypothesis `{}` must value the same alternatives as the other hypotheses",
+                        hypothesis.id
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        if low_sum > 1.0 + f64::EPSILON
+            || (all_probabilities_known && high_sum < 1.0 - f64::EPSILON)
+        {
+            errors.push("probability bounds do not admit a distribution summing to 1".to_string());
+        }
+        errors.sort();
+        errors.dedup();
+        for error in errors {
+            ctx.error("E017", error, ctx.locate(&model.task), subject.clone());
+        }
+    }
+}
+
 /// True when `cap_produces` covers everything `task_produces` promises.
 fn capability_covers(task_produces: &[ContractItem], cap_produces: &[ContractItem]) -> bool {
     missing_fields(task_produces, cap_produces).is_empty()
@@ -1299,8 +1444,9 @@ impl Pass for MatchPass {
 /// abandoned work from merging into live work and vice versa. A task
 /// carrying source passthrough (`tasks_axi` or `beads_jsonl`) is one imported
 /// row, which is always distinct work, so its id joins the form and it never
-/// shares.
-fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
+/// shares. A task carrying an investigation model likewise keeps its id in
+/// the form, since the model values that task's own methods.
+fn canonical_task_form(task: &pc_ir::Task, investigated: bool) -> serde_json::Value {
     let mut consumes: Vec<(String, Vec<String>)> = task
         .consumes
         .iter()
@@ -1330,6 +1476,9 @@ fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
     if task.tasks_axi.is_some() || task.beads_jsonl.is_some() {
         form["backlog_row"] = task.id.clone().into();
     }
+    if investigated {
+        form["investigated"] = task.id.clone().into();
+    }
     form
 }
 
@@ -1341,6 +1490,7 @@ fn canonical_task_form(task: &pc_ir::Task) -> serde_json::Value {
 struct ShareHasher<'a> {
     tasks: BTreeMap<&'a str, &'a pc_ir::Task>,
     methods: BTreeMap<&'a str, Vec<&'a Method>>,
+    investigated: BTreeSet<&'a str>,
     memo: BTreeMap<&'a str, String>,
 }
 
@@ -1356,6 +1506,11 @@ impl<'a> ShareHasher<'a> {
         ShareHasher {
             tasks,
             methods,
+            investigated: doc
+                .investigation
+                .iter()
+                .map(|model| model.task.as_str())
+                .collect(),
             memo: BTreeMap::new(),
         }
     }
@@ -1389,7 +1544,7 @@ impl<'a> ShareHasher<'a> {
         }
         forms.sort();
         forms.dedup();
-        let mut form = canonical_task_form(task);
+        let mut form = canonical_task_form(task, self.investigated.contains(id));
         form["methods"] = forms.into();
         let hash = blake3::hash(form.to_string().as_bytes())
             .to_hex()

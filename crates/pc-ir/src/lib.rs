@@ -67,6 +67,69 @@ pub struct PlanDoc {
     /// without editing declared estimates. Defaults to empty.
     #[serde(default)]
     pub evidence: Vec<Evidence>,
+    /// Explicit hypotheses and information-acquisition costs used by P8
+    /// to evaluate value of information. Defaults to empty.
+    #[serde(default)]
+    pub investigation: Vec<Investigation>,
+}
+
+/// Explicit investigation model for one task's implementation decision.
+/// Values are objective utility points: higher is better, and the same scale
+/// must be used for every alternative and the investigation cost.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Investigation {
+    /// Task this investigation could change.
+    pub task: String,
+    /// Investigation effort expressed in the same utility points as outcomes.
+    pub cost: f64,
+    /// Provenance for the investigation cost.
+    pub cost_source: String,
+    /// Explicit mutually exclusive states of the world being investigated.
+    pub hypotheses: Vec<InvestigationHypothesis>,
+}
+
+/// A possible state discovered by investigation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InvestigationHypothesis {
+    /// Stable hypothesis identifier.
+    pub id: String,
+    /// Probability bounds. Missing bounds mean probability is unknown.
+    pub probability: Option<ProbabilityEstimate>,
+    /// Provenance for the hypothesis and its probability estimate.
+    pub source: String,
+    /// Expected utility of each available implementation if this hypothesis
+    /// is true. Higher values are better.
+    pub alternatives: Vec<HypothesisAlternativeValue>,
+}
+
+/// A probability estimate with explicit source and optional measured sample
+/// count. Bounds are used directly; no midpoint is fabricated by the compiler.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProbabilityEstimate {
+    /// Lower probability bound in `[0, 1]`.
+    pub low: f64,
+    /// Upper probability bound in `[0, 1]`, at least `low`.
+    pub high: f64,
+    /// Where the bounds came from.
+    pub provenance: EstimateProvenance,
+    /// Provenance for the bounds (measurement, calibration run, reviewer).
+    pub source: String,
+    /// Measured sample count behind the bounds, when known.
+    pub observations: Option<u64>,
+}
+
+/// Utility for an implementation under one hypothesis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HypothesisAlternativeValue {
+    /// Method id for this task; every hypothesis in one investigation must
+    /// value the same alternative set so EVSI compares like with like.
+    pub alternative: String,
+    /// Expected utility if this implementation runs and the hypothesis holds.
+    pub value: f64,
 }
 
 /// Plan identity and the fields an external input may satisfy.

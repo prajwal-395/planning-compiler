@@ -35,6 +35,7 @@ Parse (in `pc-store`), then:
 | E014 | invalid evidence | subject is `capability:`, `method:` or `task:` with a non-empty id, timestamp is RFC 3339, value is finite and non-negative, basis is `absolute` or `distance-from:<capability>` when recorded, one attributed capability and metric (or pending subject) carries one basis (units are checked in P1) |
 | E015 | invalid objective | weights name known metrics and are finite/non-negative; budget non-negative; floor in `[0,1]`; criteria carry their kind's fields |
 | E016 | capability constraint | when `objective.platforms` (or `objective.licenses`) is non-empty, every non-rejected invoke's capability that lists `platform_requirements` (or `licensing_constraints`) lists at least one declared there; the lists are alternatives |
+| E017 | invalid investigation | investigation models name one task, carry a finite non-negative sourced cost, value the same task methods (including every accepted method, of which there must be at least one) under every hypothesis with finite utilities, and use sourced probability bounds admitting a distribution summing to 1 (known lows never exceed 1) |
 
 Scope notes:
 
@@ -95,7 +96,9 @@ touched. Every merge emits a `merged` trace event, every removed method a
 Guards: the title is load-bearing (contract-only equality wrongly merges
 distinct work, e.g. two clips' transcriptions), the state keeps finished or
 abandoned work from merging into live work, a task carrying `tasks_axi`
-or `beads_jsonl` passthrough is one imported row and never shares (its id joins the form), the
+or `beads_jsonl` passthrough is one imported row and never shares (its id joins the form), a
+task carrying an `investigation` model never shares either (its id joins the
+form, since the model values that task's own methods), the
 subtree keeps tasks with
 different decompositions apart, merge groups are tried one at a time in
 canonical-id order and a group is refused with a `kept` trace event when it
@@ -335,11 +338,49 @@ an unbacked selected capability. It ranks known decision importance first
 with subject as a deterministic tie-breaker. Uncertainty uses the execution
 frontier's scale: the measured factor only when the selected capability is
 backed by evidence on an objective-weighted metric, the uncertain factor when
-it is unbacked or no capability is selected. Investigation cost and the
-likelihood of materially changing the plan serialize as `null`: the current
-IR does not model them, and PC-11 owns value-of-information evaluation. The
-text output labels these separately as the discovery frontier; the existing
-`items`, `unestimated`, and `blocked` groups are execution work.
+it is unbacked or no capability is selected. The text output labels these
+separately as the discovery frontier; the existing `items`, `unestimated`,
+and `blocked` groups are execution work.
+
+PC-11 evaluates value of information on that list from explicit
+`investigation` models (P2 check E017). A model names one task, an
+investigation cost with provenance, and mutually exclusive hypotheses, each
+with provenance and probability bounds plus the expected utility of every
+available implementation under that hypothesis. EVSI is the expected value
+of picking the best implementation per hypothesis minus the value of the
+prior-optimal implementation (the best expected value on current beliefs),
+minus the investigation cost; rejected methods never count. It is kept as an
+interval over every distribution inside the probability bounds that sums to
+1: no midpoint is fabricated, so a model with an unknown probability carries
+no VOI, and bounds that admit no distribution summing to 1 are rejected. The
+gain of switching from the selected method on current beliefs alone is
+reported separately (`switch_gain_low`/`switch_gain_high`) and never counted
+as information value; `preferred_method` names an implementation that beats
+the selected one throughout the bounds, else the selected method. The
+discovery entry reports the model's cost and, when every required
+probability is explicit and provenance-backed, a `value_of_information` with
+one of five conclusions: `investigation-outweighs-implementation` (positive
+throughout), `investigation-may-outweigh-implementation` (straddles zero),
+`switch-to-preferred-approach` (dominated by cost, and another method beats
+the selected one throughout the bounds), `switch-from-selected-approach`
+(dominated by cost, some method beats the selected one for every allowed
+distribution but which one depends on the probabilities; `switch_candidates`
+lists every method prior-optimal somewhere in the bounds, with no pick), or
+`implement-preferred-approach` (dominated by cost, keep the selected method). A modelled task outside the
+selected plan (reachable only through an unselected decomposition) is
+compared against its accepted method instead: with several, the one with the
+highest worst-case expected value over the probability bounds, ties broken by
+id. The explanation says the task is outside the selected plan and names every
+accepted method.
+When a model yields no value, `value_of_information_unknown` gives the reason
+(for example an unknown probability), never a bare empty value. The text prints the
+interval, conclusion, preferred method (the switch candidates instead, when
+there are any) and explanation under the entry,
+which is how the compiler explains why an investigation might outrank
+implementing the preferred approach. An explicit model is itself structured
+uncertainty, so a task carrying one stays on the discovery list even when the
+plan otherwise looks settled. Change likelihood still serializes as `null`: the IR carries
+no likelihood model for it.
 
 ## P9: impact/diff (step 6)
 

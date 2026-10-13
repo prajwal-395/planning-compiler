@@ -1,4 +1,4 @@
-//! One test per P1/P2 diagnostic (E000-E016) plus determinism.
+//! One test per P1/P2 diagnostic (E000-E017) plus determinism.
 //!
 //! Each test starts from [`valid_doc`] and applies the smallest mutation
 //! that triggers exactly one code, so a regression in any single check
@@ -7,8 +7,9 @@
 use pc_core::passes::{EvidenceLog, check};
 use pc_ir::{
     AcceptanceKind, ArtifactDecl, Capability, CapabilityKind, ContractItem, Estimate,
-    EstimateProvenance, Evidence, Method, MethodKind, MethodStatus, Objective, OrderEdge, PlanDoc,
-    PlanMeta, ResourceDecl, Task, TaskState,
+    EstimateProvenance, Evidence, HypothesisAlternativeValue, Investigation,
+    InvestigationHypothesis, Method, MethodKind, MethodStatus, Objective, OrderEdge, PlanDoc,
+    PlanMeta, ProbabilityEstimate, ResourceDecl, Task, TaskState,
 };
 
 fn contract(artifact: &str, fields: &[&str]) -> ContractItem {
@@ -80,6 +81,7 @@ fn valid_doc() -> (String, PlanDoc) {
         }],
         capability: vec![],
         evidence: vec![],
+        investigation: vec![],
     };
     (text, doc)
 }
@@ -732,6 +734,174 @@ fn e016_treats_listed_platforms_and_licences_as_alternatives() {
         "{:?}",
         report.diagnostics
     );
+}
+
+/// Smallest plan carrying a valid VOI model: accepted `m-a` and proposed
+/// `m-b` on `leaf` plus an investigation valuing both under two hypotheses
+/// whose bounds [0.4, 0.6] admit a distribution.
+fn investigation_doc() -> (String, PlanDoc) {
+    let (text, mut doc) = valid_doc();
+    for cap in ["a@1", "b@1"] {
+        doc.capability.push(Capability {
+            id: cap.to_string(),
+            kind: CapabilityKind::Tool,
+            version: "1".to_string(),
+            provider: None,
+            source: None,
+            platform_requirements: vec![],
+            licensing_constraints: vec![],
+            consumes: vec![],
+            produces: vec![],
+            estimates: vec![],
+            resources: vec![],
+        });
+    }
+    for (id, cap, status) in [
+        ("m-a", "a@1", MethodStatus::Accepted),
+        ("m-b", "b@1", MethodStatus::Proposed),
+    ] {
+        doc.method.push(Method {
+            id: id.to_string(),
+            task: "leaf".to_string(),
+            kind: MethodKind::Invoke,
+            subtasks: vec![],
+            order_edges: vec![],
+            capability: Some(cap.to_string()),
+            status,
+            provenance: "agent:test".to_string(),
+            assumptions: vec![],
+        });
+    }
+    let hypothesis = |id: &str, probability: Option<ProbabilityEstimate>| InvestigationHypothesis {
+        id: id.to_string(),
+        probability,
+        source: "test:review".to_string(),
+        alternatives: vec![
+            HypothesisAlternativeValue {
+                alternative: "m-a".to_string(),
+                value: 10.0,
+            },
+            HypothesisAlternativeValue {
+                alternative: "m-b".to_string(),
+                value: 20.0,
+            },
+        ],
+    };
+    let bounded = || {
+        Some(ProbabilityEstimate {
+            low: 0.4,
+            high: 0.6,
+            provenance: EstimateProvenance::Declared,
+            source: "test:calibration".to_string(),
+            observations: None,
+        })
+    };
+    doc.investigation.push(Investigation {
+        task: "leaf".to_string(),
+        cost: 1.0,
+        cost_source: "test:bench".to_string(),
+        hypotheses: vec![hypothesis("h1", bounded()), hypothesis("h2", bounded())],
+    });
+    (text, doc)
+}
+
+#[test]
+fn e017_accepts_shared_alternative_sets_across_hypotheses() {
+    // Catches the validator treating the same alternative in two hypotheses
+    // as a duplicate: every hypothesis must value the same set.
+    let (text, mut doc) = investigation_doc();
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "expected clean, got {:?}", report.diagnostics);
+}
+
+#[test]
+fn e017_accepts_unknown_probability() {
+    // Unknown probabilities are represented as unknown, never fabricated.
+    let (text, mut doc) = investigation_doc();
+    doc.investigation[0].hypotheses[1].probability = None;
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "expected clean, got {:?}", report.diagnostics);
+}
+
+#[test]
+fn e017_rejects_divergent_alternative_sets() {
+    // EVSI compares the same implementations under every hypothesis, so a
+    // hypothesis valuing a different set must fail validation.
+    let (text, mut doc) = investigation_doc();
+    doc.investigation[0].hypotheses[1].alternatives.pop();
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert_eq!(codes(&report), vec!["E017"]);
+}
+
+#[test]
+fn e017_rejects_unknown_method_alternative() {
+    let (text, mut doc) = investigation_doc();
+    doc.investigation[0].hypotheses[0].alternatives[0].alternative = "ghost".to_string();
+    let report = check("plan.toml", &text, &mut doc, None);
+    // One E017 per offending hypothesis; no other code may fire.
+    assert!(!report.diagnostics.is_empty());
+    assert!(codes(&report).iter().all(|code| code == "E017"));
+}
+
+#[test]
+fn e017_rejects_incoherent_probability_bounds() {
+    // Bounds whose lows already sum past 1 admit no distribution.
+    let (text, mut doc) = investigation_doc();
+    for hypothesis in &mut doc.investigation[0].hypotheses {
+        let probability = hypothesis.probability.as_mut().unwrap();
+        probability.low = 0.7;
+        probability.high = 0.9;
+    }
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert_eq!(codes(&report), vec!["E017"]);
+}
+
+#[test]
+fn e017_rejects_known_lows_past_one_beside_an_unknown_probability() {
+    // Known lows already past 1 admit no distribution whatever the unknown
+    // probability turns out to be.
+    let (text, mut doc) = investigation_doc();
+    for hypothesis in &mut doc.investigation[0].hypotheses {
+        let probability = hypothesis.probability.as_mut().unwrap();
+        probability.low = 0.7;
+        probability.high = 0.9;
+    }
+    let mut unknown = doc.investigation[0].hypotheses[0].clone();
+    unknown.id = "h3".to_string();
+    unknown.probability = None;
+    doc.investigation[0].hypotheses.push(unknown);
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert_eq!(codes(&report), vec!["E017"]);
+}
+
+#[test]
+fn e017_rejects_hypotheses_missing_an_accepted_method() {
+    // P6 may select any accepted method, so EVSI needs its value under every
+    // hypothesis; otherwise the model silently yields no VOI.
+    let (text, mut doc) = investigation_doc();
+    for hypothesis in &mut doc.investigation[0].hypotheses {
+        hypothesis
+            .alternatives
+            .retain(|value| value.alternative != "m-a");
+    }
+    let report = check("plan.toml", &text, &mut doc, None);
+    // One E017 per offending hypothesis; no other code may fire.
+    assert!(!report.diagnostics.is_empty());
+    assert!(codes(&report).iter().all(|code| code == "E017"));
+}
+
+#[test]
+fn e017_rejects_model_without_an_accepted_method() {
+    // P6 selects only accepted methods, so a task with none has no selection
+    // and the model would silently yield no VOI.
+    let (text, mut doc) = investigation_doc();
+    doc.method
+        .iter_mut()
+        .find(|method| method.id == "m-a")
+        .unwrap()
+        .status = MethodStatus::Proposed;
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert_eq!(codes(&report), vec!["E017"]);
 }
 
 #[test]

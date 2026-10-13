@@ -1496,6 +1496,7 @@ fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
         method: Vec::new(),
         capability: Vec::new(),
         evidence: Vec::new(),
+        investigation: Vec::new(),
     }
 }
 
@@ -1806,6 +1807,20 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
                 .map_or_else(|| "unknown".to_string(), |v| format!("{v:.3}")),
             item.question,
         );
+        if let Some(voi) = &item.value_of_information {
+            let methods = if voi.switch_candidates.is_empty() {
+                voi.preferred_method.clone()
+            } else {
+                voi.switch_candidates.join(", ")
+            };
+            println!(
+                "  value of information: EVSI [{:.3}, {:.3}] -> {} ({methods}): {}",
+                voi.evsi_low, voi.evsi_high, voi.conclusion, voi.explanation,
+            );
+        }
+        if let Some(reason) = &item.value_of_information_unknown {
+            println!("  value of information: unknown ({reason})");
+        }
     }
 }
 

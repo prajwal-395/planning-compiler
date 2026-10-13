@@ -768,6 +768,7 @@ mod tests {
                 resources: vec![],
             }],
             evidence: vec![],
+            investigation: vec![],
         }
     }
 

@@ -938,6 +938,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "chrono",
+ "good_lp",
  "pc-ir",
  "pc-select",
  "petgraph",

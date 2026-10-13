@@ -121,6 +121,7 @@ fn doc(tasks: Vec<Task>, methods: Vec<Method>, caps: Vec<Capability>) -> PlanDoc
         method: methods,
         capability: caps,
         evidence: vec![],
+        investigation: vec![],
     }
 }
 
