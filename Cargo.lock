@@ -913,6 +913,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pc-bench"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "pc-core",
+ "pc-ir",
+ "serde",
+]
+
+[[package]]
 name = "pc-cli"
 version = "0.1.0"
 dependencies = [
@@ -923,6 +933,7 @@ dependencies = [
  "insta",
  "pc-adapter-beads",
  "pc-adapter-tasks-axi",
+ "pc-bench",
  "pc-core",
  "pc-discovery",
  "pc-ir",

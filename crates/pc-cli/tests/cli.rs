@@ -5030,6 +5030,65 @@ fn context_records_context_size() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// PC-16: `pc bench --list` must name every scenario without measuring
+/// anything (listing runs no solver, so it stays in the default suite while
+/// real benchmarks stay behind the explicit command).
+#[test]
+fn bench_list_names_scenarios_without_running() {
+    pc_command()
+        .arg("bench")
+        .arg("--list")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("flat-10"))
+        .stdout(predicates::str::contains("flat-100"))
+        .stdout(predicates::str::contains("flat-10000"));
+}
+
+/// PC-16: an unknown `--scenario` is a usage error (exit 2), not a silent
+/// empty run that reports success with no measurements.
+#[test]
+fn bench_rejects_unknown_scenario() {
+    pc_command()
+        .arg("bench")
+        .arg("--scenario")
+        .arg("no-such-scenario")
+        .assert()
+        .code(2);
+}
+
+/// PC-16: each scenario runs in its own process, so every row reports its
+/// own peak RSS and the rows keep the requested scenarios and budget.
+/// Opt-in (`cargo test -- --ignored`): it runs real benchmark scenarios.
+#[test]
+#[ignore = "runs benchmark scenarios; opt in with --ignored"]
+fn bench_reports_per_scenario_peak_memory() {
+    let output = pc_command()
+        .args([
+            "bench",
+            "--json",
+            "--scenario",
+            "flat-10",
+            "--scenario",
+            "flat-100",
+            "--selection-time-budget-ms",
+            "1500",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["scenario"], "flat-10");
+    assert_eq!(rows[1]["scenario"], "flat-100");
+    for row in rows {
+        assert_eq!(row["selection_time_budget_ms"], 1500);
+        if cfg!(unix) {
+            assert!(row["memory_bytes"].as_u64().unwrap() > 0);
+        }
+    }
+}
 /// PC-13 definition of done: the system identifies a bottleneck, discovers
 /// a previously unmodelled alternative from a manifest, checks its
 /// compatibility, and lands an evidence-backed proposal on the frontier -

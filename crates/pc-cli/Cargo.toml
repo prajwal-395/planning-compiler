@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 pc-ir.workspace = true
 pc-core.workspace = true
+pc-bench.workspace = true
 pc-store.workspace = true
 pc-adapter-tasks-axi.workspace = true
 pc-adapter-beads.workspace = true

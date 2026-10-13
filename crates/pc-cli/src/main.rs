@@ -287,6 +287,37 @@ enum Commands {
         /// Plan file or directory.
         path: Option<PathBuf>,
     },
+    /// Run the representative benchmark suite (PC-16) over generated plans.
+    ///
+    /// Plans are generated in memory; nothing is written and no fixture is
+    /// read. Each scenario runs in its own subprocess so its peak RSS is its
+    /// own. The 10,000-task scenario only runs with `--include-large`, so
+    /// the shared machine never takes synthetic load by accident.
+    Bench {
+        /// Run only this scenario (repeatable). Defaults to the small suite.
+        #[arg(long)]
+        scenario: Vec<String>,
+        /// Run every scenario except the opt-in 10,000-task one.
+        #[arg(long)]
+        all: bool,
+        /// Also run the opt-in 10,000-task scenario.
+        #[arg(long)]
+        include_large: bool,
+        /// Emit results as JSON.
+        #[arg(long)]
+        json: bool,
+        /// List scenario names without running anything.
+        #[arg(long)]
+        list: bool,
+        /// Maximum exact P6 solve time in milliseconds, preserved as the
+        /// solver budget for every scenario.
+        #[arg(long, default_value_t = 2000)]
+        selection_time_budget_ms: u64,
+        /// Run the selected scenarios in this process (the per-scenario
+        /// subprocess entry point).
+        #[arg(long, hide = true)]
+        in_process: bool,
+    },
     /// Discover candidate capabilities from external sources and emit a
     /// proposal patch for one task. Adapters scan deterministically and
     /// never accept: the patch holds `proposed` methods for `pc propose`,
@@ -418,6 +449,23 @@ fn main() {
             input,
             path,
         } => run_sync(source, all, dry_run, input, &plan_path(path)),
+        Commands::Bench {
+            scenario,
+            all,
+            include_large,
+            json,
+            list,
+            selection_time_budget_ms,
+            in_process,
+        } => run_bench(
+            &scenario,
+            all,
+            include_large,
+            json,
+            list,
+            selection_time_budget_ms,
+            in_process,
+        ),
         Commands::Discover {
             manifest,
             repo,
@@ -3027,4 +3075,163 @@ fn run_sync(
     if had_conflict {
         std::process::exit(1);
     }
+}
+
+/// Run one benchmark scenario in a fresh `pc bench --in-process` child and
+/// return its JSON rows, exiting when the child fails (its stderr already
+/// carries the error).
+fn run_bench_child(
+    spec: &pc_bench::ScenarioSpec,
+    selection_time_budget_ms: u64,
+) -> Vec<pc_bench::BenchmarkResult> {
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("error: cannot locate the pc executable: {e}");
+        std::process::exit(1)
+    });
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(["bench", "--in-process", "--json", "--scenario", spec.name])
+        .arg("--selection-time-budget-ms")
+        .arg(selection_time_budget_ms.to_string())
+        .stderr(std::process::Stdio::inherit());
+    if spec.large {
+        command.arg("--include-large");
+    }
+    let output = command.output().unwrap_or_else(|e| {
+        eprintln!("error: cannot run benchmark scenario {}: {e}", spec.name);
+        std::process::exit(1)
+    });
+    if !output.status.success() {
+        std::process::exit(output.status.code().unwrap_or(1));
+    }
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        eprintln!(
+            "error: benchmark scenario {} output unreadable: {e}",
+            spec.name
+        );
+        std::process::exit(1)
+    })
+}
+
+/// Handler for `pc bench`: the explicit PC-16 entry point. Runs entirely in
+/// memory over generated plans, so it never reads or writes a plan file or
+/// `metrics.jsonl`. The solver time budget passes straight through. Each
+/// scenario runs in a fresh `pc bench --in-process` child so peak RSS does
+/// not accumulate across rows.
+fn run_bench(
+    only: &[String],
+    all: bool,
+    include_large: bool,
+    json: bool,
+    list: bool,
+    selection_time_budget_ms: u64,
+    in_process: bool,
+) {
+    if list {
+        for spec in pc_bench::all_scenarios() {
+            println!(
+                "{}{}",
+                spec.name,
+                if spec.large { " (opt-in large)" } else { "" },
+            );
+        }
+        return;
+    }
+    let mut specs: Vec<pc_bench::ScenarioSpec> = if only.is_empty() {
+        if include_large {
+            pc_bench::all_scenarios()
+        } else if all {
+            pc_bench::all_scenarios()
+                .into_iter()
+                .filter(|spec| !spec.large)
+                .collect()
+        } else {
+            pc_bench::default_scenarios()
+        }
+    } else {
+        let mut selected = Vec::with_capacity(only.len());
+        for name in only {
+            match pc_bench::scenario_by_name(name) {
+                Some(spec) => selected.push(spec),
+                None => {
+                    eprintln!("error: unknown benchmark scenario `{name}` (try `pc bench --list`)");
+                    std::process::exit(2);
+                }
+            }
+        }
+        selected
+    };
+    // `--include-large` unlocks the 10,000-task scenario even beside an
+    // explicit `--scenario` list; without it an explicit large request is a
+    // usage error rather than accidental synthetic load.
+    if let Some(spec) = specs.iter().find(|spec| spec.large)
+        && !include_large
+    {
+        eprintln!("error: `{}` needs `--include-large`", spec.name);
+        std::process::exit(2);
+    }
+    specs.sort_by_key(|spec| spec.leaves);
+    let budget = std::time::Duration::from_millis(selection_time_budget_ms);
+    let mut results = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        if in_process {
+            match pc_bench::run_scenario(spec, budget) {
+                Ok(result) => results.push(result),
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            results.extend(run_bench_child(spec, selection_time_budget_ms));
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&results).unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "{:<12} {:>6} {:>7} {:>5} {:>8} {:>8} {:>7} {:>8} {:>8} {:>8}  {:<22} rss",
+        "scenario",
+        "tasks",
+        "methods",
+        "caps",
+        "parse_ms",
+        "valid_ms",
+        "sel_ms",
+        "sched_ms",
+        "front_ms",
+        "incr_ms",
+        "selection",
+    );
+    for result in &results {
+        let memory = result.memory_bytes.map_or("-".to_string(), |bytes| {
+            format!("{:.1}MiB", bytes as f64 / 1_048_576.0)
+        });
+        let selection = result
+            .optimality_gap_percent
+            .map_or(result.optimality_status.clone(), |gap| {
+                format!("{} gap {gap:.2}%", result.optimality_status)
+            });
+        println!(
+            "{:<12} {:>6} {:>7} {:>5} {:>8} {:>8} {:>7} {:>8} {:>8} {:>8}  {:<22} {memory}",
+            result.scenario,
+            result.task_count,
+            result.method_count,
+            result.capability_count,
+            result.parse_ms,
+            result.validation_ms,
+            result.selection_ms,
+            result.schedule_ms,
+            result.frontier_ms,
+            result.incremental_ms,
+            selection,
+        );
+    }
+    println!(
+        "solver budget {selection_time_budget_ms} ms; plans generated in memory, nothing written"
+    );
 }

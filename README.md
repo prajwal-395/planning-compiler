@@ -51,8 +51,9 @@ crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
 crates/pc-sync/   explicit-mapping reconciliation of external task lifecycle state (`pc sync`)
+crates/pc-bench/  generated-plan benchmark suite (`pc bench`; docs/benchmarks.md)
 crates/pc-discovery/      structured capability discovery (PC-13): deterministic manifest/repo adapters emitting propose patches, never accepted
-crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, sync, discover, schema)
+crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, sync, bench, discover, schema)
 crates/pc-mcp/    pc-mcp binary: MCP stdio server (check, compile, frontier, context, impact, diff, revision, propose, accept, reject, record)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
@@ -60,7 +61,7 @@ examples/transcription-substitution/  synthetic substitution study (before plan,
 examples/resource-contention/  single Resolve instance serializing exclusive holders while CI work overlaps
 examples/ren-native/  real Ren native-throughput planning cycle (plan, pending evidence, decisions)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
-docs/             ir.md, passes.md, sync.md, evidence/ (self-plan continuous-validation log), adr/
+docs/             ir.md, passes.md, sync.md, benchmarks.md, evidence/ (self-plan continuous-validation log), adr/
 ```
 
 Adapters (`pc-adapter-*`) convert external backlogs into the IR. The first
@@ -103,6 +104,7 @@ pc export-tasks-axi <backlog.md> [path]  # export a plan back into backlog.md (b
 pc import-beads <issues.jsonl> [dir]  # import Beads issues into <dir>/plan.toml (refuses to overwrite)
 pc export-beads <issues.jsonl> [path]  # export imported issue records to JSONL, preserving source fields
 pc sync (--source <github|tasks-axi|beads> [--input file] | --all) [--dry-run] [path]  # reconcile mapped external task state (docs/sync.md)
+pc bench [--all] [--include-large] [--scenario NAME] [--json]  # generated-plan benchmarks (docs/benchmarks.md; scenario-running tests are `#[ignore]`d, opt in with `cargo test -- --ignored`)
 pc schema [--patch|--decision|--outcome|--metrics] [--out file]   # emit the canonical JSON Schema (plan, patch, event, or run metrics)
 ```
 

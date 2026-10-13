@@ -11,6 +11,7 @@ members = [
     "crates/pc-cli",
     "crates/pc-discovery",
     "crates/pc-mcp",
+    "crates/pc-bench",
 ]
 
 [workspace.package]
@@ -38,6 +39,7 @@ pc-store = { path = "crates/pc-store", version = "0.1.0" }
 pc-adapter-tasks-axi = { path = "crates/pc-adapter-tasks-axi", version = "0.1.0" }
 pc-adapter-beads = { path = "crates/pc-adapter-beads", version = "0.1.0" }
 pc-sync = { path = "crates/pc-sync", version = "0.1.0" }
+pc-bench = { path = "crates/pc-bench", version = "0.1.0" }
 pc-discovery = { path = "crates/pc-discovery", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
