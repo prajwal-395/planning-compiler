@@ -301,6 +301,43 @@ fn valid_contracts_golden() {
     insta::assert_snapshot!("valid-contracts", String::from_utf8(output.stdout).unwrap());
 }
 
+/// The capability inventory lists versions with evidence coverage: without
+/// this, a provider bump or an unmeasured capability would ship silently.
+#[test]
+fn capabilities_lists_versions_and_evidence_coverage() {
+    let mut cmd = Command::cargo_bin("pc").unwrap();
+    cmd.current_dir(workspace_root().join("tests").join("fixtures"));
+    let output = cmd
+        .arg("capabilities")
+        .arg("valid-contracts.toml")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("capability:whisperx@3"), "{text}");
+    assert!(text.contains("unmeasured"), "{text}");
+
+    let mut json = Command::cargo_bin("pc").unwrap();
+    json.current_dir(workspace_root().join("tests").join("fixtures"));
+    let output = json
+        .arg("capabilities")
+        .arg("valid-contracts.toml")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let caps = report["capabilities"].as_array().unwrap();
+    assert_eq!(caps.len(), 1);
+    assert_eq!(caps[0]["id"], "whisperx@3");
+    assert_eq!(caps[0]["version"], "3");
+    assert!(caps[0]["unmeasured"].as_bool().unwrap());
+}
+
 /// Step 4: duplicates merge by content hash and covering capabilities are
 /// proposed as derived methods, pinned by snapshot.
 #[test]
@@ -371,7 +408,7 @@ fn dropped_output_golden() {
 fn negative_fixtures_fail_with_their_code() {
     let codes = [
         "E000", "E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "E009", "E010",
-        "E011", "E012", "E013", "E014", "E015",
+        "E011", "E012", "E013", "E014", "E015", "E016",
     ];
     for code in codes {
         let name = format!("invalid-{code}.toml");
@@ -3974,4 +4011,49 @@ fn compile_objective_flag_switches_between_effort_and_makespan() {
 the effort-optimal selection takes 40.000 minutes at weighted effort 40.000, so 20.000 more \
 effort buys 20.000 fewer minutes."
     );
+}
+
+/// `pc capabilities` lists every capability with version, provider, source
+/// and evidence coverage, flagging those with no measurement evidence.
+#[test]
+fn capabilities_report_flags_unmeasured_inventory() {
+    let fixtures = workspace_root().join("tests").join("fixtures");
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&fixtures)
+        .arg("capabilities")
+        .arg("capability-inventory")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "capabilities: 3 declared, 1 unmeasured (capability-inventory/plan.toml)\n\
+         capability:idle@1 [service v2] provider Example Org; source -; unmeasured\n\
+         capability:measured@1 [tool v1] provider Example Org; source pkg:cargo/measured@1; \
+         measured duration_minutes, money_usd; 2 observations, 0 staged\n\
+         capability:staged@1 [agent v1] provider -; source -; measured -; 0 observations, 1 staged\n"
+    );
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(&fixtures)
+        .arg("capabilities")
+        .arg("capability-inventory")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["unmeasured"], 1);
+    let rows = json["capabilities"].as_array().unwrap();
+    let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["idle@1", "measured@1", "staged@1"]);
+    assert_eq!(rows[0]["unmeasured"], true);
+    assert_eq!(rows[1]["provider"], "Example Org");
+    assert_eq!(rows[1]["source"], "pkg:cargo/measured@1");
+    assert_eq!(rows[1]["observations"], 2);
+    assert_eq!(rows[1]["unmeasured"], false);
+    assert_eq!(rows[2]["staged_observations"], 1);
+    assert_eq!(rows[2]["unmeasured"], false);
 }

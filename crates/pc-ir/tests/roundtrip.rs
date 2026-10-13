@@ -153,6 +153,10 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                             observations: None,
                             window: None,
                         }],
+                        provider: Some("example-provider".to_string()),
+                        source: Some("pkg:example@1".to_string()),
+                        platform_requirements: vec!["linux-x86_64".to_string()],
+                        licensing_constraints: vec!["Apache-2.0".to_string()],
                         resources: vec![],
                     })
                     .collect();
@@ -176,6 +180,8 @@ fn arb_plan() -> impl Strategy<Value = PlanDoc> {
                         budget_usd: Some(100.0),
                         deadline: None,
                         quality_floor: Some(0.5),
+                        platforms: Vec::new(),
+                        licenses: Vec::new(),
                         acceptance: vec![AcceptanceCriterion {
                             kind: AcceptanceKind::Manual,
                             description: "ok".to_string(),

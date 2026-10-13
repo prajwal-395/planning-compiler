@@ -38,6 +38,8 @@ fn base_doc() -> PlanDoc {
             budget_usd: None,
             deadline: None,
             quality_floor: None,
+            platforms: Vec::new(),
+            licenses: Vec::new(),
             acceptance: vec![],
         },
         artifact: vec![ArtifactDecl {
@@ -103,6 +105,10 @@ fn cap(id: &str, produces: Vec<ContractItem>, consumes: Vec<ContractItem>) -> Ca
         consumes,
         produces,
         estimates: vec![],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     }
 }
@@ -147,6 +153,43 @@ fn p3_skips_capability_that_does_not_cover_contract() {
     let report = check("plan.toml", &text, &mut doc, None);
     assert!(report.ok(), "got {:?}", report.diagnostics);
     assert!(!doc.method.iter().any(|m| m.status == MethodStatus::Derived));
+}
+
+#[test]
+fn p3_skips_capability_conflicting_with_objective_constraints() {
+    let text = "test".to_string();
+    let mut doc = base_doc();
+    doc.objective.platforms = vec!["linux-x86_64".into()];
+    doc.objective.licenses = vec!["Apache-2.0".into()];
+    let mut mac_only = cap(
+        "mac-only@1",
+        vec![contract("transcript", &["words", "timings"])],
+        vec![],
+    );
+    mac_only.platform_requirements = vec!["macos-arm64".into()];
+    let mut gpl = cap(
+        "gpl@1",
+        vec![contract("transcript", &["words", "timings"])],
+        vec![],
+    );
+    gpl.licensing_constraints = vec!["GPL-3.0".into()];
+    let mut allowed = cap(
+        "allowed@1",
+        vec![contract("transcript", &["words", "timings"])],
+        vec![],
+    );
+    allowed.platform_requirements = vec!["linux-x86_64".into(), "macos-arm64".into()];
+    allowed.licensing_constraints = vec!["MIT".into(), "Apache-2.0".into()];
+    doc.capability.extend([mac_only, gpl, allowed]);
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "got {:?}", report.diagnostics);
+    let derived: Vec<_> = doc
+        .method
+        .iter()
+        .filter(|m| m.status == MethodStatus::Derived)
+        .filter_map(|m| m.capability.as_deref())
+        .collect();
+    assert_eq!(derived, vec!["allowed@1"]);
 }
 
 #[test]

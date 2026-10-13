@@ -7,7 +7,8 @@
 //! (P7) run over the passed document in [`compile_with_budget`], using the
 //! P5 effective estimates from [`estimate`]. Step 6 adds the [`frontier`]
 //! ranking pass (P8) and the [`impact`] preview and comparison passes (P9)
-//! as plain functions over checked plans, following the analysis-pass rule
+//! as plain functions over checked plans, plus the [`inventory`] capability
+//! report, following the analysis-pass rule
 //! in `CONTRIBUTING.md`.
 
 pub mod compile;
@@ -15,6 +16,7 @@ pub mod diagnostic;
 pub mod estimate;
 pub mod frontier;
 pub mod impact;
+pub mod inventory;
 pub mod json;
 pub mod passes;
 pub mod propose;
@@ -33,6 +35,7 @@ pub use impact::{
     Change, ContractNote, DiffReport, ImpactError, ImpactReport, contract_note_for, delta_bases,
     diff, impact, status_str,
 };
+pub use inventory::{InventoryReport, InventoryRow, inventory, render_inventory_text};
 pub use passes::{
     Counts, Ctx, EstimatePass, MatchPass, Pass, Report, ResolvePass, SharePass, TraceEvent,
     ValidatePass, check,

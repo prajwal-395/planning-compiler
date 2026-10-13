@@ -49,7 +49,7 @@ crates/pc-select/ P6 exact ILP (effort) or makespan-search method selection with
 crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan writer, evidence JSONL append/read
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
-crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, schema)
+crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, schema)
 crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier, context, impact, diff)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
@@ -86,6 +86,7 @@ pc evaluate [--decision id] [path]  # initial -> recommendation -> final -> outc
 pc metrics [path] / pc calibration [path]  # classification counts / prediction error, latest outcome per decision
 pc history [path]  # all decision and outcome events in time order
 pc frontier [path]  # rank unresolved work (P8)
+pc capabilities [path]  # capability inventory with evidence coverage; flags unmeasured
 pc impact <change.json> [path]  # preview a hypothetical change (P9)
 pc diff <a> <b>    # compare two plans: structure, selection, totals (P9)
 pc propose <patch.json> [path]  # stage tasks, methods, capabilities as proposed

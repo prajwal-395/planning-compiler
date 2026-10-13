@@ -6,7 +6,7 @@
 //! canonicalizes evidence units (only the metric's canonical unit is
 //! accepted, case-insensitively).
 //!
-//! P2 runs the semantic checks E002-E015 over the resolved indexes.
+//! P2 runs the semantic checks E002-E016 over the resolved indexes.
 //! Only methods with status `accepted` or `derived` participate in hierarchy,
 //! contract and compilation checks; `proposed` methods are hypotheses for
 //! step 7 and `rejected` methods are ignored by every pass. `dropped` tasks
@@ -339,7 +339,7 @@ fn canonicalize_evidence_units(ctx: &mut Ctx) {
 
 /// P2: validate the resolved plan.
 ///
-/// Runs checks E002-E015 (E000/E001/E014-units belong to P1). Diagnostics
+/// Runs checks E002-E016 (E000/E001/E014-units belong to P1). Diagnostics
 /// are sorted before the report is built, so output never depends on input
 /// order.
 pub struct ValidatePass;
@@ -368,6 +368,7 @@ impl Pass for ValidatePass {
         check_method_shapes(ctx);
         check_evidence(ctx);
         check_objective(ctx);
+        check_capability_constraints(ctx);
     }
 }
 
@@ -1120,6 +1121,65 @@ fn check_objective(ctx: &mut Ctx) {
     }
 }
 
+/// The axes on which the capability conflicts with the objective: its
+/// `platform_requirements` (or `licensing_constraints`) are alternatives,
+/// so it conflicts only when it lists some and none is declared by the
+/// objective. An objective that declares no platforms (or no licences)
+/// constrains nothing on that axis.
+fn constraint_conflicts(objective: &pc_ir::Objective, cap: &pc_ir::Capability) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    for (axis, declared, listed) in [
+        (
+            "platforms",
+            &objective.platforms,
+            &cap.platform_requirements,
+        ),
+        ("licences", &objective.licenses, &cap.licensing_constraints),
+    ] {
+        if !declared.is_empty()
+            && !listed.is_empty()
+            && !listed.iter().any(|l| declared.contains(l))
+        {
+            let listed: Vec<String> = listed.iter().map(|l| format!("`{l}`")).collect();
+            conflicts.push(format!("{axis} {}", listed.join(", ")));
+        }
+    }
+    conflicts
+}
+
+/// E016: every non-rejected invoke method's capability runs on at least
+/// one of the objective's declared platforms and under at least one of its
+/// accepted licences.
+fn check_capability_constraints(ctx: &mut Ctx) {
+    let mut conflicts: Vec<(String, String)> = Vec::new();
+    for m in &ctx.doc.method {
+        if m.kind != MethodKind::Invoke || m.status == MethodStatus::Rejected {
+            continue;
+        }
+        let Some(cap) = m
+            .capability
+            .as_deref()
+            .and_then(|id| ctx.doc.capability.iter().find(|c| c.id == id))
+        else {
+            continue;
+        };
+        for conflict in constraint_conflicts(&ctx.doc.objective, cap) {
+            conflicts.push((
+                m.id.clone(),
+                format!(
+                    "method `{}` invokes capability `{}` supporting only {conflict}, \
+                     none of which the objective declares",
+                    m.id, cap.id
+                ),
+            ));
+        }
+    }
+    for (id, message) in conflicts {
+        let line = ctx.locate_id(&id);
+        ctx.error("E016", message, line, format!("method:{id}"));
+    }
+}
+
 /// True when `cap_produces` covers everything `task_produces` promises.
 fn capability_covers(task_produces: &[ContractItem], cap_produces: &[ContractItem]) -> bool {
     missing_fields(task_produces, cap_produces).is_empty()
@@ -1143,11 +1203,12 @@ fn inputs_satisfied(
 /// typed output field, propose a `derived` invoke method for every
 /// capability whose contract covers the task's contract: the capability must
 /// produce everything the task promises, and everything the capability
-/// consumes must come from the task or plan external inputs. The matching is
-/// exact typed subset matching; no embeddings or negotiation. Tasks that
-/// promise nothing need decomposition, not invocation, so they are skipped:
-/// an empty promise is covered by every capability and would only spam
-/// vacuous proposals. Proposals that collide with an existing method id, or
+/// consumes must come from the task or plan external inputs, and one of its
+/// listed platforms and one of its licences must be declared by the
+/// objective (E016). The matching is exact typed subset matching; no embeddings or
+/// negotiation. Tasks that promise nothing need decomposition, not
+/// invocation, so they are skipped: an empty promise is covered by every
+/// capability and would only spam vacuous proposals. Proposals that collide with an existing method id, or
 /// that duplicate a live invoke of the same capability for the same task,
 /// are skipped. Surviving proposals are reported with trace events and carry
 /// `derived` status.
@@ -1191,6 +1252,7 @@ impl Pass for MatchPass {
                 }
                 if capability_covers(&task.produces, &cap.produces)
                     && inputs_satisfied(&cap.consumes, &task.consumes, &external)
+                    && constraint_conflicts(&ctx.doc.objective, cap).is_empty()
                 {
                     proposals.push((task.id.clone(), cap.id.clone()));
                 }

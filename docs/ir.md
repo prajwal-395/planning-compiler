@@ -24,7 +24,8 @@ How measured totals render as observed ranges is owned by P5 in `passes.md`.
 ## Entities
 
 - **Objective.** The root task plus hard constraints (`budget_usd`,
-  `deadline`, `quality_floor`), per-metric `weights`, and `acceptance`
+  `deadline`, `quality_floor`, and the `platforms` and `licenses` invoked
+  capabilities must stay within), per-metric `weights`, and `acceptance`
   criteria. Each criterion is `manual` (a person signs off), `command` (a
   command exits zero) or `metric` (a `metric op value` comparison).
 - **Task.** `id`, `title`, `state`, and a typed contract: `consumes` and
@@ -60,7 +61,18 @@ How measured totals render as observed ranges is owned by P5 in `passes.md`.
   kind** (see `adr/0003-no-human-executors.md`). Each capability carries a
   typed `consumes`/`produces` contract, per-metric three-point `estimates`
   (`low`/`likely`/`high` with `declared` or `measured` provenance), and the
-  `resources` it draws on.
+  `resources` it draws on. Optional `provider` and `source` record where
+  the capability comes from; `pc capabilities` lists them per capability
+  beside its P5 evidence coverage and flags capabilities with no live or
+  staged measurement evidence as `unmeasured`. `platform_requirements` and
+  `licensing_constraints` are checked against the objective's `platforms`
+  and `licenses`. Each list holds alternatives (a capability runs on any
+  listed platform and is usable under any listed licence): when the
+  objective declares either list, every non-rejected invoke whose
+  capability lists entries on that axis but none the objective declares is
+  E016, and P3 never derives such a method. `pc context`
+  includes all four fields for invoked capabilities. Omitted fields remain
+  valid for existing plans.
 - **Artifact.** A declared type: `name` plus its `fields`. Every contract
   entry must name a declared artifact and declared fields.
 - **Resource.** A named capacity (e.g. `ci-minutes`). v0 only validates

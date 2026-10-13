@@ -1,0 +1,51 @@
+ir_version = 0
+
+[plan]
+id = "capability-inventory"
+title = "Capability inventory coverage"
+
+[objective]
+root_task = "job"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "job"
+title = "Do the job"
+state = "resolved"
+
+# measured@1 is live (accepted) with evidence, staged@1 is only proposed
+# with evidence staged for it, and idle@1 has no evidence at all.
+[[method]]
+id = "via-measured"
+task = "job"
+kind = "invoke"
+capability = "measured@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-staged"
+task = "job"
+kind = "invoke"
+capability = "staged@1"
+status = "proposed"
+provenance = "agent:test"
+
+[[capability]]
+id = "measured@1"
+kind = "tool"
+version = "1"
+provider = "Example Org"
+source = "pkg:cargo/measured@1"
+estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0, provenance = "declared" }]
+
+[[capability]]
+id = "staged@1"
+kind = "agent"
+version = "1"
+
+[[capability]]
+id = "idle@1"
+kind = "service"
+version = "2"
+provider = "Example Org"

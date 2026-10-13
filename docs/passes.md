@@ -34,6 +34,7 @@ Parse (in `pc-store`), then:
 | E013 | method shape | `invoke` names a capability and no subtasks/edges; `decompose` names no capability and at least one subtask; order endpoints are subtasks of the same method |
 | E014 | invalid evidence | subject is `capability:`, `method:` or `task:` with a non-empty id, timestamp is RFC 3339, value is finite and non-negative, basis is `absolute` or `distance-from:<capability>` when recorded, one attributed capability and metric (or pending subject) carries one basis (units are checked in P1) |
 | E015 | invalid objective | weights name known metrics and are finite/non-negative; budget non-negative; floor in `[0,1]`; criteria carry their kind's fields |
+| E016 | capability constraint | when `objective.platforms` (or `objective.licenses`) is non-empty, every non-rejected invoke's capability that lists `platform_requirements` (or `licensing_constraints`) lists at least one declared there; the lists are alternatives |
 
 Scope notes:
 
@@ -62,7 +63,9 @@ Scope notes:
 committed (`accepted`/`derived`) method, using exact typed subset matching
 only: the capability must produce everything the task promises, and
 everything the capability consumes must come from the task's consumables or
-plan external inputs. No embeddings, no negotiation.
+plan external inputs. Capabilities none of whose listed platforms (or
+licences) the objective declares (E016) are never proposed. No embeddings, no
+negotiation.
 
 Guards: tasks that promise no typed field are skipped (an empty promise is
 covered by every capability, so proposing would spam vacuous
@@ -183,6 +186,11 @@ an object with the decision `rows`, the capability's `provenance` rows
 (empty for non-capability targets; `basis` is the `declared`/`measured(n)`
 label and `measurement_basis` the typed basis), the matching
 `unattributed_tasks`, and the matching `staged_evidence`.
+
+`pc capabilities [path] [--json]` evaluates the inventory over a checked
+plan: one row per capability sorted by id with its kind, version,
+`provider`, `source`, the metrics with live measured evidence, the live and
+staged observation counts, and an `unmeasured` flag when it has neither.
 
 ## P6: select (step 3)
 

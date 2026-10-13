@@ -831,6 +831,8 @@ pub fn import_plan(backlog: &Backlog) -> Result<PlanDoc, ImportError> {
             budget_usd: None,
             deadline: None,
             quality_floor: None,
+            platforms: Vec::new(),
+            licenses: Vec::new(),
             acceptance: vec![AcceptanceCriterion {
                 kind: AcceptanceKind::Manual,
                 description: "The IR regenerates backlog.md byte-identical.".to_string(),

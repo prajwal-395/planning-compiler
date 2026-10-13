@@ -140,6 +140,16 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         selection_time_budget_ms: u64,
     },
+    /// List every capability with its version, provider, source and
+    /// evidence coverage, flagging capabilities with no measurement evidence.
+    Capabilities {
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
+        /// Emit the inventory report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Preview a hypothetical change (P9) without editing any files.
     Impact {
         /// JSON file holding the change (accept_method, add_evidence).
@@ -311,6 +321,7 @@ fn main() {
             json,
             selection_time_budget_ms,
         } => run_frontier(&plan_path(path), json, selection_time_budget_ms),
+        Commands::Capabilities { path, json } => run_capabilities(&plan_path(path), json),
         Commands::Impact {
             change,
             path,
@@ -1181,6 +1192,8 @@ fn scaffold_doc(plan_id: &str) -> pc_ir::PlanDoc {
             budget_usd: None,
             deadline: None,
             quality_floor: None,
+            platforms: Vec::new(),
+            licenses: Vec::new(),
             acceptance: vec![pc_ir::AcceptanceCriterion {
                 kind: pc_ir::AcceptanceKind::Manual,
                 description: "Someone signs off.".to_string(),
@@ -1373,6 +1386,23 @@ fn metric_label(metric: &str) -> String {
     } else {
         metric.to_string()
     }
+}
+
+/// Handler for `pc capabilities`.
+fn run_capabilities(path: &std::path::Path, json: bool) {
+    let (loaded, _) = load_checked(path);
+    let report = pc_core::inventory(&loaded.doc);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+        return;
+    }
+    print!(
+        "{}",
+        pc_core::render_inventory_text(&report, &loaded.display_path)
+    );
 }
 
 /// Handler for `pc frontier`.

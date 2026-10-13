@@ -105,6 +105,16 @@ pub struct Objective {
     pub deadline: Option<String>,
     /// Hard quality floor in `[0, 1]`, if any.
     pub quality_floor: Option<f64>,
+    /// Platforms the plan runs on. When non-empty, every non-rejected
+    /// invoke's capability must list one of these in `platform_requirements`
+    /// when it lists any (E016).
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    /// Licences the plan accepts. When non-empty, every non-rejected
+    /// invoke's capability must list one of these in `licensing_constraints`
+    /// when it lists any (E016).
+    #[serde(default)]
+    pub licenses: Vec<String>,
     /// What counts as achieving the objective.
     #[serde(default)]
     pub acceptance: Vec<AcceptanceCriterion>,
@@ -333,6 +343,20 @@ pub struct Capability {
     /// Capability version string.
     #[serde(default)]
     pub version: String,
+    /// Organization or project that provides this capability.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Source locator for the capability record, such as a package URL or repository.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Platforms the capability runs on, as alternatives; at least one must be
+    /// among `objective.platforms` when the plan declares any (E016).
+    #[serde(default)]
+    pub platform_requirements: Vec<String>,
+    /// Licences the capability is available under, as alternatives; at least
+    /// one must be among `objective.licenses` when the plan declares any (E016).
+    #[serde(default)]
+    pub licensing_constraints: Vec<String>,
     /// Typed inputs the capability needs from the invoking task.
     #[serde(default)]
     pub consumes: Vec<ContractItem>,

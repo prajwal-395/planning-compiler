@@ -1,6 +1,6 @@
 //! Compiler diagnostics: file-anchored errors with stable codes.
 //!
-//! Every P1/P2 failure is a [`Diagnostic`] with a code in the `E000`-`E015`
+//! Every P1/P2 failure is a [`Diagnostic`] with a code in the `E000`-`E016`
 //! range (see `docs/passes.md`). Codes are stable: negative fixtures assert
 //! them and the CLI surfaces them in both human and `--json` output.
 

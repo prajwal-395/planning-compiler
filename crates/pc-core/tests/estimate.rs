@@ -33,6 +33,8 @@ fn doc() -> (String, PlanDoc) {
             budget_usd: None,
             deadline: None,
             quality_floor: None,
+            platforms: Vec::new(),
+            licenses: Vec::new(),
             acceptance: vec![],
         },
         artifact: vec![],
@@ -69,6 +71,10 @@ fn cap(id: &str, low: f64, likely: f64, high: f64) -> Capability {
             observations: None,
             window: None,
         }],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     }
 }
@@ -277,6 +283,10 @@ fn p5_evidence_for_a_merged_away_task_still_counts() {
             observations: None,
             window: None,
         }],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     });
     doc.method.push(invoke("m1", "leaf", "shared@1"));

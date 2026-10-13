@@ -1,0 +1,7 @@
+---
+source: crates/pc-cli/tests/cli.rs
+expression: stderr
+---
+error[E016]: method `inv` invokes capability `c@1` supporting only platforms `macos-arm64`, none of which the objective declares
+  --> invalid-E016.toml:23
+found 1 error

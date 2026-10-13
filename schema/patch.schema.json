@@ -34,6 +34,22 @@
           ],
           "description": "Executor flavour. People are out of scope for v0."
         },
+        "licensing_constraints": {
+          "default": [],
+          "description": "Licences the capability is available under, as alternatives; at least one must be among `objective.licenses` when the plan declares any (E016).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "platform_requirements": {
+          "default": [],
+          "description": "Platforms the capability runs on, as alternatives; at least one must be among `objective.platforms` when the plan declares any (E016).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "produces": {
           "default": [],
           "description": "Typed outputs the capability delivers.",
@@ -42,6 +58,14 @@
           },
           "type": "array"
         },
+        "provider": {
+          "default": null,
+          "description": "Organization or project that provides this capability.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "resources": {
           "default": [],
           "description": "Resources this capability draws on.",
@@ -49,6 +73,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "source": {
+          "default": null,
+          "description": "Source locator for the capability record, such as a package URL or repository.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "version": {
           "default": "",

@@ -658,6 +658,14 @@ pub struct CapabilityView {
     pub kind: String,
     /// Capability version.
     pub version: String,
+    /// Organization or project that provides this capability.
+    pub provider: Option<String>,
+    /// Source locator for the capability record.
+    pub source: Option<String>,
+    /// Platforms the capability runs on, as alternatives.
+    pub platform_requirements: Vec<String>,
+    /// Licences the capability is available under, as alternatives.
+    pub licensing_constraints: Vec<String>,
     /// Typed inputs.
     pub consumes: Vec<ContractItem>,
     /// Typed outputs.
@@ -757,6 +765,10 @@ pub fn context(
             id: c.id.clone(),
             kind: format!("{:?}", c.kind).to_lowercase(),
             version: c.version.clone(),
+            provider: c.provider.clone(),
+            source: c.source.clone(),
+            platform_requirements: c.platform_requirements.clone(),
+            licensing_constraints: c.licensing_constraints.clone(),
             consumes: c.consumes.clone(),
             produces: c.produces.clone(),
             estimates: c.estimates.clone(),
@@ -1063,6 +1075,24 @@ pub fn render_context_text(report: &ContextReport) -> String {
             "capability {} [{} v{}]\n",
             cap.id, cap.kind, cap.version
         ));
+        if let Some(provider) = &cap.provider {
+            out.push_str(&format!("  provider: {provider}\n"));
+        }
+        if let Some(source) = &cap.source {
+            out.push_str(&format!("  source: {source}\n"));
+        }
+        if !cap.platform_requirements.is_empty() {
+            out.push_str(&format!(
+                "  platforms: {}\n",
+                cap.platform_requirements.join(", ")
+            ));
+        }
+        if !cap.licensing_constraints.is_empty() {
+            out.push_str(&format!(
+                "  licensing: {}\n",
+                cap.licensing_constraints.join(", ")
+            ));
+        }
         if !cap.consumes.is_empty() {
             out.push_str(&format!("  consumes: {}\n", render_contract(&cap.consumes)));
         }
@@ -1545,6 +1575,88 @@ estimates = [{ metric = "duration_minutes", low = 2.0, likely = 4.0, high = 6.0,
         assert!(kinds.contains(&"open-task"));
         let err = context(&doc, &plan, &frontier, "ghost").unwrap_err();
         assert_eq!(err, ContextError::UnknownTask { id: "ghost".into() });
+    }
+
+    #[test]
+    fn context_exposes_capability_inventory_metadata() {
+        let mut doc = baseline();
+        doc.capability[0].provider = Some("Example Org".into());
+        doc.capability[0].source = Some("pkg:cargo/example-writer@1".into());
+        doc.capability[0].platform_requirements = vec!["linux-x86_64".into()];
+        doc.capability[0].licensing_constraints = vec!["Apache-2.0".into()];
+        let plan = compiled(&mut doc);
+        let frontier = crate::frontier(&doc, &plan);
+        let report = context(&doc, &plan, &frontier, "draft").unwrap();
+
+        let capability = &report.capabilities[0];
+        assert_eq!(capability.provider.as_deref(), Some("Example Org"));
+        assert_eq!(
+            capability.source.as_deref(),
+            Some("pkg:cargo/example-writer@1")
+        );
+        assert_eq!(capability.platform_requirements, ["linux-x86_64"]);
+        assert_eq!(capability.licensing_constraints, ["Apache-2.0"]);
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["capabilities"][0]["provider"], "Example Org");
+        assert_eq!(
+            json["capabilities"][0]["source"],
+            "pkg:cargo/example-writer@1"
+        );
+        assert_eq!(
+            json["capabilities"][0]["platform_requirements"][0],
+            "linux-x86_64"
+        );
+        assert_eq!(
+            json["capabilities"][0]["licensing_constraints"][0],
+            "Apache-2.0"
+        );
+        let rendered = render_context_text(&report);
+        assert!(rendered.contains("provider: Example Org"));
+        assert!(rendered.contains("source: pkg:cargo/example-writer@1"));
+        assert!(rendered.contains("platforms: linux-x86_64"));
+        assert!(rendered.contains("licensing: Apache-2.0"));
+    }
+
+    #[test]
+    fn capability_inventory_metadata_survives_proposal_acceptance() {
+        let mut file = baseline();
+        let inventory_patch = patch(
+            r#"{
+                "add_capability": [{
+                    "id": "inventory@1", "kind": "tool", "version": "1",
+                    "provider": "Example Org", "source": "pkg:example/inventory@1",
+                    "platform_requirements": ["linux-x86_64"],
+                    "licensing_constraints": ["Apache-2.0"],
+                    "produces": [{"artifact": "doc", "fields": ["text"]}]
+                }],
+                "add_method": [{
+                    "id": "via-inventory", "task": "draft", "kind": "invoke",
+                    "capability": "inventory@1", "status": "proposed",
+                    "provenance": "agent:test"
+                }]
+            }"#,
+        );
+        validate_patch(&file, &inventory_patch).unwrap();
+        apply_patch(&mut file, inventory_patch);
+        let mut probed = file.clone();
+        assert!(checked(&mut probed).ok());
+        assert_eq!(
+            accept_method(&mut file, &probed, "via-inventory"),
+            Ok("accepted method:via-inventory".to_string())
+        );
+
+        let capability = file
+            .capability
+            .iter()
+            .find(|capability| capability.id == "inventory@1")
+            .unwrap();
+        assert_eq!(capability.provider.as_deref(), Some("Example Org"));
+        assert_eq!(
+            capability.source.as_deref(),
+            Some("pkg:example/inventory@1")
+        );
+        assert_eq!(capability.platform_requirements, ["linux-x86_64"]);
+        assert_eq!(capability.licensing_constraints, ["Apache-2.0"]);
     }
 
     #[test]

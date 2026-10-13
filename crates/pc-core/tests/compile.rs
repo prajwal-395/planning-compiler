@@ -65,6 +65,10 @@ fn cap(id: &str, minutes: f64) -> Capability {
             observations: None,
             window: None,
         }],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     }
 }
@@ -84,6 +88,10 @@ fn cap_range(id: &str, low: f64, likely: f64, high: f64) -> Capability {
             observations: None,
             window: None,
         }],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     }
 }
@@ -103,6 +111,8 @@ fn doc(tasks: Vec<Task>, methods: Vec<Method>, caps: Vec<Capability>) -> PlanDoc
             budget_usd: None,
             deadline: None,
             quality_floor: None,
+            platforms: Vec::new(),
+            licenses: Vec::new(),
             acceptance: vec![],
         },
         artifact: vec![],

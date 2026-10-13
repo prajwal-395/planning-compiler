@@ -1,0 +1,34 @@
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+platforms = ["linux-x86_64"]
+licenses = ["Apache-2.0"]
+
+[[task]]
+id = "root"
+title = "root"
+state = "open"
+
+[[task]]
+id = "leaf"
+title = "leaf"
+state = "open"
+
+[[method]]
+id = "inv"
+task = "leaf"
+kind = "invoke"
+capability = "c@1"
+status = "accepted"
+
+[[capability]]
+id = "c@1"
+kind = "tool"
+version = "1"
+platform_requirements = ["macos-arm64"]
+licensing_constraints = ["Apache-2.0"]

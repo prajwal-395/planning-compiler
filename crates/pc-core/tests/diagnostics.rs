@@ -1,4 +1,4 @@
-//! One test per P1/P2 diagnostic (E000-E015) plus determinism.
+//! One test per P1/P2 diagnostic (E000-E016) plus determinism.
 //!
 //! Each test starts from [`valid_doc`] and applies the smallest mutation
 //! that triggers exactly one code, so a regression in any single check
@@ -38,6 +38,8 @@ fn valid_doc() -> (String, PlanDoc) {
             budget_usd: None,
             deadline: None,
             quality_floor: None,
+            platforms: Vec::new(),
+            licenses: Vec::new(),
             acceptance: vec![],
         },
         artifact: vec![ArtifactDecl {
@@ -247,6 +249,10 @@ fn contracted_doc() -> (String, PlanDoc) {
         consumes: vec![],
         produces: vec![contract("transcript", &["words"])],
         estimates: vec![],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     });
     doc.method.push(Method {
@@ -314,6 +320,10 @@ fn e010_reports_unknown_metric() {
             observations: None,
             window: None,
         }],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     });
     let report = check("plan.toml", &text, &mut doc, None);
@@ -338,6 +348,10 @@ fn e011_reports_inverted_three_point() {
             observations: None,
             window: None,
         }],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec![],
     });
     let report = check("plan.toml", &text, &mut doc, None);
@@ -354,6 +368,10 @@ fn e012_reports_undeclared_resource() {
         consumes: vec![],
         produces: vec![],
         estimates: vec![],
+        provider: None,
+        source: None,
+        platform_requirements: vec![],
+        licensing_constraints: vec![],
         resources: vec!["gpu-9".to_string()],
     });
     let report = check("plan.toml", &text, &mut doc, None);
@@ -616,6 +634,104 @@ fn e015_reports_unknown_weight_metric() {
     let report = check("plan.toml", &text, &mut doc, None);
     // The removed human-time metric must fail validation, not silently pass.
     assert_eq!(codes(&report), vec!["E015"]);
+}
+
+fn constrained_doc(status: MethodStatus) -> (String, PlanDoc) {
+    let (text, mut doc) = valid_doc();
+    doc.objective.platforms = vec!["linux-x86_64".to_string()];
+    doc.objective.licenses = vec!["Apache-2.0".to_string()];
+    doc.capability.push(Capability {
+        id: "c@1".to_string(),
+        kind: CapabilityKind::Tool,
+        version: "1".to_string(),
+        provider: None,
+        source: None,
+        platform_requirements: vec!["macos-arm64".to_string()],
+        licensing_constraints: vec!["GPL-3.0".to_string()],
+        consumes: vec![],
+        produces: vec![],
+        estimates: vec![],
+        resources: vec![],
+    });
+    doc.method.push(Method {
+        id: "inv".to_string(),
+        task: "leaf".to_string(),
+        kind: MethodKind::Invoke,
+        subtasks: vec![],
+        order_edges: vec![],
+        capability: Some("c@1".to_string()),
+        status,
+        provenance: "agent:claude".to_string(),
+        assumptions: vec![],
+    });
+    (text, doc)
+}
+
+#[test]
+fn e016_reports_undeclared_platform_and_licence() {
+    for status in [MethodStatus::Accepted, MethodStatus::Proposed] {
+        let (text, mut doc) = constrained_doc(status);
+        let report = check("plan.toml", &text, &mut doc, None);
+        let messages: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert_eq!(codes(&report), vec!["E016", "E016"], "{status:?}");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("platforms `macos-arm64`")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("licences `GPL-3.0`")),
+            "{messages:?}"
+        );
+    }
+}
+
+#[test]
+fn e016_allows_declared_or_unconstrained_requirements() {
+    let (text, mut doc) = constrained_doc(MethodStatus::Accepted);
+    doc.objective.platforms.push("macos-arm64".to_string());
+    doc.objective.licenses.push("GPL-3.0".to_string());
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "expected clean, got {:?}", report.diagnostics);
+
+    let (text, mut doc) = constrained_doc(MethodStatus::Accepted);
+    doc.objective.platforms.clear();
+    doc.objective.licenses.clear();
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "expected clean, got {:?}", report.diagnostics);
+
+    let (text, mut doc) = constrained_doc(MethodStatus::Rejected);
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "expected clean, got {:?}", report.diagnostics);
+}
+
+#[test]
+fn e016_treats_listed_platforms_and_licences_as_alternatives() {
+    let (text, mut doc) = constrained_doc(MethodStatus::Accepted);
+    doc.capability[0].platform_requirements =
+        vec!["linux-x86_64".to_string(), "macos-arm64".to_string()];
+    doc.capability[0].licensing_constraints = vec!["MIT".to_string(), "Apache-2.0".to_string()];
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert!(report.ok(), "expected clean, got {:?}", report.diagnostics);
+
+    let (text, mut doc) = constrained_doc(MethodStatus::Accepted);
+    doc.capability[0].platform_requirements =
+        vec!["macos-arm64".to_string(), "windows-x86_64".to_string()];
+    doc.capability[0].licensing_constraints = vec!["MIT".to_string(), "Apache-2.0".to_string()];
+    let report = check("plan.toml", &text, &mut doc, None);
+    assert_eq!(codes(&report), vec!["E016"]);
+    assert!(
+        report.diagnostics[0]
+            .message
+            .contains("platforms `macos-arm64`, `windows-x86_64`"),
+        "{:?}",
+        report.diagnostics
+    );
 }
 
 #[test]
