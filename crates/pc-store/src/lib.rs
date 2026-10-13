@@ -1,10 +1,10 @@
 //! Plan loading.
 //!
-//! State is text files: a `plan.toml` (or `plan.json`) plus an optional
-//! sibling `evidence.jsonl`. This crate owns the filesystem layout; passes
+//! State is text files: a `plan.toml` (or `plan.json`) plus optional
+//! sibling `evidence.jsonl`, `decisions.jsonl`, and `outcomes.jsonl` logs. This crate owns the filesystem layout; passes
 //! P1-P5 in `pc-core` own validation; [`LoadedPlan::check`] runs them. There is no database in v0.
 
-use pc_ir::{Evidence, PlanDoc, canonical_unit};
+use pc_ir::{DecisionEvent, Evidence, OutcomeEvent, PlanDoc, canonical_unit};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -315,4 +315,178 @@ pub fn append_evidence(plan_file: &Path, record: &Evidence) -> Result<(PathBuf, 
             message: e.to_string(),
         })?;
     Ok((log, line))
+}
+
+/// Append one decision event beside the plan, refusing an event ID already in the log.
+pub fn append_decision(
+    plan_file: &Path,
+    event: &DecisionEvent,
+) -> Result<(PathBuf, u32), LoadError> {
+    validate_event(&event.event, &event.objective)?;
+    let mut ids = std::collections::BTreeSet::new();
+    if !event.alternatives.iter().all(|a| ids.insert(a.id.as_str())) {
+        return Err(event_error("alternative IDs must be unique"));
+    }
+    if !ids.contains(event.selected_alternative.as_str()) {
+        return Err(event_error(
+            "selected alternative is not listed in alternatives",
+        ));
+    }
+    if event
+        .baseline_alternative
+        .as_deref()
+        .is_some_and(|baseline| !ids.contains(baseline))
+    {
+        return Err(event_error(
+            "baseline alternative is not listed in alternatives",
+        ));
+    }
+    if event
+        .compiler_recommendation
+        .as_deref()
+        .is_some_and(|recommendation| !ids.contains(recommendation))
+    {
+        return Err(event_error(
+            "compiler recommendation is not listed in alternatives",
+        ));
+    }
+    append_event(plan_file, "decisions.jsonl", &event.event.id, event)
+}
+
+/// Append one observed outcome event beside the plan, refusing an event ID already in the log.
+pub fn append_outcome(plan_file: &Path, event: &OutcomeEvent) -> Result<(PathBuf, u32), LoadError> {
+    validate_event(&event.event, &event.decision_id)?;
+    if !read_decisions(plan_file)?
+        .iter()
+        .any(|decision| decision.event.id == event.decision_id)
+    {
+        return Err(event_error("outcome references an unknown decision ID"));
+    }
+    if event.evaluation_status.trim().is_empty()
+        || event
+            .confidence
+            .is_some_and(|c| !c.is_finite() || !(0.0..=1.0).contains(&c))
+    {
+        return Err(event_error(
+            "outcome status must be non-empty and confidence must be in [0, 1]",
+        ));
+    }
+    append_event(plan_file, "outcomes.jsonl", &event.event.id, event)
+}
+
+/// Read decision records from the log adjacent to a plan.
+pub fn read_decisions(plan_file: &Path) -> Result<Vec<DecisionEvent>, LoadError> {
+    read_events(&event_log_path(plan_file, "decisions.jsonl"))
+}
+
+/// Read outcome records from the log adjacent to a plan.
+pub fn read_outcomes(plan_file: &Path) -> Result<Vec<OutcomeEvent>, LoadError> {
+    read_events(&event_log_path(plan_file, "outcomes.jsonl"))
+}
+
+fn validate_event(event: &pc_ir::EventMetadata, reference: &str) -> Result<(), LoadError> {
+    if event.id.trim().is_empty()
+        || event.plan_revision.trim().is_empty()
+        || event.source.trim().is_empty()
+        || reference.trim().is_empty()
+        || (event.tasks.is_empty() && event.capabilities.is_empty())
+        || event.schema_version != 1
+        || chrono::DateTime::parse_from_rfc3339(&event.timestamp).is_err()
+    {
+        return Err(event_error(
+            "event requires an ID, RFC 3339 timestamp, plan revision, source, schema_version 1, and at least one task or capability reference",
+        ));
+    }
+    Ok(())
+}
+
+fn event_error(message: &str) -> LoadError {
+    LoadError::Unparsable {
+        path: "decision/outcome event".to_string(),
+        message: message.to_string(),
+    }
+}
+
+fn event_log_path(plan_file: &Path, name: &str) -> PathBuf {
+    plan_file.parent().unwrap_or(Path::new(".")).join(name)
+}
+
+fn append_event<T: serde::Serialize>(
+    plan_file: &Path,
+    name: &str,
+    id: &str,
+    event: &T,
+) -> Result<(PathBuf, u32), LoadError> {
+    let log = event_log_path(plan_file, name);
+    let display = log.display().to_string();
+    let existing = if log.is_file() {
+        std::fs::read_to_string(&log).map_err(|e| LoadError::Unreadable {
+            path: display.clone(),
+            message: e.to_string(),
+        })?
+    } else {
+        String::new()
+    };
+    for (index, line) in existing.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| LoadError::Unparsable {
+                path: display.clone(),
+                message: format!("line {}: {e}", index + 1),
+            })?;
+        if value.get("id").and_then(serde_json::Value::as_str) == Some(id) {
+            return Err(LoadError::Unparsable {
+                path: display,
+                message: format!("duplicate event ID `{id}`"),
+            });
+        }
+    }
+    let line = u32::try_from(existing.lines().count() + 1).unwrap_or(u32::MAX);
+    let mut bytes = if existing.is_empty() || existing.ends_with('\n') {
+        String::new()
+    } else {
+        "\n".to_string()
+    };
+    bytes.push_str(
+        &serde_json::to_string(event).map_err(|e| LoadError::Unparsable {
+            path: display.clone(),
+            message: e.to_string(),
+        })?,
+    );
+    bytes.push('\n');
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .and_then(|mut f| {
+            use std::io::Write as _;
+            f.write_all(bytes.as_bytes())
+        })
+        .map_err(|e| LoadError::Unreadable {
+            path: display.clone(),
+            message: e.to_string(),
+        })?;
+    Ok((log, line))
+}
+
+fn read_events<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>, LoadError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| LoadError::Unreadable {
+        path: path.display().to_string(),
+        message: e.to_string(),
+    })?;
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            serde_json::from_str(line).map_err(|e| LoadError::Unparsable {
+                path: path.display().to_string(),
+                message: format!("line {}: {e}", index + 1),
+            })
+        })
+        .collect()
 }

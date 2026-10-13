@@ -50,6 +50,12 @@ enum Commands {
         /// Emit the agent-patch schema (`pc propose` input) instead.
         #[arg(long)]
         patch: bool,
+        /// Emit the decision-event schema instead of the plan schema.
+        #[arg(long, conflicts_with_all = ["patch", "outcome"])]
+        decision: bool,
+        /// Emit the outcome-event schema instead of the plan schema.
+        #[arg(long, conflicts_with_all = ["patch", "decision"])]
+        outcome: bool,
     },
     /// Roll up accepted methods and analyze the critical path.
     Compile {
@@ -85,6 +91,24 @@ enum Commands {
         /// holds a plan file, otherwise the current directory.
         path: Option<PathBuf>,
     },
+    /// Append one decision and its prediction to decisions.jsonl.
+    Decision {
+        /// JSON file holding one decision event.
+        event: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when present.
+        path: Option<PathBuf>,
+    },
+    /// Read all decision events as JSON.
+    Decisions { path: Option<PathBuf> },
+    /// Append one observed result to outcomes.jsonl.
+    Outcome {
+        /// JSON file holding one outcome event.
+        event: PathBuf,
+        /// Plan file or directory. Defaults to `.plan` when present.
+        path: Option<PathBuf>,
+    },
+    /// Read all observed outcome events as JSON.
+    Outcomes { path: Option<PathBuf> },
     /// Rank unresolved work (P8): open tasks, pending proposals,
     /// unmeasured critical-path cost and blocked alternatives.
     Frontier {
@@ -235,7 +259,12 @@ fn main() {
     match cli.command {
         Commands::Init { path, json } => run_init(path, json),
         Commands::Check { path, json } => run_check(&plan_path(path), json),
-        Commands::Schema { out, patch } => run_schema(out.as_deref(), patch),
+        Commands::Schema {
+            out,
+            patch,
+            decision,
+            outcome,
+        } => run_schema(out.as_deref(), patch, decision, outcome),
         Commands::Compile {
             path,
             json,
@@ -248,6 +277,10 @@ fn main() {
             selection_time_budget_ms,
         } => run_explain(&plan_path(path), &target, json, selection_time_budget_ms),
         Commands::Record { evidence, path } => run_record(&evidence, &plan_path(path)),
+        Commands::Decision { event, path } => run_event_record(&event, &plan_path(path), true),
+        Commands::Decisions { path } => run_event_read(&plan_path(path), true),
+        Commands::Outcome { event, path } => run_event_record(&event, &plan_path(path), false),
+        Commands::Outcomes { path } => run_event_read(&plan_path(path), false),
         Commands::Frontier {
             path,
             json,
@@ -844,6 +877,72 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
         }
     }
 }
+
+fn run_event_record(input: &std::path::Path, path: &std::path::Path, decision: bool) {
+    let text = std::fs::read_to_string(input).unwrap_or_else(|e| {
+        eprintln!("error: cannot read `{}`: {e}", input.display());
+        std::process::exit(1);
+    });
+    let loaded = pc_store::load(path).unwrap_or_else(|e| {
+        eprintln!("error[E000]: {e}");
+        std::process::exit(1);
+    });
+    let plan_file = std::path::PathBuf::from(&loaded.display_path);
+    let result = if decision {
+        serde_json::from_str::<pc_ir::DecisionEvent>(&text)
+            .map_err(|e| e.to_string())
+            .and_then(|event| {
+                pc_store::append_decision(&plan_file, &event)
+                    .map(|(p, n)| (p, n, event.event.id))
+                    .map_err(|e| e.to_string())
+            })
+    } else {
+        serde_json::from_str::<pc_ir::OutcomeEvent>(&text)
+            .map_err(|e| e.to_string())
+            .and_then(|event| {
+                pc_store::append_outcome(&plan_file, &event)
+                    .map(|(p, n)| (p, n, event.event.id))
+                    .map_err(|e| e.to_string())
+            })
+    };
+    match result {
+        Ok((log, line, id)) => println!("recorded {id} to {}:{line}", log.display()),
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_event_read(path: &std::path::Path, decision: bool) {
+    let loaded = pc_store::load(path).unwrap_or_else(|e| {
+        eprintln!("error[E000]: {e}");
+        std::process::exit(1);
+    });
+    let plan_file = std::path::PathBuf::from(&loaded.display_path);
+    let result = if decision {
+        pc_store::read_decisions(&plan_file).and_then(|events| {
+            serde_json::to_string_pretty(&events).map_err(|e| pc_store::LoadError::Unparsable {
+                path: "decisions.jsonl".into(),
+                message: e.to_string(),
+            })
+        })
+    } else {
+        pc_store::read_outcomes(&plan_file).and_then(|events| {
+            serde_json::to_string_pretty(&events).map_err(|e| pc_store::LoadError::Unparsable {
+                path: "outcomes.jsonl".into(),
+                message: e.to_string(),
+            })
+        })
+    };
+    match result {
+        Ok(json) => println!("{json}"),
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(1);
+        }
+    }
+}
 /// Plan id for a fresh scaffold: the target directory's name, sanitized
 /// to a stable id (`cargo init` names the package after the directory).
 /// Falls back to `my-plan` for `.`, `/`, and names with no usable characters.
@@ -1046,8 +1145,12 @@ fn run_check(path: &std::path::Path, json: bool) {
 }
 
 /// Handler for `pc schema`.
-fn run_schema(out: Option<&std::path::Path>, patch: bool) {
-    let schema = if patch {
+fn run_schema(out: Option<&std::path::Path>, patch: bool, decision: bool, outcome: bool) {
+    let schema = if decision {
+        pc_ir::decision_schema()
+    } else if outcome {
+        pc_ir::outcome_schema()
+    } else if patch {
         pc_ir::patch_schema()
     } else {
         pc_ir::plan_schema()

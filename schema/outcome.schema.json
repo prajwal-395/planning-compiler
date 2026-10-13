@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "OutcomeSummary": {
+      "additionalProperties": false,
+      "description": "A predicted or observed outcome summary, kept distinct by its enclosing event.",
+      "properties": {
+        "description": {
+          "description": "Human-readable expected or observed result.",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "default": {},
+          "description": "Metric values, keyed by metric name.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "An observed result linked to a prior decision.",
+  "properties": {
+    "actual_outcome": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OutcomeSummary"
+        }
+      ],
+      "description": "Measured result, separate from the decision's prediction."
+    },
+    "capabilities": {
+      "default": [],
+      "description": "Referenced capability identifiers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "confidence": {
+      "description": "Confidence in the evaluation, when known, in `[0, 1]`.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "decision_id": {
+      "description": "ID of the decision this observation evaluates.",
+      "type": "string"
+    },
+    "evaluation_status": {
+      "description": "Evaluation status such as `confirmed`, `inconclusive`, or `rejected`.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Stable event identifier supplied by the recorder.",
+      "type": "string"
+    },
+    "plan_revision": {
+      "description": "Revision of the plan used for the event.",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Event schema version. PC-02 defines version 1.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "source": {
+      "description": "Event producer, such as `pc-cli` or an agent identifier.",
+      "type": "string"
+    },
+    "tasks": {
+      "default": [],
+      "description": "Referenced task identifiers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "timestamp": {
+      "description": "RFC 3339 event timestamp.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "actual_outcome",
+    "decision_id",
+    "evaluation_status",
+    "id",
+    "plan_revision",
+    "schema_version",
+    "source",
+    "timestamp"
+  ],
+  "title": "OutcomeEvent",
+  "type": "object"
+}

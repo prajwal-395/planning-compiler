@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "DecisionAlternative": {
+      "additionalProperties": false,
+      "description": "A candidate implementation considered for a planning decision.",
+      "properties": {
+        "description": {
+          "description": "Human-readable description.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable alternative identifier within the decision.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "id"
+      ],
+      "type": "object"
+    },
+    "OutcomeSummary": {
+      "additionalProperties": false,
+      "description": "A predicted or observed outcome summary, kept distinct by its enclosing event.",
+      "properties": {
+        "description": {
+          "description": "Human-readable expected or observed result.",
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": {
+            "format": "double",
+            "type": "number"
+          },
+          "default": {},
+          "description": "Metric values, keyed by metric name.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "A planning decision and its prediction, recorded independently of outcomes.",
+  "properties": {
+    "alternatives": {
+      "description": "Alternatives available at decision time.",
+      "items": {
+        "$ref": "#/definitions/DecisionAlternative"
+      },
+      "type": "array"
+    },
+    "baseline_alternative": {
+      "description": "Alternative used as the comparison baseline, if applicable.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "capabilities": {
+      "default": [],
+      "description": "Referenced capability identifiers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "compiler_recommendation": {
+      "description": "Compiler recommendation, if one was made.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "constraints": {
+      "default": [],
+      "description": "Constraints applied while making the decision.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "decision_provenance": {
+      "description": "Explanation of who or what made the final decision.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Stable event identifier supplied by the recorder.",
+      "type": "string"
+    },
+    "objective": {
+      "description": "Objective the decision addresses.",
+      "type": "string"
+    },
+    "plan_revision": {
+      "description": "Revision of the plan used for the event.",
+      "type": "string"
+    },
+    "predicted_outcome": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/OutcomeSummary"
+        }
+      ],
+      "description": "Predicted result; this is not observed evidence."
+    },
+    "project_revision": {
+      "description": "Revision of the project being planned.",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Event schema version. PC-02 defines version 1.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "selected_alternative": {
+      "description": "Selected alternative identifier.",
+      "type": "string"
+    },
+    "source": {
+      "description": "Event producer, such as `pc-cli` or an agent identifier.",
+      "type": "string"
+    },
+    "supporting_evidence": {
+      "default": [],
+      "description": "IDs of supporting evidence records.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "tasks": {
+      "default": [],
+      "description": "Referenced task identifiers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "timestamp": {
+      "description": "RFC 3339 event timestamp.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "alternatives",
+    "decision_provenance",
+    "id",
+    "objective",
+    "plan_revision",
+    "predicted_outcome",
+    "project_revision",
+    "schema_version",
+    "selected_alternative",
+    "source",
+    "timestamp"
+  ],
+  "title": "DecisionEvent",
+  "type": "object"
+}

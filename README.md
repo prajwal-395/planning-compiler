@@ -77,6 +77,9 @@ pc check [path] --json   # full report: diagnostics, counts, trace, contract not
 pc compile [path]  # effective totals with predicted-vs-measured columns
 pc explain <id> [path]   # per-decision trail plus capability provenance
 pc record <evidence.json> [path]  # append one observation to evidence.jsonl
+pc decision <event.json> [path]  # append one decision and its prediction to decisions.jsonl
+pc outcome <event.json> [path]  # append one observed result to outcomes.jsonl
+pc decisions [path] / pc outcomes [path]  # print recorded events as JSON
 pc frontier [path]  # rank unresolved work (P8)
 pc impact <change.json> [path]  # preview a hypothetical change (P9)
 pc diff <a> <b>    # compare two plans: structure, selection, totals (P9)
@@ -88,7 +91,7 @@ pc import-tasks-axi <backlog.md> [dir]  # import a tasks-axi backlog into <dir>/
 pc export-tasks-axi <backlog.md> [path]  # export a plan back into backlog.md (byte-identical when unedited)
 pc import-beads <issues.jsonl> [dir]  # import Beads issues into <dir>/plan.toml (refuses to overwrite)
 pc export-beads <issues.jsonl> [path]  # export imported issue records to JSONL, preserving source fields
-pc schema [--patch] [--out file]   # emit the canonical JSON Schema (plan or patch)
+pc schema [--patch|--decision|--outcome] [--out file]   # emit the canonical JSON Schema (plan, patch, or event)
 ```
 
 Without a `[path]`, commands use `.plan/` when it holds a plan file and the

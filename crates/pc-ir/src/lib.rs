@@ -427,6 +427,97 @@ pub struct Evidence {
     pub artifact_hash: Option<String>,
 }
 
+/// A candidate implementation considered for a planning decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionAlternative {
+    /// Stable alternative identifier within the decision.
+    pub id: String,
+    /// Human-readable description.
+    pub description: String,
+}
+
+/// A predicted or observed outcome summary, kept distinct by its enclosing event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeSummary {
+    /// Human-readable expected or observed result.
+    pub description: String,
+    /// Metric values, keyed by metric name.
+    #[serde(default)]
+    pub metrics: std::collections::BTreeMap<String, f64>,
+}
+
+/// Common provenance carried by append-only decision and outcome events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventMetadata {
+    /// Stable event identifier supplied by the recorder.
+    pub id: String,
+    /// RFC 3339 event timestamp.
+    pub timestamp: String,
+    /// Revision of the plan used for the event.
+    pub plan_revision: String,
+    /// Event producer, such as `pc-cli` or an agent identifier.
+    pub source: String,
+    /// Event schema version. PC-02 defines version 1.
+    pub schema_version: u32,
+    /// Referenced task identifiers.
+    #[serde(default)]
+    pub tasks: Vec<String>,
+    /// Referenced capability identifiers.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+/// A planning decision and its prediction, recorded independently of outcomes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionEvent {
+    /// Shared event provenance.
+    #[serde(flatten)]
+    pub event: EventMetadata,
+    /// Objective the decision addresses.
+    pub objective: String,
+    /// Revision of the project being planned.
+    pub project_revision: String,
+    /// Alternatives available at decision time.
+    pub alternatives: Vec<DecisionAlternative>,
+    /// Selected alternative identifier.
+    pub selected_alternative: String,
+    /// Compiler recommendation, if one was made.
+    pub compiler_recommendation: Option<String>,
+    /// Explanation of who or what made the final decision.
+    pub decision_provenance: String,
+    /// IDs of supporting evidence records.
+    #[serde(default)]
+    pub supporting_evidence: Vec<String>,
+    /// Constraints applied while making the decision.
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    /// Predicted result; this is not observed evidence.
+    pub predicted_outcome: OutcomeSummary,
+    /// Alternative used as the comparison baseline, if applicable.
+    pub baseline_alternative: Option<String>,
+}
+
+/// An observed result linked to a prior decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeEvent {
+    /// Shared event provenance.
+    #[serde(flatten)]
+    pub event: EventMetadata,
+    /// ID of the decision this observation evaluates.
+    pub decision_id: String,
+    /// Measured result, separate from the decision's prediction.
+    pub actual_outcome: OutcomeSummary,
+    /// Confidence in the evaluation, when known, in `[0, 1]`.
+    pub confidence: Option<f64>,
+    /// Evaluation status such as `confirmed`, `inconclusive`, or `rejected`.
+    pub evaluation_status: String,
+}
+
 /// Check a typed evidence basis: `absolute` for ground-truth measurements,
 /// or `distance-from:<target>` for values measured against another
 /// capability (for example `distance-from:whisperx@3`). Anything else is
@@ -498,6 +589,18 @@ pub struct Patch {
 #[must_use]
 pub fn patch_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(Patch)).unwrap_or(serde_json::Value::Null)
+}
+
+/// Canonical JSON Schema for [`DecisionEvent`].
+#[must_use]
+pub fn decision_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(DecisionEvent)).unwrap_or(serde_json::Value::Null)
+}
+
+/// Canonical JSON Schema for [`OutcomeEvent`].
+#[must_use]
+pub fn outcome_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(OutcomeEvent)).unwrap_or(serde_json::Value::Null)
 }
 
 /// Parse a plan from TOML text.

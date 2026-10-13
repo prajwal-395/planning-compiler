@@ -30,6 +30,79 @@ fn valid_contracts_pass() {
         .stdout(predicates::str::contains("ok:"));
 }
 
+#[test]
+fn decision_and_outcome_commands_append_and_read_distinct_records() {
+    let root = std::env::temp_dir().join(format!(
+        "pc-cli-events-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::copy(
+        workspace_root().join("tests/fixtures/valid-contracts.toml"),
+        root.join("plan.toml"),
+    )
+    .unwrap();
+    let event_dir = root.join("input");
+    std::fs::create_dir(&event_dir).unwrap();
+    let decision = serde_json::json!({
+        "id":"d-1", "timestamp":"2026-10-13T12:00:00Z", "plan_revision":"r1", "source":"test", "schema_version":1,
+        "tasks":["render"], "capabilities":[], "objective":"Improve rendering", "project_revision":"abc",
+        "alternatives":[{"id":"batch","description":"Batch"},{"id":"current","description":"Current"}], "selected_alternative":"batch",
+        "compiler_recommendation":"batch", "decision_provenance":"accepted recommendation", "supporting_evidence":[],
+        "constraints":[], "predicted_outcome":{"description":"20 min","metrics":{"duration_minutes":20.0}}, "baseline_alternative":"current"
+    });
+    let outcome = serde_json::json!({
+        "id":"o-1", "timestamp":"2026-10-13T13:00:00Z", "plan_revision":"r1", "source":"benchmark", "schema_version":1,
+        "tasks":["render"], "capabilities":[], "decision_id":"d-1",
+        "actual_outcome":{"description":"24 min","metrics":{"duration_minutes":24.0}}, "confidence":0.9, "evaluation_status":"confirmed"
+    });
+    let decision_path = event_dir.join("decision.json");
+    let outcome_path = event_dir.join("outcome.json");
+    std::fs::write(&decision_path, serde_json::to_vec(&decision).unwrap()).unwrap();
+    std::fs::write(&outcome_path, serde_json::to_vec(&outcome).unwrap()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("decision")
+        .arg(&decision_path)
+        .arg(&root)
+        .assert()
+        .success();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("decisions")
+        .arg(&root)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("predicted_outcome"));
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("outcome")
+        .arg(&outcome_path)
+        .arg(&root)
+        .assert()
+        .success();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("outcomes")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(rows[0]["decision_id"], "d-1");
+    assert_eq!(
+        rows[0]["actual_outcome"]["metrics"]["duration_minutes"],
+        24.0
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Human output for the passing contracts fixture, pinned by snapshot.
 #[test]
 fn valid_contracts_golden() {
@@ -576,6 +649,22 @@ fn patch_schema_is_fresh() {
     assert!(text.contains("add_task"), "{text}");
     assert!(text.contains("add_method"), "{text}");
     assert!(text.contains("add_capability"), "{text}");
+}
+
+#[test]
+fn decision_and_outcome_schemas_are_fresh() {
+    for (name, emitted) in [
+        ("decision.schema.json", pc_ir::decision_schema()),
+        ("outcome.schema.json", pc_ir::outcome_schema()),
+    ] {
+        let committed =
+            std::fs::read_to_string(workspace_root().join("schema").join(name)).unwrap();
+        assert_eq!(
+            committed,
+            serde_json::to_string_pretty(&emitted).unwrap() + "\n",
+            "regenerate {name} with pc schema"
+        );
+    }
 }
 
 /// Step 5: appending evidence flips a selection. The fixture's declared
