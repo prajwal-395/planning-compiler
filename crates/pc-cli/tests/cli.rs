@@ -294,6 +294,147 @@ fn decision_and_outcome_commands_append_and_read_distinct_records() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Planning cost attributes compiler runs by explicit decision reference,
+/// never by timestamp proximity: without this, a run recorded near a
+/// decision but not referenced would silently inflate its cost, and one
+/// unparsable metrics row would fail evaluation instead of costing the
+/// valid rows beside it.
+#[test]
+fn evaluate_attributes_planning_cost_by_explicit_run_reference() {
+    let root = std::env::temp_dir().join(format!(
+        "pc-cli-planning-cost-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::copy(
+        workspace_root().join("tests/fixtures/valid-contracts.toml"),
+        root.join("plan.toml"),
+    )
+    .unwrap();
+    let run = |id: &str, duration_ms: u64| {
+        serde_json::json!({
+            "id": id, "timestamp": "2026-10-13T11:00:00Z", "plan_revision": "r1",
+            "source": "pc-cli", "schema_version": 1, "tasks": ["render"], "capabilities": [],
+            "operation": "compile", "plan_file": "plan.toml",
+            "duration_ms": duration_ms, "validation_duration_ms": 3,
+            "task_count": 2, "method_count": 2, "constraint_count": 1,
+            "alternatives_considered": 1, "contract_rejections": 0
+        })
+    };
+    // run-b is recorded beside the decision but never referenced: it must
+    // not leak into any decision's cost. The bad row must be skipped.
+    std::fs::write(
+        root.join("metrics.jsonl"),
+        format!("{}\nnot-json\n{}\n", run("run-a", 120), run("run-b", 80)),
+    )
+    .unwrap();
+    let event_dir = root.join("input");
+    std::fs::create_dir(&event_dir).unwrap();
+    let decision = |id: &str, compiler_runs: serde_json::Value| {
+        serde_json::json!({
+            "id": id, "timestamp": "2026-10-13T12:00:00Z", "plan_revision": "r1", "source": "test", "schema_version": 1,
+            "tasks": ["render"], "capabilities": [], "objective": "Improve rendering", "project_revision": "abc",
+            "alternatives": [{"id": "batch", "description": "Batch"}, {"id": "current", "description": "Current"}],
+            "selected_alternative": "batch", "initial_decision": "current", "compiler_recommendation": "batch",
+            "decision_provenance": "accepted recommendation", "supporting_evidence": [],
+            "compiler_runs": compiler_runs, "constraints": [],
+            "predicted_outcome": {"description": "20 min", "metrics": {"duration_minutes": 20.0}},
+            "baseline_alternative": "current"
+        })
+    };
+    for (id, runs) in [
+        ("d-cost", serde_json::json!(["run-a"])),
+        ("d-shared", serde_json::json!(["run-a", "run-a"])),
+        ("d-bare", serde_json::json!([])),
+        ("d-missing", serde_json::json!(["run-ghost", "run-ghost"])),
+    ] {
+        let path = event_dir.join(format!("{id}.json"));
+        std::fs::write(&path, serde_json::to_vec(&decision(id, runs)).unwrap()).unwrap();
+        pc_command()
+            .arg("decision")
+            .arg(&path)
+            .arg(&root)
+            .assert()
+            .success();
+    }
+    let report = |command: &str| -> serde_json::Value {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg(command)
+            .arg(&root)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let evaluated = report("evaluate");
+    let by_id: std::collections::BTreeMap<_, _> = evaluated["evaluations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["decision_id"].as_str().unwrap().to_owned(),
+                row["planning_cost"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(by_id["d-cost"]["status"], "measured");
+    assert_eq!(by_id["d-cost"]["value"], 120);
+    assert_eq!(by_id["d-cost"]["run_ids"], serde_json::json!(["run-a"]));
+    assert_eq!(by_id["d-cost"]["run_count"], 1);
+    assert_eq!(by_id["d-shared"]["value"], 120);
+    assert_eq!(by_id["d-shared"]["run_count"], 1);
+    // run-b's 80 ms stays out: attribution is by reference, not proximity.
+    assert_eq!(by_id["d-bare"]["status"], "unknown");
+    assert_eq!(by_id["d-bare"]["value"], serde_json::Value::Null);
+    assert!(
+        by_id["d-bare"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("compiler_runs"),
+        "an unreferenced decision must say how to attribute cost"
+    );
+    assert_eq!(by_id["d-missing"]["status"], "unknown");
+    let missing_note = by_id["d-missing"]["note"].as_str().unwrap();
+    assert!(
+        missing_note.contains("references 1 compiler run(s)"),
+        "a repeated reference counts once: {missing_note}"
+    );
+    assert!(
+        missing_note.contains("1 unparsable metrics.jsonl row(s) were skipped"),
+        "a dangling reference must surface skipped rows that may hold it: {missing_note}"
+    );
+    let metrics = report("metrics");
+    // run-a is shared by d-cost and d-shared but costs once in the total.
+    assert_eq!(metrics["planning_cost"]["total_duration_ms"], 120);
+    assert_eq!(metrics["planning_cost"]["measured_decision_count"], 2);
+    assert_eq!(metrics["planning_cost"]["unrecorded_decision_count"], 2);
+    assert_eq!(metrics["planning_cost"]["attributed_run_count"], 1);
+    assert_eq!(metrics["planning_cost"]["total_runs_observed"], 2);
+    assert_eq!(metrics["planning_cost"]["skipped_run_rows"], 1);
+    let history = report("history");
+    let rows = history["history"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        6,
+        "4 decisions plus 2 valid runs; the bad row is skipped"
+    );
+    let run_ids: Vec<_> = rows
+        .iter()
+        .filter(|row| row["type"] == "run")
+        .map(|row| row["event"]["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(run_ids, vec!["run-a".to_string(), "run-b".to_string()]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Human output for the passing contracts fixture, pinned by snapshot.
 #[test]
 fn valid_contracts_golden() {

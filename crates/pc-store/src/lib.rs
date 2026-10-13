@@ -640,6 +640,39 @@ pub fn read_compiler_runs(plan_file: &Path) -> Result<Vec<CompilerRunEvent>, Loa
     read_events(&event_log_path(plan_file, "metrics.jsonl"))
 }
 
+/// Read automatically captured compiler runs, skipping unparsable rows.
+///
+/// The metrics log grows on every compiler invocation and a crash mid-write
+/// can leave a partial trailing line behind (see [`append_compiler_run`]);
+/// evaluation and history must still cost the valid rows instead of failing
+/// the whole report. Returns the valid runs plus the count of skipped rows.
+/// A missing log reads as empty, exactly like [`read_compiler_runs`].
+pub fn read_compiler_runs_skipping_invalid(
+    plan_file: &Path,
+) -> Result<(Vec<CompilerRunEvent>, usize), LoadError> {
+    let path = event_log_path(plan_file, "metrics.jsonl");
+    if !path.exists() {
+        return Ok((Vec::new(), 0));
+    }
+    let display = path.display().to_string();
+    let text = std::fs::read_to_string(&path).map_err(|e| LoadError::Unreadable {
+        path: display.clone(),
+        message: e.to_string(),
+    })?;
+    let mut runs = Vec::new();
+    let mut skipped = 0;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(line) {
+            Ok(run) => runs.push(run),
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok((runs, skipped))
+}
+
 fn validate_event(event: &pc_ir::EventMetadata, reference: &str) -> Result<(), LoadError> {
     if event.id.trim().is_empty()
         || event.plan_revision.trim().is_empty()

@@ -797,15 +797,15 @@ fn serial_schedule(
     for &node in order {
         let mut start = pred[node].iter().map(|&p| finish[p]).fold(0.0, f64::max);
         let duration = durations[node];
-        if duration > 0.0 {
-            if let Some(need) = demands.get(node) {
-                start = earliest_slot(start, duration, need, slots, &busy);
-                for resource in need {
-                    if slots.contains_key(resource.as_str()) {
-                        busy.entry(resource.clone())
-                            .or_default()
-                            .push((start, start + duration));
-                    }
+        if duration > 0.0
+            && let Some(need) = demands.get(node)
+        {
+            start = earliest_slot(start, duration, need, slots, &busy);
+            for resource in need {
+                if slots.contains_key(resource.as_str()) {
+                    busy.entry(resource.clone())
+                        .or_default()
+                        .push((start, start + duration));
                 }
             }
         }

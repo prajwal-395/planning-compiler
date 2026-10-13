@@ -65,6 +65,7 @@ fn prediction_and_observed_outcome_are_separate_append_only_logs() {
         compiler_recommendation: Some("batch".into()),
         decision_provenance: "planner accepted recommendation".into(),
         supporting_evidence: vec!["ev-1".into()],
+        compiler_runs: vec!["run-1".into()],
         constraints: vec!["preserve fidelity".into()],
         predicted_outcome: summary("predicted", 20.0),
         baseline_alternative: Some("current".into()),
@@ -125,6 +126,7 @@ fn decisions_with_unresolvable_alternative_references_are_refused() {
         compiler_recommendation: Some("batch".into()),
         decision_provenance: "planner".into(),
         supporting_evidence: vec![],
+        compiler_runs: vec![],
         constraints: vec![],
         predicted_outcome: summary("predicted", 20.0),
         baseline_alternative: Some("current".into()),
@@ -298,5 +300,60 @@ fn previous_critical_path_reads_the_latest_row_with_one() {
         pc_store::previous_critical_path(&plan, "makespan", 2000),
         Some(vec!["makespan".to_string()])
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A crash mid-write leaves a partial metrics row behind; evaluation and
+/// history read the log lossily so one unparsable row never hides the valid
+/// runs beside it.
+#[test]
+fn compiler_runs_skipping_invalid_returns_valid_rows_and_skip_count() {
+    let dir = directory();
+    let plan = dir.join("plan.toml");
+    assert_eq!(
+        pc_store::read_compiler_runs_skipping_invalid(&plan).unwrap(),
+        (Vec::new(), 0),
+        "a missing metrics log reads as empty, like the strict reader"
+    );
+    pc_store::append_compiler_run(&plan, &compiler_run("run-1", "compile")).unwrap();
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("metrics.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut log, b"{\"id\":\"run-x\", trunc\n").unwrap();
+    pc_store::append_compiler_run(&plan, &compiler_run("run-2", "check")).unwrap();
+    let (runs, skipped) = pc_store::read_compiler_runs_skipping_invalid(&plan).unwrap();
+    assert_eq!(
+        runs.iter()
+            .map(|run| run.event.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["run-1", "run-2"]
+    );
+    assert_eq!(skipped, 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Decisions recorded before `compiler_runs` existed carry no such key;
+/// they must still parse as unattributed rather than failing the log.
+#[test]
+fn decisions_without_compiler_runs_parse_as_unattributed() {
+    let dir = directory();
+    let plan = dir.join("plan.toml");
+    let legacy = serde_json::json!({
+        "id":"decision-legacy", "timestamp":"2026-10-13T12:00:00Z", "plan_revision":"r1", "source":"test", "schema_version":1,
+        "tasks":["render"], "capabilities":[], "objective":"Improve throughput", "project_revision":"abc",
+        "alternatives":[{"id":"batch","description":"Batch"}], "selected_alternative":"batch",
+        "decision_provenance":"planner", "supporting_evidence":[], "constraints":[],
+        "predicted_outcome":{"description":"p","metrics":{}}, "baseline_alternative":null,
+        "compiler_recommendation":null, "initial_decision":null
+    });
+    std::fs::write(
+        dir.join("decisions.jsonl"),
+        serde_json::to_string(&legacy).unwrap() + "\n",
+    )
+    .unwrap();
+    let decisions = pc_store::read_decisions(&plan).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert!(decisions[0].compiler_runs.is_empty());
     std::fs::remove_dir_all(dir).unwrap();
 }

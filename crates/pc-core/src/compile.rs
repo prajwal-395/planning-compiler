@@ -1165,10 +1165,10 @@ fn cpm_with(
                     free(a).total_cmp(&free(b))
                 })
                 .expect("capacity gives at least one slot");
-            if let Some(i) = last[slot].filter(|_| full_at(es[j])) {
-                if !blockers[i].contains(&j) {
-                    blockers[i].push(j);
-                }
+            if let Some(i) = last[slot].filter(|_| full_at(es[j]))
+                && !blockers[i].contains(&j)
+            {
+                blockers[i].push(j);
             }
             last[slot] = Some(j);
         }

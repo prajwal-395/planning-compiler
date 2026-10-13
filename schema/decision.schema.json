@@ -76,6 +76,14 @@
         "null"
       ]
     },
+    "compiler_runs": {
+      "default": [],
+      "description": "IDs of compiler runs (`metrics.jsonl` event IDs) that informed this decision. Explicit attribution only: `pc evaluate` costs exactly these runs and never guesses by timestamp. Empty when no run was recorded as informing the decision.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "constraints": {
       "default": [],
       "description": "Constraints applied while making the decision.",

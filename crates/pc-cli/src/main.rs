@@ -127,7 +127,7 @@ enum Commands {
     },
     /// Summarize decision classifications and outcome coverage.
     Metrics { path: Option<PathBuf> },
-    /// Show decision and outcome events in timestamp order.
+    /// Show decision, outcome, and compiler-run events in timestamp order.
     History { path: Option<PathBuf> },
     /// Compare predictions with observed outcomes by metric.
     Calibration { path: Option<PathBuf> },
@@ -1291,14 +1291,25 @@ fn run_event_read(path: &std::path::Path, decision: bool) {
     }
 }
 
-fn event_records(
-    path: &std::path::Path,
-) -> Result<(Vec<pc_ir::DecisionEvent>, Vec<pc_ir::OutcomeEvent>), pc_store::LoadError> {
+/// Decision, outcome, and compiler-run logs behind the evaluation reports:
+/// decisions, outcomes, valid compiler runs, and the count of unparsable
+/// metrics rows skipped (a crash mid-write can leave one behind).
+type EventRecords = (
+    Vec<pc_ir::DecisionEvent>,
+    Vec<pc_ir::OutcomeEvent>,
+    Vec<pc_ir::CompilerRunEvent>,
+    usize,
+);
+
+fn event_records(path: &std::path::Path) -> Result<EventRecords, pc_store::LoadError> {
     let loaded = pc_store::load(path)?;
     let plan_file = std::path::PathBuf::from(loaded.display_path);
+    let (runs, skipped_run_rows) = pc_store::read_compiler_runs_skipping_invalid(&plan_file)?;
     Ok((
         pc_store::read_decisions(&plan_file)?,
         pc_store::read_outcomes(&plan_file)?,
+        runs,
+        skipped_run_rows,
     ))
 }
 
@@ -1336,8 +1347,88 @@ fn usefulness(outcome: Option<&&pc_ir::OutcomeEvent>) -> &'static str {
         .map_or("not-assessed", pc_ir::Usefulness::label)
 }
 
+/// Runs a decision explicitly references in `compiler_runs`, deduplicated in
+/// reference order: the matched runs plus the referenced IDs with no valid
+/// `metrics.jsonl` row.
+fn referenced_runs<'a>(
+    decision: &'a pc_ir::DecisionEvent,
+    runs_by_id: &std::collections::BTreeMap<&str, &'a pc_ir::CompilerRunEvent>,
+) -> (Vec<&'a pc_ir::CompilerRunEvent>, Vec<&'a str>) {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut matched = Vec::new();
+    let mut missing = Vec::new();
+    for id in &decision.compiler_runs {
+        if !seen.insert(id.as_str()) {
+            continue;
+        }
+        match runs_by_id.get(id.as_str()) {
+            Some(run) => matched.push(*run),
+            None => missing.push(id.as_str()),
+        }
+    }
+    (matched, missing)
+}
+
+/// Planning cost of one decision: the summed wall-clock duration of the
+/// compiler runs the decision explicitly references in `compiler_runs`.
+///
+/// Attribution is by exact run-ID match only, never by timestamp proximity:
+/// a run recorded near the decision but not referenced costs nothing here.
+/// Operational costs (plan preparation, implementation latency, rework) need
+/// GitHub/CI data and stay out of this compiler-run cost.
+fn planning_cost(
+    decision: &pc_ir::DecisionEvent,
+    runs_by_id: &std::collections::BTreeMap<&str, &pc_ir::CompilerRunEvent>,
+    skipped_run_rows: usize,
+) -> serde_json::Value {
+    if decision.compiler_runs.is_empty() {
+        return serde_json::json!({"value":null,"status":"unknown","run_ids":[],"run_count":0,"note":"No compiler runs were referenced by this decision; record the informing run IDs in `compiler_runs` to attribute planning cost."});
+    }
+    let (matched, missing) = referenced_runs(decision, runs_by_id);
+    let skipped_note = if skipped_run_rows > 0 {
+        format!(
+            " {skipped_run_rows} unparsable metrics.jsonl row(s) were skipped and may hold the missing run(s)."
+        )
+    } else {
+        String::new()
+    };
+    if matched.is_empty() {
+        let note = if runs_by_id.is_empty() {
+            format!(
+                "Decision references {} compiler run(s) but metrics.jsonl holds no valid rows; rerun the informing commands so they are recorded.{skipped_note}",
+                missing.len(),
+            )
+        } else {
+            format!(
+                "Decision references {} compiler run(s) but none match rows in metrics.jsonl; only referenced run IDs attribute cost, never timestamp proximity.{skipped_note}",
+                missing.len(),
+            )
+        };
+        return serde_json::json!({"value":null,"status":"unknown","run_ids":[],"run_count":0,"note":note});
+    }
+    let total: u64 = matched.iter().map(|run| run.duration_ms).sum();
+    let run_ids: Vec<&str> = matched.iter().map(|run| run.event.id.as_str()).collect();
+    let note = if missing.is_empty() {
+        format!(
+            "Sum of wall-clock duration over {} explicitly referenced compiler run(s).",
+            matched.len(),
+        )
+    } else {
+        format!(
+            "Sum over {} of {} referenced runs; {} referenced run(s) have no matching row in metrics.jsonl and are excluded: {}.{skipped_note}",
+            matched.len(),
+            matched.len() + missing.len(),
+            missing.len(),
+            missing.join(", "),
+        )
+    };
+    serde_json::json!({"value":total,"unit":"milliseconds","status":"measured","run_ids":run_ids,"run_count":matched.len(),"note":note})
+}
+
 fn run_evaluation(path: &std::path::Path, decision_id: Option<&str>) {
-    let result = event_records(path).map(|(decisions, outcomes)| {
+    let result = event_records(path).map(|(decisions, outcomes, runs, skipped_run_rows)| {
+        let runs_by_id: std::collections::BTreeMap<&str, &pc_ir::CompilerRunEvent> =
+            runs.iter().map(|run| (run.event.id.as_str(), run)).collect();
         let latest_by_decision = latest_outcomes(&outcomes);
         let rows: Vec<_> = decisions.iter().filter(|d| decision_id.is_none_or(|id| d.event.id == id)).map(|d| {
             let latest = latest_by_decision.get(d.event.id.as_str());
@@ -1358,7 +1449,7 @@ fn run_evaluation(path: &std::path::Path, decision_id: Option<&str>) {
                 "outcome":latest.map(|o| &o.actual_outcome),
                 "comparisons":comparisons,
                 "counterfactual": {"alternative":d.baseline_alternative,"value":null,"status":"estimated","note":"No observed baseline outcome is recorded."},
-                "planning_cost": {"value":null,"status":"unknown","note":"Planning cost is not recorded in decision/outcome events; PC-03 instrumentation is not yet merged."}
+                "planning_cost": planning_cost(d, &runs_by_id, skipped_run_rows)
             })
         }).collect();
         serde_json::json!({"evaluations":rows})
@@ -1367,24 +1458,35 @@ fn run_evaluation(path: &std::path::Path, decision_id: Option<&str>) {
 }
 
 fn run_planning_metrics(path: &std::path::Path) {
-    let result = event_records(path).map(|(decisions, outcomes)| {
+    let result = event_records(path).map(|(decisions, outcomes, runs, skipped_run_rows)| {
         // Count each decision once by its latest outcome. Unevaluated
         // decisions count as Inconclusive and not-assessed.
         let latest_by_decision = latest_outcomes(&outcomes);
+        let runs_by_id: std::collections::BTreeMap<&str, &pc_ir::CompilerRunEvent> =
+            runs.iter().map(|run| (run.event.id.as_str(), run)).collect();
         let mut counts = std::collections::BTreeMap::<String, usize>::new();
         let mut usefulness_counts = std::collections::BTreeMap::<String, usize>::new();
+        let mut measured_decision_count: usize = 0;
+        let mut attributed_runs = std::collections::BTreeMap::<&str, u64>::new();
         for decision in &decisions {
             let latest = latest_by_decision.get(decision.event.id.as_str());
             *counts.entry(classification(latest).into()).or_default() += 1;
             *usefulness_counts.entry(usefulness(latest).into()).or_default() += 1;
+            let (matched, _) = referenced_runs(decision, &runs_by_id);
+            if !matched.is_empty() {
+                measured_decision_count += 1;
+            }
+            attributed_runs.extend(matched.iter().map(|run| (run.event.id.as_str(), run.duration_ms)));
         }
-        serde_json::json!({"decision_count":decisions.len(),"outcome_count":outcomes.len(),"evaluated_decision_count":latest_by_decision.len(),"unevaluated_decision_count":decisions.len().saturating_sub(latest_by_decision.len()),"classifications":counts,"usefulness":usefulness_counts})
+        let total_duration_ms: u64 = attributed_runs.values().sum();
+        let unrecorded_decision_count = decisions.len().saturating_sub(measured_decision_count);
+        serde_json::json!({"decision_count":decisions.len(),"outcome_count":outcomes.len(),"evaluated_decision_count":latest_by_decision.len(),"unevaluated_decision_count":decisions.len().saturating_sub(latest_by_decision.len()),"classifications":counts,"usefulness":usefulness_counts,"planning_cost":{"total_duration_ms":total_duration_ms,"unit":"milliseconds","measured_decision_count":measured_decision_count,"unrecorded_decision_count":unrecorded_decision_count,"attributed_run_count":attributed_runs.len(),"total_runs_observed":runs.len(),"skipped_run_rows":skipped_run_rows,"note":"Summed compiler-run wall-clock time over distinct explicitly referenced runs, each counted once even when several decisions reference it; operational costs needing GitHub/CI are excluded."}})
     });
     print_event_report(result);
 }
 
 fn run_event_history(path: &std::path::Path) {
-    let result = event_records(path).map(|(decisions, outcomes)| {
+    let result = event_records(path).map(|(decisions, outcomes, runs, _)| {
         let mut rows: Vec<_> = decisions
             .into_iter()
             .map(|e| {
@@ -1399,6 +1501,12 @@ fn run_event_history(path: &std::path::Path) {
                     serde_json::json!({"type":"outcome","timestamp":e.event.timestamp,"event":e}),
                 )
             }))
+            .chain(runs.into_iter().map(|e| {
+                (
+                    event_instant(&e.event),
+                    serde_json::json!({"type":"run","timestamp":e.event.timestamp,"event":e}),
+                )
+            }))
             .collect();
         rows.sort_by_key(|(instant, _)| *instant);
         serde_json::json!({"history":rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>()})
@@ -1410,7 +1518,7 @@ fn run_event_history(path: &std::path::Path) {
 /// only, like `evaluate` and `metrics`, so a re-evaluated decision weighs
 /// the same as any other.
 fn run_calibration(path: &std::path::Path) {
-    let result = event_records(path).map(|(decisions, outcomes)| {
+    let result = event_records(path).map(|(decisions, outcomes, _, _)| {
         let latest_by_decision = latest_outcomes(&outcomes);
         let mut values = std::collections::BTreeMap::<String, Vec<(f64,f64)>>::new();
         for d in &decisions { if let Some(o) = latest_by_decision.get(d.event.id.as_str()) {

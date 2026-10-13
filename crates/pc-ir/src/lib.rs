@@ -647,6 +647,12 @@ pub struct DecisionEvent {
     /// IDs of supporting evidence records.
     #[serde(default)]
     pub supporting_evidence: Vec<String>,
+    /// IDs of compiler runs (`metrics.jsonl` event IDs) that informed this
+    /// decision. Explicit attribution only: `pc evaluate` costs exactly
+    /// these runs and never guesses by timestamp. Empty when no run was
+    /// recorded as informing the decision.
+    #[serde(default)]
+    pub compiler_runs: Vec<String>,
     /// Constraints applied while making the decision.
     #[serde(default)]
     pub constraints: Vec<String>,
