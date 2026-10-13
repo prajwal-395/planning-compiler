@@ -286,7 +286,9 @@ plan: kinds are `open-task` (reachable work with no accepted method),
 `proposal` (a proposed method awaiting accept or reject), `blocked-alternative`
 (a proposed or derived invoke that fails typed contract matching, so
 accepting it would be E008) and `unmeasured-critical` (a critical leaf
-whose duration rests on declared guesses).
+whose duration rests on declared guesses, or whose capability declares
+no duration estimate: the reason then says the duration is unknown instead
+of reporting 0.000 expected minutes).
 
 Ranked and unestimated entries score
 `share * uncertainty * criticality * readiness`. Estimated entries carry a weighted expected cost (`objective.weights`

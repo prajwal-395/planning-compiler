@@ -308,8 +308,11 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
         }
     }
 
-    // Critical-path cost resting on declared guesses: critical leaf tasks
-    // whose selected duration capability has no measured evidence.
+    // Critical-path cost resting on declared guesses, or with no duration
+    // estimate at all: critical leaf tasks whose selected duration
+    // capability has no measured evidence. Leaves without a duration
+    // estimate stay in the report so the gap is visible, but their reason
+    // must say unknown instead of fabricating 0.000 expected minutes.
     let mut guessed: Vec<(&str, &str, f64)> = Vec::new();
     for (task_id, timing) in &compiled.timings {
         if !timing.critical {
@@ -461,6 +464,23 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
     }
 
     for &(task_id, capability, duration) in &guessed {
+        // A critical leaf whose capability has no effective duration
+        // estimate has no expected minutes to report: label the duration
+        // unknown instead of fabricating 0.000 from the zero-length
+        // timing. The weighted cost only ranks the item.
+        let has_duration =
+            effective.contains_key(&(capability.to_string(), "duration_minutes".to_string()));
+        let reason = if has_duration {
+            format!(
+                "critical path; {duration:.3} expected minutes via \
+                 capability:{capability} rest on declared guesses"
+            )
+        } else {
+            format!(
+                "critical path; duration unknown via \
+                 capability:{capability} (no duration estimate declared)"
+            )
+        };
         push(
             format!("task:{task_id}"),
             KIND_UNMEASURED_CRITICAL,
@@ -468,10 +488,7 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
             capability_cost(capability, &effective, &doc.objective.weights),
             UNCERTAIN_FACTOR,
             true,
-            format!(
-                "critical path; {duration:.3} expected minutes via \
-                 capability:{capability} rest on declared guesses"
-            ),
+            reason,
         );
     }
 
@@ -1447,6 +1464,157 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
         assert!(!subjects.contains(&"method:below-done"), "{subjects:?}");
         assert!(!subjects.contains(&"task:child"), "{subjects:?}");
         assert!(subjects.contains(&"method:maybe"), "{subjects:?}");
+    }
+
+    #[test]
+    fn unmeasured_critical_without_estimate_reports_unknown_not_zero_minutes() {
+        // Regression for the Ren native cycle (examples/ren-native):
+        // `measure-native-baseline` was described as "0.000 expected
+        // minutes ... rest on declared guesses" although its capability
+        // declares no estimate at all. Unknown must stay unknown.
+        // A zero-duration leaf is off the critical path beside estimated
+        // work, so each side gets its own single-leaf plan where it is
+        // the critical leaf.
+        let bare_text = r#"
+ir_version = 0
+
+[plan]
+id = "p"
+title = "t"
+
+[objective]
+root_task = "root"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "root"
+title = "Root"
+state = "decomposed"
+
+[[task]]
+id = "leaf"
+title = "Leaf"
+state = "open"
+
+[[method]]
+id = "root-all"
+task = "root"
+kind = "decompose"
+subtasks = ["leaf"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-leaf"
+task = "leaf"
+kind = "invoke"
+capability = "bare@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "bare@1"
+kind = "tool"
+version = "1"
+"#;
+        let mut bare = pc_ir::from_toml(bare_text).unwrap();
+        assert!(checked(&mut bare).ok());
+        let compiled = crate::compile(&bare).unwrap();
+        let report = frontier(&bare, &compiled);
+        let missing = report
+            .unestimated
+            .iter()
+            .find(|i| i.subject == "task:leaf" && i.kind == KIND_UNMEASURED_CRITICAL)
+            .unwrap();
+        assert!(!missing.estimated, "{missing:?}");
+        assert!(
+            missing.reason.contains("unknown") || missing.reason.contains("unestimated"),
+            "{}",
+            missing.reason
+        );
+        assert!(
+            !missing.reason.contains("expected minutes"),
+            "{}",
+            missing.reason
+        );
+        assert!(!missing.reason.contains("0.000"), "{}", missing.reason);
+        assert!(
+            !missing.reason.contains("declared guesses"),
+            "{}",
+            missing.reason
+        );
+        // Estimated work keeps its existing wording and ranking.
+        let estimated_text = bare_text.replace("bare@1", "tool@1").replace(
+            "[[capability]]\nid = \"tool@1\"\nkind = \"tool\"\nversion = \"1\"",
+            "[[capability]]\nid = \"tool@1\"\nkind = \"tool\"\nversion = \"1\"\nestimates = [{ metric = \"duration_minutes\", low = 2.0, likely = 4.0, high = 6.0, provenance = \"declared\" }]",
+        );
+        let mut estimated = pc_ir::from_toml(&estimated_text).unwrap();
+        assert!(checked(&mut estimated).ok());
+        let compiled = crate::compile(&estimated).unwrap();
+        let report = frontier(&estimated, &compiled);
+        let kept = report
+            .items
+            .iter()
+            .find(|i| i.subject == "task:leaf" && i.kind == KIND_UNMEASURED_CRITICAL)
+            .unwrap();
+        assert!(kept.estimated, "{kept:?}");
+        assert!(
+            kept.reason.contains("expected minutes") && kept.reason.contains("declared guesses"),
+            "{}",
+            kept.reason
+        );
+        // A multi-metric objective where the capability estimates only a
+        // non-duration metric still has no expected minutes to report.
+        let money_only_text = bare_text
+            .replace(
+                "weights = { duration_minutes = 1.0 }",
+                "weights = { duration_minutes = 1.0, money_usd = 0.5 }",
+            )
+            .replace(
+                "[[capability]]\nid = \"bare@1\"\nkind = \"tool\"\nversion = \"1\"",
+                "[[capability]]\nid = \"bare@1\"\nkind = \"tool\"\nversion = \"1\"\nestimates = [{ metric = \"money_usd\", low = 1.0, likely = 2.0, high = 3.0, provenance = \"declared\" }]",
+            );
+        let mut money_only = pc_ir::from_toml(&money_only_text).unwrap();
+        assert!(checked(&mut money_only).ok());
+        let compiled = crate::compile(&money_only).unwrap();
+        let report = frontier(&money_only, &compiled);
+        let costed = report
+            .items
+            .iter()
+            .find(|i| i.subject == "task:leaf" && i.kind == KIND_UNMEASURED_CRITICAL)
+            .unwrap();
+        assert!(costed.estimated, "{costed:?}");
+        assert!(
+            costed.reason.contains("duration unknown"),
+            "{}",
+            costed.reason
+        );
+        assert!(!costed.reason.contains("0.000"), "{}", costed.reason);
+        assert!(
+            !costed.reason.contains("expected minutes"),
+            "{}",
+            costed.reason
+        );
+        // An objective that does not weigh duration still reports the
+        // declared duration estimate in minutes.
+        let unweighted_text = estimated_text.replace(
+            "weights = { duration_minutes = 1.0 }",
+            "weights = { money_usd = 1.0 }",
+        );
+        let mut unweighted = pc_ir::from_toml(&unweighted_text).unwrap();
+        assert!(checked(&mut unweighted).ok());
+        let compiled = crate::compile(&unweighted).unwrap();
+        let report = frontier(&unweighted, &compiled);
+        let timed = report
+            .unestimated
+            .iter()
+            .find(|i| i.subject == "task:leaf" && i.kind == KIND_UNMEASURED_CRITICAL)
+            .unwrap();
+        assert!(
+            timed.reason.contains("expected minutes") && !timed.reason.contains("unknown"),
+            "{}",
+            timed.reason
+        );
     }
 
     #[test]
