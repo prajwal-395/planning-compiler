@@ -1145,7 +1145,8 @@ fn check_objective(ctx: &mut Ctx) {
 /// so it conflicts only when it lists some and none is declared by the
 /// objective. An objective that declares no platforms (or no licences)
 /// constrains nothing on that axis.
-fn constraint_conflicts(objective: &pc_ir::Objective, cap: &pc_ir::Capability) -> Vec<String> {
+#[must_use]
+pub fn constraint_conflicts(objective: &pc_ir::Objective, cap: &pc_ir::Capability) -> Vec<String> {
     let mut conflicts = Vec::new();
     for (axis, declared, listed) in [
         (

@@ -287,6 +287,42 @@ enum Commands {
         /// Plan file or directory.
         path: Option<PathBuf>,
     },
+    /// Discover candidate capabilities from external sources and emit a
+    /// proposal patch for one task. Adapters scan deterministically and
+    /// never accept: the patch holds `proposed` methods for `pc propose`,
+    /// and the compiler validates them. At least one source is required.
+    Discover {
+        /// Dependency manifest (`Cargo.toml`) whose `[dependencies]` become
+        /// candidates.
+        #[arg(long, required_unless_present = "repo")]
+        manifest: Option<PathBuf>,
+        /// Local repository directory whose top-level files become
+        /// candidates.
+        #[arg(long, required_unless_present = "manifest")]
+        repo: Option<PathBuf>,
+        /// Task to propose alternatives for, optionally prefixed with
+        /// `task:`. Defaults to the frontier bottleneck.
+        #[arg(long)]
+        task: Option<String>,
+        /// Asserted output contract for every candidate, as
+        /// `artifact[field,field]`. Repeatable. The compiler validates the
+        /// hypothesis; mismatches stay proposed as blocked alternatives.
+        #[arg(long)]
+        produces: Vec<String>,
+        /// Asserted input contract for every candidate, same shape.
+        /// Repeatable.
+        #[arg(long)]
+        consumes: Vec<String>,
+        /// Write the proposal patch here. Prints to stdout when omitted.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Emit the discovery report (bottleneck, candidates, patch) as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Plan file or directory. Defaults to `.plan` when that directory
+        /// holds a plan file, otherwise the current directory.
+        path: Option<PathBuf>,
+    },
 }
 
 /// Resolve an optional plan path: an explicit path passes through
@@ -382,6 +418,25 @@ fn main() {
             input,
             path,
         } => run_sync(source, all, dry_run, input, &plan_path(path)),
+        Commands::Discover {
+            manifest,
+            repo,
+            task,
+            produces,
+            consumes,
+            out,
+            json,
+            path,
+        } => run_discover(
+            manifest.as_deref(),
+            repo.as_deref(),
+            task.as_deref(),
+            &produces,
+            &consumes,
+            out.as_deref(),
+            json,
+            &plan_path(path),
+        ),
     }
 }
 
@@ -1966,6 +2021,205 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
         }
         if let Some(reason) = &item.value_of_information_unknown {
             println!("  value of information: unknown ({reason})");
+        }
+    }
+}
+
+/// Parse one asserted contract entry as `artifact[field,field]`.
+fn parse_contract_item(text: &str) -> Result<pc_ir::ContractItem, String> {
+    let (artifact, rest) = text
+        .split_once('[')
+        .ok_or_else(|| format!("contract `{text}` must read `artifact[field,field]`"))?;
+    if !rest.ends_with(']') {
+        return Err(format!(
+            "contract `{text}` must read `artifact[field,field]`"
+        ));
+    }
+    let artifact = artifact.trim().to_string();
+    if artifact.is_empty() {
+        return Err(format!("contract `{text}` names no artifact"));
+    }
+    let fields: Vec<String> = rest[..rest.len() - 1]
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .map(str::to_string)
+        .collect();
+    Ok(pc_ir::ContractItem { artifact, fields })
+}
+
+/// Handler for `pc discover`.
+#[allow(clippy::too_many_arguments)]
+fn run_discover(
+    manifest: Option<&std::path::Path>,
+    repo: Option<&std::path::Path>,
+    task: Option<&str>,
+    produces: &[String],
+    consumes: &[String],
+    out: Option<&std::path::Path>,
+    json: bool,
+    path: &std::path::Path,
+) {
+    let mut asserted_produces = Vec::with_capacity(produces.len());
+    for entry in produces {
+        match parse_contract_item(entry) {
+            Ok(item) => asserted_produces.push(item),
+            Err(message) => {
+                eprintln!("error: {message}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let mut asserted_consumes = Vec::with_capacity(consumes.len());
+    for entry in consumes {
+        match parse_contract_item(entry) {
+            Ok(item) => asserted_consumes.push(item),
+            Err(message) => {
+                eprintln!("error: {message}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let (loaded, _, _) = load_checked(path);
+    let mut candidates = Vec::new();
+    if let Some(file) = manifest {
+        let text = std::fs::read_to_string(file).unwrap_or_else(|e| {
+            eprintln!("error: cannot read `{}`: {e}", file.display());
+            std::process::exit(1);
+        });
+        match pc_discovery::discover_from_manifest(&text, &file.display().to_string()) {
+            Ok(found) => candidates.extend(found),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if let Some(dir) = repo {
+        match pc_discovery::discover_from_repo(dir) {
+            Ok(found) => candidates.extend(found),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let candidates: Vec<pc_discovery::DiscoveryCandidate> = candidates
+        .into_iter()
+        .map(|candidate| {
+            pc_discovery::with_contract(
+                candidate,
+                asserted_consumes.clone(),
+                asserted_produces.clone(),
+            )
+        })
+        .collect();
+    let compiled =
+        match pc_core::compile_with_budget(&loaded.doc, std::time::Duration::from_millis(2000)) {
+            Ok(compiled) => compiled,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+    let frontier_report = pc_core::frontier(&loaded.doc, &compiled);
+    let (task_id, bottleneck) = match task {
+        Some(id) => (id.strip_prefix("task:").unwrap_or(id).to_string(), None),
+        None => match pc_discovery::bottleneck_task(&loaded.doc, &frontier_report) {
+            Some(found) => (found.task.clone(), Some(found)),
+            None => {
+                eprintln!("error: no bottleneck: the frontier is fully planned");
+                std::process::exit(1);
+            }
+        },
+    };
+    let (patch, outcomes) =
+        match pc_discovery::candidates_to_patch(&loaded.doc, &task_id, candidates) {
+            Ok(built) => built,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+    // Defense in depth: the crate guarantees a proposable patch, but the
+    // compiler is the authority, so re-validate before emitting.
+    if !patch.add_method.is_empty()
+        && let Err(e) = pc_core::validate_patch(&loaded.doc, &patch)
+    {
+        eprintln!("error: invalid discovery patch: {e}");
+        std::process::exit(1);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "task": format!("task:{task_id}"),
+                "bottleneck": bottleneck,
+                "candidates": outcomes,
+                "patch": patch,
+            }))
+            .unwrap_or_default()
+        );
+    } else {
+        // When the patch itself goes to stdout, the human summary goes to
+        // stderr so `pc discover ... > patch.json` stays a clean redirect.
+        let say = |line: String| {
+            if out.is_none() {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+        };
+        if let Some(found) = &bottleneck {
+            say(format!("bottleneck task:{}: {}", found.task, found.reason));
+        }
+        let proposed = outcomes
+            .iter()
+            .filter(|entry| entry.skipped.is_none())
+            .count();
+        say(format!(
+            "discovery: {} candidate(s), {} proposed for task:{task_id} ({})",
+            outcomes.len(),
+            proposed,
+            loaded.display_path,
+        ));
+        for entry in &outcomes {
+            if let Some(skipped) = &entry.skipped {
+                say(format!("skipped {}: {skipped}", entry.capability));
+            } else if entry.compatibility.compatible {
+                say(format!(
+                    "candidate {} [compatible: {}] ({})",
+                    entry.capability, entry.compatibility.reason, entry.source,
+                ));
+            } else {
+                say(format!(
+                    "candidate {} [blocked: {}] ({})",
+                    entry.capability, entry.compatibility.reason, entry.source,
+                ));
+            }
+        }
+    }
+    if patch.add_method.is_empty() {
+        eprintln!("error: no new candidates: nothing to propose");
+        std::process::exit(1);
+    }
+    let text = serde_json::to_string_pretty(&patch).unwrap_or_default();
+    match out {
+        Some(file) => {
+            if let Err(e) = std::fs::write(file, format!("{text}\n")) {
+                eprintln!("error: cannot write `{}`: {e}", file.display());
+                std::process::exit(1);
+            }
+            if !json {
+                println!("wrote {}", file.display());
+            }
+        }
+        None => {
+            if json {
+                // The report above already carries the patch.
+            } else {
+                println!("{text}");
+            }
         }
     }
 }

@@ -1,0 +1,6 @@
+[package]
+name = "transcribe-bench"
+version = "0.1.0"
+
+[dependencies]
+voz = "0.4"

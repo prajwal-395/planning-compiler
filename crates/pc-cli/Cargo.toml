@@ -16,6 +16,7 @@ pc-store.workspace = true
 pc-adapter-tasks-axi.workspace = true
 pc-adapter-beads.workspace = true
 pc-sync.workspace = true
+pc-discovery.workspace = true
 chrono = "0.4"
 clap.workspace = true
 serde.workspace = true

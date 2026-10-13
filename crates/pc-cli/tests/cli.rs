@@ -5029,3 +5029,398 @@ fn context_records_context_size() {
     assert!(rows[0]["selection_duration_ms"].as_u64().is_some());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// PC-13 definition of done: the system identifies a bottleneck, discovers
+/// a previously unmodelled alternative from a manifest, checks its
+/// compatibility, and lands an evidence-backed proposal on the frontier -
+/// without accepting anything. Without this loop, a faster implementation
+/// sitting in a dependency manifest would never reach the plan.
+#[test]
+fn discover_proposes_evidence_backed_alternative_for_bottleneck() {
+    let fixtures = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("discovery");
+    let root = std::env::temp_dir().join(format!(
+        "pc-cli-discover-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["plan.toml", "Cargo.toml", "benchmark.json"] {
+        std::fs::copy(fixtures.join(name), root.join(name)).unwrap();
+    }
+    let manifest = root.join("Cargo.toml");
+    let patch = root.join("patch.json");
+
+    // Bottleneck identified: critical-path cost resting on declared guesses.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("frontier")
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let frontier: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let subjects: Vec<&str> = frontier["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["subject"].as_str().unwrap())
+        .collect();
+    assert!(subjects.contains(&"task:transcribe-footage"));
+
+    // Alternative discovered from the manifest, compatibility checked, task
+    // left to the bottleneck default.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--produces")
+        .arg("transcript[words,timings,segment_confidence]")
+        .arg("--out")
+        .arg(&patch)
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["task"], "task:transcribe-footage");
+    assert_eq!(
+        report["bottleneck"]["task"], "transcribe-footage",
+        "{report}"
+    );
+    let candidates = report["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["capability"], "voz@0.4");
+    assert_eq!(candidates[0]["compatibility"]["compatible"], true);
+    assert_eq!(candidates[0]["skipped"], serde_json::Value::Null);
+    let patch_text = std::fs::read_to_string(&patch).unwrap();
+    let patch_json: serde_json::Value = serde_json::from_str(&patch_text).unwrap();
+    assert_eq!(patch_json["add_capability"][0]["id"], "voz@0.4");
+    assert_eq!(
+        patch_json["add_method"][0]["status"], "proposed",
+        "discovery must never accept"
+    );
+
+    // The proposal stages through the existing workflow, then benchmark
+    // evidence attaches as staged holdings.
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(&patch)
+        .arg(&root)
+        .assert()
+        .success();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("record")
+        .arg(root.join("benchmark.json"))
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8(output.stderr.clone())
+            .unwrap()
+            .contains("staged"),
+        "{output:?}"
+    );
+
+    // Evidence-backed proposal on the frontier: staged evidence lowers its
+    // uncertainty, and the discovery frontier counts the alternative.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("frontier")
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let frontier: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let proposal = frontier["unestimated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["subject"] == "method:discover-transcribe-footage-voz@0.4")
+        .unwrap_or_else(|| panic!("proposal missing from frontier: {frontier}"));
+    assert_eq!(proposal["kind"], "proposal");
+    assert_eq!(proposal["uncertainty"], 0.5);
+    assert!(
+        proposal["reason"]
+            .as_str()
+            .unwrap()
+            .contains("lowers uncertainty"),
+        "{proposal}"
+    );
+    let investigation = frontier["discovery"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["subject"] == "task:transcribe-footage")
+        .unwrap();
+    assert_eq!(investigation["alternatives"], 1);
+
+    // Nothing became accepted because the adapter found it: the incumbent
+    // still holds the selection.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("compile")
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let compiled: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        compiled["selection"]["transcribe-footage"], "via-whisperx",
+        "{compiled}"
+    );
+}
+
+/// Discovery reports incompatibility instead of hiding it, scans local
+/// repositories, and refuses to emit an empty patch. Without the blocked
+/// report an operator cannot tell a wrong contract from a quiet adapter;
+/// without the empty-patch refusal `pc propose` would reject the file.
+#[test]
+fn discover_reports_blocked_repo_and_empty_results() {
+    let fixtures = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("discovery");
+    let root = std::env::temp_dir().join(format!(
+        "pc-cli-discover-edges-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    for name in ["plan.toml", "Cargo.toml"] {
+        std::fs::copy(fixtures.join(name), root.join(name)).unwrap();
+    }
+    let repo = root.join("tools");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("denoise"), "binary").unwrap();
+
+    // No asserted contract: the candidate cannot cover the transcript, so
+    // it stays proposed as a blocked alternative with the frontier's reason.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(root.join("Cargo.toml"))
+        .arg("--task")
+        .arg("transcribe-footage")
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["bottleneck"], serde_json::Value::Null);
+    assert_eq!(
+        report["candidates"][0]["compatibility"]["compatible"],
+        false
+    );
+    assert!(
+        report["candidates"][0]["compatibility"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("transcript.words"),
+        "{report}"
+    );
+
+    // Local repositories scan through the same interface with their own
+    // provenance and source locators.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--repo")
+        .arg(&repo)
+        .arg("--task")
+        .arg("task:transcribe-footage")
+        .arg("--produces")
+        .arg("transcript[words,timings,segment_confidence]")
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["candidates"][0]["capability"], "denoise@0");
+    assert_eq!(
+        report["patch"]["add_method"][0]["provenance"],
+        "agent:pc-discover-repo"
+    );
+    assert!(
+        report["patch"]["add_capability"][0]["source"]
+            .as_str()
+            .unwrap()
+            .contains("denoise"),
+        "{report}"
+    );
+
+    // A fully modelled source is an error, not an empty patch: `pc propose`
+    // would refuse an empty patch, so discovery must not emit one.
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(root.join("Cargo.toml"))
+        .arg("--task")
+        .arg("transcribe-footage")
+        .arg("--produces")
+        .arg("transcript[words,timings,segment_confidence]")
+        .arg("--out")
+        .arg(root.join("patch.json"))
+        .arg(&root)
+        .assert()
+        .success();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(root.join("patch.json"))
+        .arg(&root)
+        .assert()
+        .success();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(root.join("Cargo.toml"))
+        .arg("--task")
+        .arg("transcribe-footage")
+        .arg("--out")
+        .arg(root.join("patch2.json"))
+        .arg(&root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("no new candidates"));
+}
+
+/// Once discovery lands a capability for one task, the same capability must
+/// still reach the next bottleneck: skipping it as already modelled would
+/// hide an existing alternative from every later task. The second proposal
+/// reuses the modelled record instead of duplicating it.
+#[test]
+fn discover_reuses_modelled_capability_for_another_task() {
+    let fixtures = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("discovery");
+    let root = std::env::temp_dir().join(format!(
+        "pc-cli-discover-reuse-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::copy(fixtures.join("Cargo.toml"), root.join("Cargo.toml")).unwrap();
+    let plan = std::fs::read_to_string(fixtures.join("plan.toml")).unwrap();
+    std::fs::write(
+        root.join("plan.toml"),
+        format!(
+            "{plan}
+[[task]]
+id = \"transcribe-archive\"
+title = \"Transcribe archive\"
+state = \"resolved\"
+produces = [{{ artifact = \"transcript\", fields = [\"words\", \"timings\"] }}]
+
+[[method]]
+id = \"archive-via-whisperx\"
+task = \"transcribe-archive\"
+kind = \"invoke\"
+capability = \"whisperx@3\"
+status = \"accepted\"
+provenance = \"human:test\"
+"
+        ),
+    )
+    .unwrap();
+
+    // Task A: voz@0.4 is discovered and proposed with its capability.
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(root.join("Cargo.toml"))
+        .arg("--task")
+        .arg("transcribe-footage")
+        .arg("--produces")
+        .arg("transcript[words,timings,segment_confidence]")
+        .arg("--out")
+        .arg(root.join("a.json"))
+        .arg(&root)
+        .assert()
+        .success();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(root.join("a.json"))
+        .arg(&root)
+        .assert()
+        .success();
+
+    // Task B: the now-modelled voz@0.4 is proposed as a method only, with
+    // compatibility read from the modelled contract.
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(root.join("Cargo.toml"))
+        .arg("--task")
+        .arg("transcribe-archive")
+        .arg("--out")
+        .arg(root.join("b.json"))
+        .arg("--json")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["candidates"][0]["capability"], "voz@0.4");
+    assert_eq!(report["candidates"][0]["skipped"], serde_json::Value::Null);
+    assert_eq!(
+        report["candidates"][0]["compatibility"]["compatible"], true,
+        "{report}"
+    );
+    assert_eq!(report["patch"]["add_capability"], serde_json::json!([]));
+    assert_eq!(
+        report["patch"]["add_method"][0]["id"],
+        "discover-transcribe-archive-voz@0.4"
+    );
+    assert_eq!(report["patch"]["add_method"][0]["capability"], "voz@0.4");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("propose")
+        .arg(root.join("b.json"))
+        .arg(&root)
+        .assert()
+        .success();
+
+    // Task B again: it now invokes voz@0.4, so nothing new remains.
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("discover")
+        .arg("--manifest")
+        .arg(root.join("Cargo.toml"))
+        .arg("--task")
+        .arg("transcribe-archive")
+        .arg("--out")
+        .arg(root.join("c.json"))
+        .arg(&root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("no new candidates"));
+}

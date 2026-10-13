@@ -924,6 +924,7 @@ dependencies = [
  "pc-adapter-beads",
  "pc-adapter-tasks-axi",
  "pc-core",
+ "pc-discovery",
  "pc-ir",
  "pc-store",
  "pc-sync",
@@ -946,6 +947,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "pc-discovery"
+version = "0.1.0"
+dependencies = [
+ "pc-core",
+ "pc-ir",
+ "serde",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

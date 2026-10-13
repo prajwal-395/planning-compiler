@@ -51,7 +51,8 @@ crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
 crates/pc-sync/   explicit-mapping reconciliation of external task lifecycle state (`pc sync`)
-crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, sync, schema)
+crates/pc-discovery/      structured capability discovery (PC-13): deterministic manifest/repo adapters emitting propose patches, never accepted
+crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, sync, discover, schema)
 crates/pc-mcp/    pc-mcp binary: MCP stdio server (check, compile, frontier, context, impact, diff, revision, propose, accept, reject, record)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
@@ -90,6 +91,7 @@ pc metrics [path] / pc calibration [path]  # classification counts / prediction 
 pc history [path]  # all decision, outcome, and compiler-run events in time order
 pc frontier [path]  # rank unresolved work (P8)
 pc capabilities [path]  # capability inventory with evidence coverage; flags unmeasured
+pc discover [--manifest F] [--repo D] [--task T] [--produces a[f,..]] [--out patch.json] [path]  # propose candidate capabilities from external sources (never accepted)
 pc impact <change.json> [path]  # preview a hypothetical change (P9)
 pc diff <a> <b>    # compare two plans: structure, selection, totals (P9)
 pc propose <patch.json> [path]  # stage tasks, methods, capabilities as proposed
