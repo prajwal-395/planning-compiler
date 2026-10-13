@@ -266,6 +266,23 @@ enum Commands {
         /// Plan file or directory.
         path: Option<PathBuf>,
     },
+    /// Reconcile mapped external task state into the plan.
+    Sync {
+        /// One source to synchronize. Omit with --all.
+        #[arg(long, conflicts_with = "all")]
+        source: Option<String>,
+        /// Synchronize all supported sources.
+        #[arg(long)]
+        all: bool,
+        /// Show the reconciliation without changing plan or sync state.
+        #[arg(long)]
+        dry_run: bool,
+        /// Snapshot file for tasks-axi or Beads (GitHub uses gh when omitted).
+        #[arg(long, conflicts_with = "all")]
+        input: Option<PathBuf>,
+        /// Plan file or directory.
+        path: Option<PathBuf>,
+    },
 }
 
 /// Resolve an optional plan path: an explicit path passes through
@@ -353,6 +370,13 @@ fn main() {
         }
         Commands::ImportBeads { jsonl, path } => run_import_beads(&jsonl, path),
         Commands::ExportBeads { jsonl, path } => run_export_beads(&jsonl, &plan_path(path)),
+        Commands::Sync {
+            source,
+            all,
+            dry_run,
+            input,
+            path,
+        } => run_sync(source, all, dry_run, input, &plan_path(path)),
     }
 }
 
@@ -2101,4 +2125,177 @@ fn run_export_beads(output: &std::path::Path, path: &std::path::Path) {
         loaded.display_path,
         output.display()
     );
+}
+
+fn run_sync(
+    source: Option<String>,
+    all: bool,
+    dry_run: bool,
+    input: Option<PathBuf>,
+    path: &std::path::Path,
+) {
+    use pc_sync::{Mapping, Source, State};
+    use std::process::Command;
+    if !all && source.is_none() {
+        eprintln!("pc sync requires --source <github|tasks-axi|beads> or --all");
+        std::process::exit(2);
+    }
+    let plan_file = pc_store::resolve_plan_file(path).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1)
+    });
+    let dir = plan_file.parent().unwrap_or(std::path::Path::new("."));
+    let state_file = dir.join("sync-state.json");
+    let map_file = dir.join("sync-map.json");
+    let mut sync: State = if state_file.exists() {
+        serde_json::from_slice(&std::fs::read(&state_file).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", state_file.display());
+            std::process::exit(1)
+        }))
+        .unwrap_or_else(|e| {
+            eprintln!("cannot parse {}: {e}", state_file.display());
+            std::process::exit(1)
+        })
+    } else {
+        State::default()
+    };
+    let mappings: Vec<Mapping> = if map_file.exists() {
+        serde_json::from_slice(&std::fs::read(&map_file).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", map_file.display());
+            std::process::exit(1)
+        }))
+        .unwrap_or_else(|e| {
+            eprintln!("cannot parse {}: {e}", map_file.display());
+            std::process::exit(1)
+        })
+    } else {
+        Vec::new()
+    };
+    let sources = if all {
+        vec![Source::TasksAxi, Source::Beads, Source::Github]
+    } else {
+        vec![match source.as_deref().unwrap_or("") {
+            "github" => Source::Github,
+            "tasks-axi" => Source::TasksAxi,
+            "beads" => Source::Beads,
+            x => {
+                eprintln!("unknown sync source `{x}`");
+                std::process::exit(2)
+            }
+        }]
+    };
+    let mut loaded = pc_store::load(path).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1)
+    });
+    let mut had_conflict = false;
+    let mut plan_changed = false;
+    let mut reconciled = false;
+    for src in sources {
+        let snapshot = match src {
+            Source::TasksAxi => Some("tasks-axi.backlog.md"),
+            Source::Beads => Some("beads.jsonl"),
+            Source::Github => None,
+        }
+        .map(|name| dir.join("sources").join(name));
+        if all {
+            let skip = if !mappings.iter().any(|m| m.source == src) {
+                Some("no mappings in sync-map.json".to_owned())
+            } else {
+                snapshot
+                    .as_ref()
+                    .filter(|file| !file.exists())
+                    .map(|file| format!("no snapshot at {}", file.display()))
+            };
+            if let Some(reason) = skip {
+                println!("{src:?}: skipped, {reason}");
+                continue;
+            }
+        }
+        let raw = if let Some(file) = input.as_ref().or(snapshot.as_ref()) {
+            std::fs::read_to_string(file).unwrap_or_else(|e| {
+                eprintln!("cannot read {}: {e}", file.display());
+                std::process::exit(1)
+            })
+        } else {
+            let repo = Command::new("gh")
+                .args([
+                    "repo",
+                    "view",
+                    "--json",
+                    "nameWithOwner",
+                    "--jq",
+                    ".nameWithOwner",
+                ])
+                .output()
+                .unwrap_or_else(|e| {
+                    eprintln!("cannot run gh: {e}");
+                    std::process::exit(1)
+                });
+            if !repo.status.success() {
+                eprintln!(
+                    "gh repo view failed: {}",
+                    String::from_utf8_lossy(&repo.stderr)
+                );
+                std::process::exit(1);
+            }
+            let repo = String::from_utf8_lossy(&repo.stdout).trim().to_owned();
+            let result = Command::new("gh")
+                .args([
+                    "api",
+                    "--paginate",
+                    "--slurp",
+                    &format!("repos/{repo}/issues?state=all&per_page=100"),
+                ])
+                .output()
+                .unwrap_or_else(|e| {
+                    eprintln!("cannot run gh api: {e}");
+                    std::process::exit(1)
+                });
+            if !result.status.success() {
+                eprintln!("gh api failed: {}", String::from_utf8_lossy(&result.stderr));
+                std::process::exit(1);
+            }
+            String::from_utf8_lossy(&result.stdout).into_owned()
+        };
+        let records = pc_sync::parse_snapshot(src, &raw).unwrap_or_else(|e| {
+            eprintln!("cannot parse {src:?} snapshot: {e}");
+            std::process::exit(1)
+        });
+        let preview = pc_sync::reconcile(&mut loaded.doc, &mappings, &mut sync, src, &records)
+            .unwrap_or_else(|e| {
+                eprintln!("sync failed: {e}");
+                std::process::exit(1)
+            });
+        println!(
+            "{src:?}: {} changed, {} unchanged, {} conflicts, {} unmapped",
+            preview.changed.len(),
+            preview.unchanged.len(),
+            preview.conflicts.len(),
+            preview.unmapped.len()
+        );
+        reconciled = true;
+        plan_changed |= !preview.changed.is_empty();
+        for conflict in preview.conflicts {
+            had_conflict = true;
+            println!(
+                "conflict {:?}/{} -> {}: {}",
+                conflict.source, conflict.external_id, conflict.task_id, conflict.reason
+            );
+        }
+    }
+    if !dry_run && reconciled {
+        if plan_changed {
+            write_edited(&loaded, &loaded.doc);
+        }
+        std::fs::write(&state_file, serde_json::to_vec_pretty(&sync).unwrap()).unwrap_or_else(
+            |e| {
+                eprintln!("cannot write {}: {e}", state_file.display());
+                std::process::exit(1)
+            },
+        );
+    }
+    if had_conflict {
+        std::process::exit(1);
+    }
 }

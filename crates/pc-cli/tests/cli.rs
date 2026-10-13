@@ -3674,6 +3674,276 @@ fn tasks_axi_scratch(name: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn sync_dry_run_leaves_plan_and_state_files_untouched() {
+    let dir = tasks_axi_scratch("sync-dry-run");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let plan_before = std::fs::read(dir.join("plan.toml")).unwrap();
+    let ids = pc_adapter_tasks_axi::parse_backlog(
+        &std::fs::read_to_string(dir.join("backlog.md")).unwrap(),
+    )
+    .unwrap()
+    .items
+    .into_iter()
+    .map(|item| {
+        serde_json::json!({
+            "source": "tasks-axi",
+            "external_id": item.id,
+            "task_id": item.id,
+        })
+    })
+    .collect::<Vec<_>>();
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&ids).unwrap()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("tasks-axi")
+        .arg("--input")
+        .arg(dir.join("backlog.md"))
+        .arg("--dry-run")
+        .arg(&dir)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("0 changed"));
+    assert_eq!(std::fs::read(dir.join("plan.toml")).unwrap(), plan_before);
+    assert!(!dir.join("sync-state.json").exists());
+}
+
+#[test]
+fn sync_rereads_mapping_file_after_state_is_written() {
+    let dir = tasks_axi_scratch("sync-map-reload");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let ids = pc_adapter_tasks_axi::parse_backlog(
+        &std::fs::read_to_string(dir.join("backlog.md")).unwrap(),
+    )
+    .unwrap()
+    .items
+    .into_iter()
+    .map(|item| {
+        serde_json::json!({
+            "source": "tasks-axi",
+            "external_id": item.id,
+            "task_id": item.id,
+        })
+    })
+    .collect::<Vec<_>>();
+    let sync = |mapped: usize| {
+        std::fs::write(
+            dir.join("sync-map.json"),
+            serde_json::to_vec(&ids[..mapped]).unwrap(),
+        )
+        .unwrap();
+        Command::cargo_bin("pc")
+            .unwrap()
+            .arg("sync")
+            .arg("--source")
+            .arg("tasks-axi")
+            .arg("--input")
+            .arg(dir.join("backlog.md"))
+            .arg(&dir)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(format!(
+                "0 changed, {mapped} unchanged, 0 conflicts, {} unmapped",
+                ids.len() - mapped
+            )));
+    };
+    sync(1);
+    assert!(dir.join("sync-state.json").exists());
+    sync(ids.len());
+}
+
+#[test]
+fn sync_dry_run_reports_the_same_conflicts_as_a_real_run() {
+    let dir = tasks_axi_scratch("sync-dry-run-equals-real");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let map = serde_json::json!([
+        {"source": "tasks-axi", "external_id": "pc-import-axi-b4", "task_id": "pc-import-axi-b4"},
+        {"source": "tasks-axi", "external_id": "pc-import-axi-b5", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let sync = |dry_run: bool| {
+        let mut cmd = Command::cargo_bin("pc").unwrap();
+        cmd.arg("sync")
+            .arg("--source")
+            .arg("tasks-axi")
+            .arg("--input")
+            .arg(dir.join("backlog.md"));
+        if dry_run {
+            cmd.arg("--dry-run");
+        }
+        cmd.arg(&dir).assert()
+    };
+    sync(false).success();
+    let backlog = std::fs::read_to_string(dir.join("backlog.md")).unwrap();
+    std::fs::write(
+        dir.join("backlog.md"),
+        backlog.replace("- [ ] pc-import-axi-b4", "- [x] pc-import-axi-b4"),
+    )
+    .unwrap();
+    let plan_before = std::fs::read(dir.join("plan.toml")).unwrap();
+    let state_before = std::fs::read(dir.join("sync-state.json")).unwrap();
+    let preview = sync(true).code(1).get_output().stdout.clone();
+    assert_eq!(std::fs::read(dir.join("plan.toml")).unwrap(), plan_before);
+    assert_eq!(
+        std::fs::read(dir.join("sync-state.json")).unwrap(),
+        state_before
+    );
+    let real = sync(false).code(1).get_output().stdout.clone();
+    assert_eq!(preview, real);
+    assert!(
+        String::from_utf8(real)
+            .unwrap()
+            .contains("1 changed, 0 unchanged, 1 conflicts")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_all_judges_github_after_task_system_changes_in_the_same_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tasks_axi_scratch("sync-all-github-last");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    std::fs::create_dir(dir.join("sources")).unwrap();
+    let backlog = std::fs::read_to_string(dir.join("backlog.md")).unwrap();
+    let issues = dir.join("issues.json");
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = repo ]; then echo example/project; else cat '{}'; fi\n",
+            issues.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let map = serde_json::json!([
+        {"source": "tasks-axi", "external_id": "pc-import-axi-b4", "task_id": "pc-import-axi-b4"},
+        {"source": "github", "external_id": "I_kwDOExample1", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let step = |done: bool, updated: &str| {
+        let backlog = if done {
+            backlog.replace("- [ ] pc-import-axi-b4", "- [x] pc-import-axi-b4")
+        } else {
+            backlog.clone()
+        };
+        std::fs::write(dir.join("sources").join("tasks-axi.backlog.md"), backlog).unwrap();
+        let issue = serde_json::json!([[{
+            "node_id": "I_kwDOExample1",
+            "state": if done { "closed" } else { "open" },
+            "updated_at": updated,
+        }]]);
+        std::fs::write(&issues, serde_json::to_vec(&issue).unwrap()).unwrap();
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .env("PATH", &path)
+            .arg("sync")
+            .arg("--all")
+            .arg(&dir)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+    step(false, "2026-10-12T12:00:00Z");
+    let output = step(true, "2026-10-13T12:00:00Z");
+    assert!(output.contains("TasksAxi: 1 changed, 0 unchanged, 0 conflicts"));
+    assert!(output.contains("Github: 0 changed, 1 unchanged, 0 conflicts"));
+}
+
+#[test]
+fn sync_all_skips_unconfigured_and_absent_sources() {
+    let dir = tasks_axi_scratch("sync-all-skips");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    std::fs::create_dir(dir.join("sources")).unwrap();
+    std::fs::copy(
+        dir.join("backlog.md"),
+        dir.join("sources").join("tasks-axi.backlog.md"),
+    )
+    .unwrap();
+    let map = serde_json::json!([
+        {"source": "tasks-axi", "external_id": "pc-import-axi-b4", "task_id": "pc-import-axi-b4"},
+        {"source": "beads", "external_id": "bd-1", "task_id": "pc-import-axi-b5"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--all")
+        .arg(&dir)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("Github: skipped, no mappings in sync-map.json"));
+    assert!(output.contains("TasksAxi: 0 changed, 1 unchanged, 0 conflicts"));
+    assert!(output.contains("Beads: skipped, no snapshot at"));
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("sync-state.json")).unwrap()).unwrap();
+    let observed = state["observed"].as_object().unwrap();
+    assert_eq!(
+        observed.keys().collect::<Vec<_>>(),
+        vec!["TasksAxi:pc-import-axi-b4"]
+    );
+}
+
+#[test]
+fn sync_rejects_input_with_all() {
+    let dir = tasks_axi_scratch("sync-input-all");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--all")
+        .arg("--input")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .code(2);
+}
+
 /// The 10-item backlog subset round-trips through the IR byte-identical:
 /// import, clean check, then export regenerates the exact input bytes.
 #[test]

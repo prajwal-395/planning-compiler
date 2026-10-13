@@ -925,6 +925,7 @@ dependencies = [
  "pc-core",
  "pc-ir",
  "pc-store",
+ "pc-sync",
  "predicates",
  "serde",
  "serde_json",
@@ -988,6 +989,19 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "pc-core",
+ "pc-ir",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "pc-sync"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "pc-adapter-beads",
+ "pc-adapter-tasks-axi",
  "pc-ir",
  "serde",
  "serde_json",

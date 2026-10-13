@@ -1,0 +1,4 @@
+[
+  {"node_id":"I_kwDOExample1","number":11,"state":"closed","updated_at":"2026-10-12T12:00:00Z","title":"Closed issue"},
+  {"node_id":"PR_kwDOExample2","number":22,"state":"closed","updated_at":"2026-10-12T12:01:00Z","title":"Merged pull request","pull_request":{"url":"https://api.github.com/repos/example/project/pulls/22"}}
+]

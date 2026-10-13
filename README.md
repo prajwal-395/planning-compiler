@@ -32,7 +32,8 @@ v0 specifically does not:
 - call language models (agents propose with `pc propose`, decide with
   `pc accept`/`pc reject` and read slices with `pc context`; the core is
   model-free),
-- execute anything or track task status/assignment,
+- execute anything or own task status/assignment (`pc sync` only mirrors
+  explicitly mapped external lifecycle state),
 - model people (`docs/adr/0003-no-human-executors.md`),
 - schedule resource capacity.
 
@@ -49,14 +50,15 @@ crates/pc-select/ P6 exact ILP (effort) or makespan-search method selection with
 crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan writer, evidence JSONL append/read
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
-crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, schema)
+crates/pc-sync/   explicit-mapping reconciliation of external task lifecycle state (`pc sync`)
+crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, sync, schema)
 crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier, context, impact, diff)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
 examples/ren-native/  real Ren native-throughput planning cycle (plan, pending evidence, decisions)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
-docs/             ir.md, passes.md, evidence/ (self-plan continuous-validation log), adr/
+docs/             ir.md, passes.md, sync.md, evidence/ (self-plan continuous-validation log), adr/
 ```
 
 Adapters (`pc-adapter-*`) convert external backlogs into the IR. The first
@@ -97,6 +99,7 @@ pc import-tasks-axi <backlog.md> [dir]  # import a tasks-axi backlog into <dir>/
 pc export-tasks-axi <backlog.md> [path]  # export a plan back into backlog.md (byte-identical when unedited)
 pc import-beads <issues.jsonl> [dir]  # import Beads issues into <dir>/plan.toml (refuses to overwrite)
 pc export-beads <issues.jsonl> [path]  # export imported issue records to JSONL, preserving source fields
+pc sync (--source <github|tasks-axi|beads> [--input file] | --all) [--dry-run] [path]  # reconcile mapped external task state (docs/sync.md)
 pc schema [--patch|--decision|--outcome] [--out file]   # emit the canonical JSON Schema (plan, patch, or event)
 ```
 
