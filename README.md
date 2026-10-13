@@ -17,7 +17,8 @@ budget-fitted slice for the next decomposition. See
 `docs/` for semantics and the sequenced plan. The `self-plan`
 fixture (`examples/self-plan`) is this project's own implementation plan;
 `examples/transcription-substitution` is the synthetic substitution study
-(report 3.5, criteria (a)-(c)).
+(report 3.5, criteria (a)-(c)); `examples/ren-native` is the first real
+external-project planning cycle (Ren native rendering throughput).
 
 ## Scope boundary
 
@@ -53,6 +54,7 @@ crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, fro
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
+examples/ren-native/  real Ren native-throughput planning cycle (plan, pending evidence, decisions)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
 docs/             ir.md, passes.md, evidence/ (self-plan continuous-validation log), adr/
 ```

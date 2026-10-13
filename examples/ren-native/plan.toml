@@ -1,0 +1,149 @@
+ir_version = 0
+
+[plan]
+id = "ren-native-throughput"
+title = "Ren native rendering throughput"
+description = "PC-06 live planning cycle. Current system: Ren's FilmCraft and EffectCraft native engines. Baseline: existing Ren native rendering. The four candidate strategies (caching, batching, pipeline changes, backend substitutions) are proposed alternative methods for the throughput change; none carries an estimate because no comparable Ren measurement supports one. Constraints: output fidelity, memory, and platform support. Resources to measure: CPU, GPU, memory, and the Resolve instance. Existing Ren timings are recorded in evidence.jsonl as pending observations under their own workload subjects, so incomparable workloads never move these alternatives. It does not claim a measured improvement."
+
+[objective]
+root_task = "improve-native-throughput"
+weights = { duration_minutes = 1.0 }
+
+[[objective.acceptance]]
+kind = "manual"
+description = "A fixed Ren native-render workload completes faster than its recorded baseline while correctness tests and output-fidelity thresholds pass; record both results as an outcome."
+
+[[artifact]]
+name = "render-measurement"
+fields = ["baseline", "profile", "correctness", "fidelity"]
+
+[[artifact]]
+name = "throughput-change"
+fields = ["change", "throughput", "correctness", "fidelity"]
+
+[[task]]
+id = "improve-native-throughput"
+title = "Improve Ren native rendering throughput while preserving output fidelity"
+state = "decomposed"
+
+[[task]]
+id = "measure-native-baseline"
+title = "Measure a reproducible end-to-end native-render baseline and identify the dominant cost before comparing caching, batching, pipeline changes, or backend substitutions"
+state = "open"
+produces = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+
+[[task]]
+id = "apply-throughput-change"
+title = "Apply one throughput change and measure it against the baseline on the same workload, correctness tests and fidelity thresholds"
+state = "open"
+consumes = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+produces = [{ artifact = "throughput-change", fields = ["change", "throughput", "correctness", "fidelity"] }]
+
+[[method]]
+id = "throughput-investigation"
+task = "improve-native-throughput"
+kind = "decompose"
+subtasks = ["measure-native-baseline", "apply-throughput-change"]
+order_edges = [{ from = "measure-native-baseline", to = "apply-throughput-change" }]
+status = "accepted"
+provenance = "human:pc-06"
+assumptions = ["A comparable baseline is required before candidate strategies can be ranked by throughput.", "Investigation is planning work only; no Ren execution was performed for this record."]
+
+[[method]]
+id = "via-measurement-protocol"
+task = "measure-native-baseline"
+kind = "invoke"
+capability = "ren-measurement-protocol@1"
+status = "accepted"
+provenance = "human:pc-06"
+assumptions = ["Uses ren profile, library/tools/perf_ledger.py and engine render receipts to separate Resolve queue and lease time, native engine time, encoding and pipeline work."]
+
+# The four section 10 alternatives. Each stays proposed and unestimated:
+# no recorded Ren measurement compares them on one workload.
+[[method]]
+id = "cache-render-work"
+task = "apply-throughput-change"
+kind = "invoke"
+capability = "ren-render-caching@0"
+status = "proposed"
+provenance = "human:pc-06"
+assumptions = ["Repeated native-render work exists to reuse; no Ren measurement shows how much."]
+
+[[method]]
+id = "batch-native-renders"
+task = "apply-throughput-change"
+kind = "invoke"
+capability = "ren-render-batching@0"
+status = "proposed"
+provenance = "human:pc-06"
+assumptions = ["Per-job overhead is material. scripts/probe_render_control_plane.py describes one-frame, five-job batch and 150-frame range measurements but publishes no timings, and a render holds the exclusive Resolve lease."]
+
+[[method]]
+id = "change-pipeline"
+task = "apply-throughput-change"
+kind = "invoke"
+capability = "ren-pipeline-change@0"
+status = "proposed"
+provenance = "human:pc-06"
+assumptions = ["Moving work off the Resolve control plane helps throughput. docs/OTIO_COMPILATION_MEASURED.md cut timeline placement from 13.35 s to 1.26 s of exclusive hold, which is placement, not frame rendering."]
+
+[[method]]
+id = "substitute-backend"
+task = "apply-throughput-change"
+kind = "invoke"
+capability = "ren-backend-substitution@0"
+status = "proposed"
+provenance = "human:pc-06"
+assumptions = ["A substitute native backend meets the same fidelity thresholds; FilmCraft and EffectCraft timings describe different work and cannot rank one backend over another."]
+
+[[capability]]
+id = "ren-measurement-protocol@1"
+kind = "workflow"
+version = "1"
+produces = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+resources = ["cpu", "gpu", "memory", "resolve-instance"]
+
+[[capability]]
+id = "ren-render-caching@0"
+kind = "workflow"
+version = "0"
+consumes = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+produces = [{ artifact = "throughput-change", fields = ["change", "throughput", "correctness", "fidelity"] }]
+resources = ["cpu", "gpu", "memory", "resolve-instance"]
+
+[[capability]]
+id = "ren-render-batching@0"
+kind = "workflow"
+version = "0"
+consumes = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+produces = [{ artifact = "throughput-change", fields = ["change", "throughput", "correctness", "fidelity"] }]
+resources = ["cpu", "gpu", "memory", "resolve-instance"]
+
+[[capability]]
+id = "ren-pipeline-change@0"
+kind = "workflow"
+version = "0"
+consumes = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+produces = [{ artifact = "throughput-change", fields = ["change", "throughput", "correctness", "fidelity"] }]
+resources = ["cpu", "gpu", "memory", "resolve-instance"]
+
+[[capability]]
+id = "ren-backend-substitution@0"
+kind = "workflow"
+version = "0"
+consumes = [{ artifact = "render-measurement", fields = ["baseline", "profile", "correctness", "fidelity"] }]
+produces = [{ artifact = "throughput-change", fields = ["change", "throughput", "correctness", "fidelity"] }]
+resources = ["cpu", "gpu", "memory", "resolve-instance"]
+
+[[resource]]
+name = "cpu"
+capacity = 1.0
+[[resource]]
+name = "gpu"
+capacity = 1.0
+[[resource]]
+name = "memory"
+capacity = 1.0
+[[resource]]
+name = "resolve-instance"
+capacity = 1.0
