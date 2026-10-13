@@ -104,6 +104,15 @@ check for that task passed; checks absent from the snapshot do not block.
 Sync refuses to append evidence `pc check` would refuse, so a malformed CI
 revision fails the run instead of poisoning `evidence.jsonl`.
 
+Mapped pull requests retain their GitHub creation and completion timestamps in
+`sync-state.json`. `pc evaluate` joins these records to a decision only through
+the decision's task IDs and the corresponding `sync-map.json` entries. With
+one matching mapped pull request, it reports decision-to-PR-creation latency
+and PR creation-to-merge duration. Missing dates, absent mappings, or
+multiple matching PRs leave the value unrecorded with a reason. These dates do
+not measure plan-preparation wall time, rework, or planning-model maintenance;
+compiler-run durations remain a separate measured tool-runtime cost.
+
 ## Planning-compiler drift checks
 
 `pc sync --source planning-compiler [plan-dir]` re-checks the plan's own

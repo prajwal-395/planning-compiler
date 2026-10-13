@@ -90,7 +90,7 @@ pc record <evidence.json> [path]  # append one observation to evidence.jsonl
 pc decision <event.json> [path]  # append one decision and its prediction to decisions.jsonl
 pc outcome <event.json> [path]  # append one observed result to outcomes.jsonl
 pc decisions [path] / pc outcomes [path]  # print recorded events as JSON
-pc evaluate [--decision id] [path]  # initial -> recommendation -> final -> outcome per decision, plus planning cost from explicitly referenced metrics.jsonl runs
+pc evaluate [--decision id] [path]  # decision/outcome report, explicit compiler-run cost, and mapped operational measurements
 pc metrics [path] / pc calibration [path]  # classification counts / prediction error, latest outcome per decision
 pc history [path]  # all decision, outcome, and compiler-run events in time order
 pc frontier [path]  # rank unresolved work (P8)

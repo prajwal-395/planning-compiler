@@ -1528,6 +1528,95 @@ fn planning_cost(
     serde_json::json!({"value":total,"unit":"milliseconds","status":"measured","run_ids":run_ids,"run_count":matched.len(),"note":note})
 }
 
+fn operational_measurements(
+    decision: &pc_ir::DecisionEvent,
+    path: &std::path::Path,
+) -> serde_json::Value {
+    let plan_file = match pc_store::resolve_plan_file(path) {
+        Ok(file) => file,
+        Err(_) => {
+            return serde_json::json!({"implementation_latency":{"value":null,"unit":"milliseconds","status":"unrecorded","reason":"plan path could not be resolved"},"task_completion_duration":{"value":null,"unit":"milliseconds","status":"unrecorded","reason":"plan path could not be resolved"}});
+        }
+    };
+    let dir = plan_file.parent().unwrap_or(std::path::Path::new("."));
+    let map: Vec<pc_sync::Mapping> = std::fs::read(dir.join("sync-map.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let state: pc_sync::State = std::fs::read(dir.join("sync-state.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let relevant: Vec<_> = map
+        .iter()
+        .filter(|mapping| {
+            mapping.source == pc_sync::Source::Github
+                && decision.event.tasks.contains(&mapping.task_id)
+                && state.pull_requests.contains_key(&mapping.external_id)
+        })
+        .collect();
+    let timing = if relevant.len() == 1 {
+        state.pull_requests.get(&relevant[0].external_id)
+    } else {
+        None
+    };
+    let duration = |start: Option<&str>, end: Option<&str>| -> (Option<i64>, &'static str) {
+        match (
+            start.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()),
+            end.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()),
+        ) {
+            (Some(start), Some(end)) if end >= start => {
+                (Some((end - start).num_milliseconds()), "measured")
+            }
+            (Some(_), Some(_)) => (None, "timestamps are reversed"),
+            _ => (None, "GitHub did not provide both timestamps"),
+        }
+    };
+    let (latency, latency_reason) = if relevant.len() != 1 {
+        (
+            None,
+            if relevant.is_empty() {
+                "no mapped pull request for this decision's task IDs"
+            } else {
+                "multiple mapped pull requests match; attribution is ambiguous"
+            },
+        )
+    } else {
+        duration(
+            Some(&decision.event.timestamp),
+            timing.and_then(|t| t.created_at.as_deref()),
+        )
+    };
+    let (completion, completion_reason) = if relevant.len() != 1 {
+        (
+            None,
+            if relevant.is_empty() {
+                "no mapped pull request for this decision's task IDs"
+            } else {
+                "multiple mapped pull requests match; attribution is ambiguous"
+            },
+        )
+    } else {
+        duration(
+            timing.and_then(|t| t.created_at.as_deref()),
+            timing.and_then(|t| t.completed_at.as_deref()),
+        )
+    };
+    let measurement = |value: Option<i64>, reason: &str| match value {
+        Some(value) => serde_json::json!({"value":value,"unit":"milliseconds","status":"measured"}),
+        None => {
+            serde_json::json!({"value":null,"unit":"milliseconds","status":"unrecorded","reason":reason})
+        }
+    };
+    serde_json::json!({
+        "decision_to_implementation":measurement(latency, latency_reason),
+        "task_completion_duration":measurement(completion, completion_reason),
+        "plan_preparation_wall_time":{"value":null,"unit":"milliseconds","status":"unrecorded","reason":"compiler run durations measure tool runtime only; GitHub and CI records do not measure end-to-end plan preparation time"},
+        "rework":{"value":null,"status":"unrecorded","reason":"records do not explicitly identify rework introduced or avoided"},
+        "planning_model_maintenance_cost":{"value":null,"status":"unrecorded","reason":"records do not measure effort spent maintaining the planning model"}
+    })
+}
+
 fn run_evaluation(path: &std::path::Path, decision_id: Option<&str>) {
     let result = event_records(path).map(|(decisions, outcomes, runs, skipped_run_rows)| {
         let runs_by_id: std::collections::BTreeMap<&str, &pc_ir::CompilerRunEvent> =
@@ -1552,7 +1641,8 @@ fn run_evaluation(path: &std::path::Path, decision_id: Option<&str>) {
                 "outcome":latest.map(|o| &o.actual_outcome),
                 "comparisons":comparisons,
                 "counterfactual": {"alternative":d.baseline_alternative,"value":null,"status":"estimated","note":"No observed baseline outcome is recorded."},
-                "planning_cost": planning_cost(d, &runs_by_id, skipped_run_rows)
+                "planning_cost": planning_cost(d, &runs_by_id, skipped_run_rows),
+                "operational_measurements": operational_measurements(d, path)
             })
         }).collect();
         serde_json::json!({"evaluations":rows})
@@ -3077,6 +3167,68 @@ fn run_sync(
             Some(String::from_utf8_lossy(&result.stdout).into_owned())
         };
         let raw = raw.as_deref();
+        if src == Source::Github
+            && !dry_run
+            && let Some(snapshot) =
+                raw.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        {
+            let mapped: std::collections::BTreeSet<&str> = mappings
+                .iter()
+                .filter(|mapping| mapping.source == Source::Github)
+                .map(|mapping| mapping.external_id.as_str())
+                .collect();
+            let rows: Vec<&serde_json::Value> = snapshot
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|row| {
+                    row.as_array()
+                        .map(|rows| rows.iter().collect())
+                        .unwrap_or_else(|| vec![row])
+                })
+                .collect();
+            for row in rows {
+                let Some(id) = row.get("node_id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                if !mapped.contains(id) || row.get("pull_request").is_none() {
+                    continue;
+                }
+                let created_at = row
+                    .get("created_at")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let mut completed_at = row
+                    .get("merged_at")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                if completed_at.is_none()
+                    && input.is_none()
+                    && let Some(endpoint) = row
+                        .get("pull_request")
+                        .and_then(|pr| pr.get("url"))
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|url| url.strip_prefix("https://api.github.com/"))
+                    && let Ok(result) = Command::new("gh").args(["api", endpoint]).output()
+                    && result.status.success()
+                {
+                    completed_at = serde_json::from_slice::<serde_json::Value>(&result.stdout)
+                        .ok()
+                        .and_then(|pr| {
+                            pr.get("merged_at")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                        });
+                }
+                sync.pull_requests.insert(
+                    id.to_owned(),
+                    pc_sync::PullRequestTiming {
+                        created_at,
+                        completed_at,
+                    },
+                );
+            }
+        }
         let (preview, ci_evidence) = match src {
             Source::Ci => {
                 let records =

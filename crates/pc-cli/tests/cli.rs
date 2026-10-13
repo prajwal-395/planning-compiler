@@ -38,6 +38,109 @@ fn valid_contracts_pass() {
         .stdout(predicates::str::contains("ok:"));
 }
 
+/// Operational durations require the explicit GitHub-ID to task mapping; a
+/// matching title or nearby timestamp must never attribute another PR.
+#[test]
+fn evaluate_reports_mapped_pull_request_durations_and_unknowns() {
+    let dir = scratch_dir("operational-measurements");
+    std::fs::copy(
+        workspace_root().join("tests/fixtures/valid-contracts.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("sync-map.json"),
+        serde_json::json!([
+            {"source":"github","external_id":"PR_node_1","task_id":"transcribe-footage"},
+            {"source":"github","external_id":"PR_node_2","task_id":"select-lines"}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let github = dir.join("github.json");
+    std::fs::write(&github, serde_json::json!([
+        {"node_id":"PR_node_1","updated_at":"2026-10-13T14:00:00Z","state":"closed",
+            "created_at":"2026-10-13T12:00:00Z","closed_at":"2026-10-13T14:00:00Z","merged_at":"2026-10-13T14:00:00Z","pull_request":{"url":"https://example.test/pr/1"}},
+        {"node_id":"PR_node_2","updated_at":"2026-10-13T14:00:00Z","state":"closed",
+            "created_at":"2026-10-13T12:00:00Z","closed_at":"2026-10-13T14:00:00Z","pull_request":{"url":"https://example.test/pr/2"}}
+    ]).to_string()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("github")
+        .arg("--input")
+        .arg(github)
+        .arg(&dir)
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains("2 conflicts"));
+    let decision = serde_json::json!({
+        "id":"d-operational","timestamp":"2026-10-13T11:00:00Z","plan_revision":"r1","source":"test","schema_version":1,
+        "tasks":["transcribe-footage"],"capabilities":[],"objective":"render","project_revision":"abc",
+        "alternatives":[{"id":"a","description":"A"}],"selected_alternative":"a","decision_provenance":"test",
+        "predicted_outcome":{"description":"unknown"}
+    });
+    let input = dir.join("decision.json");
+    std::fs::write(&input, decision.to_string()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("decision")
+        .arg(input)
+        .arg(&dir)
+        .assert()
+        .success();
+    let mut unrelated = decision.clone();
+    unrelated["id"] = serde_json::json!("d-unrelated");
+    unrelated["tasks"] = serde_json::json!(["select-lines"]);
+    let unrelated_input = dir.join("unrelated-decision.json");
+    std::fs::write(&unrelated_input, unrelated.to_string()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("decision")
+        .arg(unrelated_input)
+        .arg(&dir)
+        .assert()
+        .success();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("evaluate")
+        .arg(&dir)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let measurements = &report["evaluations"][0]["operational_measurements"];
+    assert_eq!(
+        measurements["decision_to_implementation"]["value"],
+        3_600_000
+    );
+    assert_eq!(measurements["task_completion_duration"]["value"], 7_200_000);
+    assert_eq!(measurements["rework"]["status"], "unrecorded");
+    assert_eq!(
+        measurements["planning_model_maintenance_cost"]["status"],
+        "unrecorded"
+    );
+    let unrelated = &report["evaluations"][1]["operational_measurements"];
+    assert_eq!(
+        unrelated["decision_to_implementation"]["status"],
+        "measured"
+    );
+    assert_eq!(
+        unrelated["task_completion_duration"]["status"],
+        "unrecorded"
+    );
+    assert!(
+        unrelated["task_completion_duration"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("both timestamps")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn decision_and_outcome_commands_append_and_read_distinct_records() {
     let root = std::env::temp_dir().join(format!(

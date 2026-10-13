@@ -47,6 +47,19 @@ pub struct State {
     /// Source revision behind every task state change sync has applied.
     #[serde(default)]
     pub provenance: Vec<Provenance>,
+    /// Explicitly mapped GitHub pull-request lifecycle dates retained for
+    /// operational reports. Issues without a `pull_request` object are omitted.
+    #[serde(default)]
+    pub pull_requests: BTreeMap<String, PullRequestTiming>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// GitHub timestamps for one explicitly mapped pull request.
+pub struct PullRequestTiming {
+    /// PR creation timestamp from GitHub.
+    pub created_at: Option<String>,
+    /// Merge timestamp reported by GitHub, if the pull request was merged.
+    pub completed_at: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// State observation persisted for one mapped external entity.
