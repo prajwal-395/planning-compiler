@@ -1,6 +1,9 @@
 //! Persistence tests for first-class decision and observed-outcome events.
 
-use pc_ir::{DecisionAlternative, DecisionEvent, EventMetadata, OutcomeEvent, OutcomeSummary};
+use pc_ir::{
+    DecisionAlternative, DecisionEvent, EvaluationStatus, EventMetadata, OutcomeEvent,
+    OutcomeSummary, Usefulness,
+};
 use std::collections::BTreeMap;
 
 fn metadata(id: &str) -> EventMetadata {
@@ -55,6 +58,7 @@ fn prediction_and_observed_outcome_are_separate_append_only_logs() {
             },
         ],
         selected_alternative: "batch".into(),
+        initial_decision: Some("current".into()),
         compiler_recommendation: Some("batch".into()),
         decision_provenance: "planner accepted recommendation".into(),
         supporting_evidence: vec!["ev-1".into()],
@@ -78,7 +82,8 @@ fn prediction_and_observed_outcome_are_separate_append_only_logs() {
         decision_id: "decision-1".into(),
         actual_outcome: summary("measured", 24.0),
         confidence: Some(0.9),
-        evaluation_status: "confirmed".into(),
+        evaluation_status: EvaluationStatus::Changed,
+        usefulness: Some(Usefulness::Useful),
     };
     pc_store::append_outcome(&plan, &outcome).unwrap();
     assert_eq!(pc_store::read_outcomes(&plan).unwrap(), vec![outcome]);
@@ -113,6 +118,7 @@ fn decisions_with_unresolvable_alternative_references_are_refused() {
         project_revision: "abc123".into(),
         alternatives: vec![alternative("batch"), alternative("current")],
         selected_alternative: "batch".into(),
+        initial_decision: Some("current".into()),
         compiler_recommendation: Some("batch".into()),
         decision_provenance: "planner".into(),
         supporting_evidence: vec![],
@@ -128,6 +134,10 @@ fn decisions_with_unresolvable_alternative_references_are_refused() {
         },
         DecisionEvent {
             compiler_recommendation: Some("typo".into()),
+            ..valid.clone()
+        },
+        DecisionEvent {
+            initial_decision: Some("typo".into()),
             ..valid.clone()
         },
         DecisionEvent {

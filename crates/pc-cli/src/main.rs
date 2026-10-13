@@ -113,6 +113,20 @@ enum Commands {
     },
     /// Read all observed outcome events as JSON.
     Outcomes { path: Option<PathBuf> },
+    /// Join decisions with observed outcomes and report their evaluation.
+    Evaluate {
+        /// Only evaluate this decision id; defaults to all decisions.
+        #[arg(long)]
+        decision: Option<String>,
+        /// Plan file or directory. Defaults to `.plan` when present.
+        path: Option<PathBuf>,
+    },
+    /// Summarize decision classifications and outcome coverage.
+    Metrics { path: Option<PathBuf> },
+    /// Show decision and outcome events in timestamp order.
+    History { path: Option<PathBuf> },
+    /// Compare predictions with observed outcomes by metric.
+    Calibration { path: Option<PathBuf> },
     /// Rank unresolved work (P8): open tasks, pending proposals,
     /// unmeasured critical-path cost and blocked alternatives.
     Frontier {
@@ -286,6 +300,12 @@ fn main() {
         Commands::Decisions { path } => run_event_read(&plan_path(path), true),
         Commands::Outcome { event, path } => run_event_record(&event, &plan_path(path), false),
         Commands::Outcomes { path } => run_event_read(&plan_path(path), false),
+        Commands::Evaluate { decision, path } => {
+            run_evaluation(&plan_path(path), decision.as_deref())
+        }
+        Commands::Metrics { path } => run_planning_metrics(&plan_path(path)),
+        Commands::History { path } => run_event_history(&plan_path(path)),
+        Commands::Calibration { path } => run_calibration(&plan_path(path)),
         Commands::Frontier {
             path,
             json,
@@ -969,6 +989,151 @@ fn run_event_read(path: &std::path::Path, decision: bool) {
         }
     }
 }
+
+fn event_records(
+    path: &std::path::Path,
+) -> Result<(Vec<pc_ir::DecisionEvent>, Vec<pc_ir::OutcomeEvent>), pc_store::LoadError> {
+    let loaded = pc_store::load(path)?;
+    let plan_file = std::path::PathBuf::from(loaded.display_path);
+    Ok((
+        pc_store::read_decisions(&plan_file)?,
+        pc_store::read_outcomes(&plan_file)?,
+    ))
+}
+
+/// Instant of an event; unparsable timestamps (only possible in a
+/// hand-edited log) order before every valid one.
+fn event_instant(event: &pc_ir::EventMetadata) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(&event.timestamp).ok()
+}
+
+/// Latest outcome per decision by event instant, ties going to the later
+/// log entry, so re-evaluating a decision replaces its earlier outcome in
+/// every report instead of being counted again.
+fn latest_outcomes(
+    outcomes: &[pc_ir::OutcomeEvent],
+) -> std::collections::BTreeMap<&str, &pc_ir::OutcomeEvent> {
+    let mut latest = std::collections::BTreeMap::<&str, &pc_ir::OutcomeEvent>::new();
+    for outcome in outcomes {
+        let replace = latest
+            .get(outcome.decision_id.as_str())
+            .is_none_or(|current| event_instant(&current.event) <= event_instant(&outcome.event));
+        if replace {
+            latest.insert(outcome.decision_id.as_str(), outcome);
+        }
+    }
+    latest
+}
+
+fn classification(outcome: Option<&&pc_ir::OutcomeEvent>) -> &'static str {
+    outcome.map_or("Inconclusive", |o| o.evaluation_status.label())
+}
+
+fn usefulness(outcome: Option<&&pc_ir::OutcomeEvent>) -> &'static str {
+    outcome
+        .and_then(|o| o.usefulness)
+        .map_or("not-assessed", pc_ir::Usefulness::label)
+}
+
+fn run_evaluation(path: &std::path::Path, decision_id: Option<&str>) {
+    let result = event_records(path).map(|(decisions, outcomes)| {
+        let latest_by_decision = latest_outcomes(&outcomes);
+        let rows: Vec<_> = decisions.iter().filter(|d| decision_id.is_none_or(|id| d.event.id == id)).map(|d| {
+            let latest = latest_by_decision.get(d.event.id.as_str());
+            let comparisons: Vec<_> = latest.into_iter().flat_map(|o| d.predicted_outcome.metrics.iter().filter_map(move |(metric, predicted)| {
+                o.actual_outcome.metrics.get(metric).map(|actual| serde_json::json!({"metric":metric,"predicted":pc_core::json::round3(*predicted),"actual":pc_core::json::round3(*actual),"absolute_error":pc_core::json::round3((actual-predicted).abs()),"status":"measured"}))
+            })).collect();
+            let agrees = |a: &Option<String>, b: &Option<String>| a.as_ref().zip(b.as_ref()).map(|(a, b)| a == b);
+            let selected = Some(d.selected_alternative.clone());
+            serde_json::json!({
+                "decision_id":d.event.id, "objective":d.objective, "initial_decision":d.initial_decision,
+                "initial_decision_status":if d.initial_decision.is_some() { "recorded" } else { "not-recorded" },
+                "recommendation":d.compiler_recommendation, "recommendation_reason":d.supporting_evidence,
+                "final_decision":d.selected_alternative, "alternatives":d.alternatives,
+                "recommendation_matches_initial":agrees(&d.compiler_recommendation, &d.initial_decision),
+                "final_matches_recommendation":agrees(&selected, &d.compiler_recommendation),
+                "final_matches_initial":agrees(&selected, &d.initial_decision),
+                "classification":classification(latest), "usefulness":usefulness(latest),
+                "outcome":latest.map(|o| &o.actual_outcome),
+                "comparisons":comparisons,
+                "counterfactual": {"alternative":d.baseline_alternative,"value":null,"status":"estimated","note":"No observed baseline outcome is recorded."},
+                "planning_cost": {"value":null,"status":"unknown","note":"Planning cost is not recorded in decision/outcome events; PC-03 instrumentation is not yet merged."}
+            })
+        }).collect();
+        serde_json::json!({"evaluations":rows})
+    });
+    print_event_report(result);
+}
+
+fn run_planning_metrics(path: &std::path::Path) {
+    let result = event_records(path).map(|(decisions, outcomes)| {
+        // Count each decision once by its latest outcome. Unevaluated
+        // decisions count as Inconclusive and not-assessed.
+        let latest_by_decision = latest_outcomes(&outcomes);
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        let mut usefulness_counts = std::collections::BTreeMap::<String, usize>::new();
+        for decision in &decisions {
+            let latest = latest_by_decision.get(decision.event.id.as_str());
+            *counts.entry(classification(latest).into()).or_default() += 1;
+            *usefulness_counts.entry(usefulness(latest).into()).or_default() += 1;
+        }
+        serde_json::json!({"decision_count":decisions.len(),"outcome_count":outcomes.len(),"evaluated_decision_count":latest_by_decision.len(),"unevaluated_decision_count":decisions.len().saturating_sub(latest_by_decision.len()),"classifications":counts,"usefulness":usefulness_counts})
+    });
+    print_event_report(result);
+}
+
+fn run_event_history(path: &std::path::Path) {
+    let result = event_records(path).map(|(decisions, outcomes)| {
+        let mut rows: Vec<_> = decisions
+            .into_iter()
+            .map(|e| {
+                (
+                    event_instant(&e.event),
+                    serde_json::json!({"type":"decision","timestamp":e.event.timestamp,"event":e}),
+                )
+            })
+            .chain(outcomes.into_iter().map(|e| {
+                (
+                    event_instant(&e.event),
+                    serde_json::json!({"type":"outcome","timestamp":e.event.timestamp,"event":e}),
+                )
+            }))
+            .collect();
+        rows.sort_by_key(|(instant, _)| *instant);
+        serde_json::json!({"history":rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>()})
+    });
+    print_event_report(result);
+}
+
+/// Calibration pairs each decision's prediction with its latest outcome
+/// only, like `evaluate` and `metrics`, so a re-evaluated decision weighs
+/// the same as any other.
+fn run_calibration(path: &std::path::Path) {
+    let result = event_records(path).map(|(decisions, outcomes)| {
+        let latest_by_decision = latest_outcomes(&outcomes);
+        let mut values = std::collections::BTreeMap::<String, Vec<(f64,f64)>>::new();
+        for d in &decisions { if let Some(o) = latest_by_decision.get(d.event.id.as_str()) {
+            for (metric,predicted) in &d.predicted_outcome.metrics { if let Some(actual) = o.actual_outcome.metrics.get(metric) { values.entry(metric.clone()).or_default().push((*predicted,*actual)); } }
+        }}
+        let metrics: serde_json::Map<String, serde_json::Value> = values.into_iter().map(|(metric,pairs)| {
+            let count=pairs.len(); let mae=pc_core::json::round3(pairs.iter().map(|(p,a)|(p-a).abs()).sum::<f64>() / count as f64);
+            (metric, serde_json::json!({"count":count,"mean_absolute_error":mae,"status":"measured"}))
+        }).collect();
+        serde_json::json!({"metrics":metrics})
+    });
+    print_event_report(result);
+}
+
+fn print_event_report(result: Result<serde_json::Value, pc_store::LoadError>) {
+    match result {
+        Ok(value) => println!("{}", serde_json::to_string_pretty(&value).unwrap()),
+        Err(error) => {
+            eprintln!("error[E000]: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Plan id for a fresh scaffold: the target directory's name, sanitized
 /// to a stable id (`cargo init` names the package after the directory).
 /// Falls back to `my-plan` for `.`, `/`, and names with no usable characters.

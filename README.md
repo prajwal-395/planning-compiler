@@ -80,6 +80,9 @@ pc record <evidence.json> [path]  # append one observation to evidence.jsonl
 pc decision <event.json> [path]  # append one decision and its prediction to decisions.jsonl
 pc outcome <event.json> [path]  # append one observed result to outcomes.jsonl
 pc decisions [path] / pc outcomes [path]  # print recorded events as JSON
+pc evaluate [--decision id] [path]  # initial -> recommendation -> final -> outcome per decision
+pc metrics [path] / pc calibration [path]  # classification counts / prediction error, latest outcome per decision
+pc history [path]  # all decision and outcome events in time order
 pc frontier [path]  # rank unresolved work (P8)
 pc impact <change.json> [path]  # preview a hypothetical change (P9)
 pc diff <a> <b>    # compare two plans: structure, selection, totals (P9)

@@ -917,6 +917,7 @@ name = "pc-cli"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "chrono",
  "clap",
  "insta",
  "pc-adapter-beads",

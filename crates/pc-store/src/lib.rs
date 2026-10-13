@@ -350,6 +350,15 @@ pub fn append_decision(
             "compiler recommendation is not listed in alternatives",
         ));
     }
+    if event
+        .initial_decision
+        .as_deref()
+        .is_some_and(|initial| !ids.contains(initial))
+    {
+        return Err(event_error(
+            "initial decision is not listed in alternatives",
+        ));
+    }
     append_event(plan_file, "decisions.jsonl", &event.event.id, event)
 }
 
@@ -362,14 +371,11 @@ pub fn append_outcome(plan_file: &Path, event: &OutcomeEvent) -> Result<(PathBuf
     {
         return Err(event_error("outcome references an unknown decision ID"));
     }
-    if event.evaluation_status.trim().is_empty()
-        || event
-            .confidence
-            .is_some_and(|c| !c.is_finite() || !(0.0..=1.0).contains(&c))
+    if event
+        .confidence
+        .is_some_and(|c| !c.is_finite() || !(0.0..=1.0).contains(&c))
     {
-        return Err(event_error(
-            "outcome status must be non-empty and confidence must be in [0, 1]",
-        ));
+        return Err(event_error("outcome confidence must be in [0, 1]"));
     }
     append_event(plan_file, "outcomes.jsonl", &event.event.id, event)
 }

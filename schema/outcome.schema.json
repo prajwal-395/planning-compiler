@@ -2,6 +2,53 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "EvaluationStatus": {
+      "description": "How a compiler recommendation affected a planning decision.",
+      "oneOf": [
+        {
+          "description": "The compiler supported the initial decision.",
+          "enum": [
+            "confirmed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The compiler led to a different decision.",
+          "enum": [
+            "changed"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The compiler identified a missed issue.",
+          "enum": [
+            "corrected"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The compiler identified uncertainty requiring research.",
+          "enum": [
+            "investigated"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The recommendation was unsuitable.",
+          "enum": [
+            "rejected"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "There is insufficient evidence to assess value.",
+          "enum": [
+            "inconclusive"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "OutcomeSummary": {
       "additionalProperties": false,
       "description": "A predicted or observed outcome summary, kept distinct by its enclosing event.",
@@ -24,6 +71,32 @@
         "description"
       ],
       "type": "object"
+    },
+    "Usefulness": {
+      "description": "Whether using a compiler recommendation helped, independent of its [`EvaluationStatus`]: a confirmation can be useless and a change harmful.",
+      "oneOf": [
+        {
+          "description": "Using the recommendation improved the outcome or the decision.",
+          "enum": [
+            "useful"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Using the recommendation made no material difference.",
+          "enum": [
+            "neutral"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Using the recommendation made the outcome worse.",
+          "enum": [
+            "harmful"
+          ],
+          "type": "string"
+        }
+      ]
     }
   },
   "description": "An observed result linked to a prior decision.",
@@ -57,8 +130,12 @@
       "type": "string"
     },
     "evaluation_status": {
-      "description": "Evaluation status such as `confirmed`, `inconclusive`, or `rejected`.",
-      "type": "string"
+      "allOf": [
+        {
+          "$ref": "#/definitions/EvaluationStatus"
+        }
+      ],
+      "description": "How the compiler's recommendation affected the decision."
     },
     "id": {
       "description": "Stable event identifier supplied by the recorder.",
@@ -89,6 +166,18 @@
     "timestamp": {
       "description": "RFC 3339 event timestamp.",
       "type": "string"
+    },
+    "usefulness": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Usefulness"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Whether using the recommendation helped, assessed independently of `evaluation_status`; absent when not assessed."
     }
   },
   "required": [

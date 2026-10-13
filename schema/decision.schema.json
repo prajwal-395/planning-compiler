@@ -92,6 +92,14 @@
       "description": "Stable event identifier supplied by the recorder.",
       "type": "string"
     },
+    "initial_decision": {
+      "default": null,
+      "description": "Alternative the planner intended before seeing the compiler recommendation, when it was recorded.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "objective": {
       "description": "Objective the decision addresses.",
       "type": "string"

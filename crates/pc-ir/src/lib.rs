@@ -485,6 +485,10 @@ pub struct DecisionEvent {
     pub alternatives: Vec<DecisionAlternative>,
     /// Selected alternative identifier.
     pub selected_alternative: String,
+    /// Alternative the planner intended before seeing the compiler
+    /// recommendation, when it was recorded.
+    #[serde(default)]
+    pub initial_decision: Option<String>,
     /// Compiler recommendation, if one was made.
     pub compiler_recommendation: Option<String>,
     /// Explanation of who or what made the final decision.
@@ -514,8 +518,70 @@ pub struct OutcomeEvent {
     pub actual_outcome: OutcomeSummary,
     /// Confidence in the evaluation, when known, in `[0, 1]`.
     pub confidence: Option<f64>,
-    /// Evaluation status such as `confirmed`, `inconclusive`, or `rejected`.
-    pub evaluation_status: String,
+    /// How the compiler's recommendation affected the decision.
+    pub evaluation_status: EvaluationStatus,
+    /// Whether using the recommendation helped, assessed independently of
+    /// `evaluation_status`; absent when not assessed.
+    #[serde(default)]
+    pub usefulness: Option<Usefulness>,
+}
+
+/// How a compiler recommendation affected a planning decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EvaluationStatus {
+    /// The compiler supported the initial decision.
+    Confirmed,
+    /// The compiler led to a different decision.
+    Changed,
+    /// The compiler identified a missed issue.
+    Corrected,
+    /// The compiler identified uncertainty requiring research.
+    Investigated,
+    /// The recommendation was unsuitable.
+    Rejected,
+    /// There is insufficient evidence to assess value.
+    Inconclusive,
+}
+
+impl EvaluationStatus {
+    /// Report label for this classification.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Confirmed => "Confirmed",
+            Self::Changed => "Changed",
+            Self::Corrected => "Corrected",
+            Self::Investigated => "Investigated",
+            Self::Rejected => "Rejected",
+            Self::Inconclusive => "Inconclusive",
+        }
+    }
+}
+
+/// Whether using a compiler recommendation helped, independent of its
+/// [`EvaluationStatus`]: a confirmation can be useless and a change harmful.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Usefulness {
+    /// Using the recommendation improved the outcome or the decision.
+    Useful,
+    /// Using the recommendation made no material difference.
+    Neutral,
+    /// Using the recommendation made the outcome worse.
+    Harmful,
+}
+
+impl Usefulness {
+    /// Report label for this assessment, matching its serialized form.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Useful => "useful",
+            Self::Neutral => "neutral",
+            Self::Harmful => "harmful",
+        }
+    }
 }
 
 /// Check a typed evidence basis: `absolute` for ground-truth measurements,

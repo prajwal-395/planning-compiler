@@ -52,13 +52,13 @@ fn decision_and_outcome_commands_append_and_read_distinct_records() {
         "id":"d-1", "timestamp":"2026-10-13T12:00:00Z", "plan_revision":"r1", "source":"test", "schema_version":1,
         "tasks":["render"], "capabilities":[], "objective":"Improve rendering", "project_revision":"abc",
         "alternatives":[{"id":"batch","description":"Batch"},{"id":"current","description":"Current"}], "selected_alternative":"batch",
-        "compiler_recommendation":"batch", "decision_provenance":"accepted recommendation", "supporting_evidence":[],
+        "initial_decision":"current", "compiler_recommendation":"batch", "decision_provenance":"accepted recommendation", "supporting_evidence":[],
         "constraints":[], "predicted_outcome":{"description":"20 min","metrics":{"duration_minutes":20.0}}, "baseline_alternative":"current"
     });
     let outcome = serde_json::json!({
         "id":"o-1", "timestamp":"2026-10-13T13:00:00Z", "plan_revision":"r1", "source":"benchmark", "schema_version":1,
         "tasks":["render"], "capabilities":[], "decision_id":"d-1",
-        "actual_outcome":{"description":"24 min","metrics":{"duration_minutes":24.0}}, "confidence":0.9, "evaluation_status":"confirmed"
+        "actual_outcome":{"description":"24 min","metrics":{"duration_minutes":24.0}}, "confidence":0.9, "evaluation_status":"confirmed", "usefulness":"neutral"
     });
     let decision_path = event_dir.join("decision.json");
     let outcome_path = event_dir.join("outcome.json");
@@ -100,6 +100,193 @@ fn decision_and_outcome_commands_append_and_read_distinct_records() {
         rows[0]["actual_outcome"]["metrics"]["duration_minutes"],
         24.0
     );
+    let evaluated = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("evaluate")
+        .arg("--decision")
+        .arg("d-1")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evaluated: serde_json::Value = serde_json::from_slice(&evaluated).unwrap();
+    assert_eq!(evaluated["evaluations"][0]["classification"], "Confirmed");
+    assert_eq!(evaluated["evaluations"][0]["usefulness"], "neutral");
+    assert_eq!(evaluated["evaluations"][0]["initial_decision"], "current");
+    assert_eq!(
+        evaluated["evaluations"][0]["recommendation_matches_initial"],
+        false
+    );
+    assert_eq!(
+        evaluated["evaluations"][0]["final_matches_recommendation"],
+        true
+    );
+    assert_eq!(evaluated["evaluations"][0]["final_matches_initial"], false);
+    assert_eq!(
+        evaluated["evaluations"][0]["comparisons"][0]["status"],
+        "measured"
+    );
+    assert_eq!(
+        evaluated["evaluations"][0]["counterfactual"]["status"],
+        "estimated"
+    );
+    // A bare path with no --decision flag evaluates every decision: the
+    // path must not be mistaken for a decision id (regression on the old
+    // two-positional `evaluate [id] [path]` shape).
+    let evaluated_all = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("evaluate")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let evaluated_all: serde_json::Value = serde_json::from_slice(&evaluated_all).unwrap();
+    assert_eq!(evaluated_all["evaluations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        evaluated_all["evaluations"][0]["planning_cost"]["status"],
+        "unknown"
+    );
+    let metrics = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("metrics")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let metrics: serde_json::Value = serde_json::from_slice(&metrics).unwrap();
+    assert_eq!(metrics["classifications"]["Confirmed"], 1);
+    let calibration = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("calibration")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let calibration: serde_json::Value = serde_json::from_slice(&calibration).unwrap();
+    assert_eq!(
+        calibration["metrics"]["duration_minutes"]["mean_absolute_error"],
+        4.0
+    );
+    let history = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("history")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let history: serde_json::Value = serde_json::from_slice(&history).unwrap();
+    assert_eq!(history["history"].as_array().unwrap().len(), 2);
+    // A second outcome for the same decision re-evaluates it: metrics must
+    // count the decision once (latest wins) while still counting both
+    // outcome events. Counting outcomes would report Confirmed 1 and
+    // Rejected 1 for a single decision.
+    let outcome2 = serde_json::json!({
+        "id":"o-2", "timestamp":"2026-10-13T14:00:00Z", "plan_revision":"r1", "source":"benchmark", "schema_version":1,
+        "tasks":["render"], "capabilities":[], "decision_id":"d-1",
+        "actual_outcome":{"description":"26 min","metrics":{"duration_minutes":26.0}}, "confidence":0.5, "evaluation_status":"rejected"
+    });
+    let outcome2_path = event_dir.join("outcome2.json");
+    std::fs::write(&outcome2_path, serde_json::to_vec(&outcome2).unwrap()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("outcome")
+        .arg(&outcome2_path)
+        .arg(&root)
+        .assert()
+        .success();
+    let metrics2 = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("metrics")
+        .arg(&root)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let metrics2: serde_json::Value = serde_json::from_slice(&metrics2).unwrap();
+    assert_eq!(metrics2["decision_count"], 1);
+    assert_eq!(metrics2["outcome_count"], 2);
+    assert_eq!(metrics2["evaluated_decision_count"], 1);
+    assert_eq!(metrics2["classifications"]["Rejected"], 1);
+    assert!(metrics2["classifications"].get("Confirmed").is_none());
+    assert_eq!(metrics2["usefulness"]["not-assessed"], 1);
+    // o-3 is logged last and its local time reads later than o-2's, but
+    // 20:30+07:00 is 13:30Z, before o-2 at 14:00Z: o-2 stays the latest
+    // outcome everywhere, and history orders by instant, not by text.
+    let outcome3 = serde_json::json!({
+        "id":"o-3", "timestamp":"2026-10-13T20:30:00+07:00", "plan_revision":"r1", "source":"benchmark", "schema_version":1,
+        "tasks":["render"], "capabilities":[], "decision_id":"d-1",
+        "actual_outcome":{"description":"30 min","metrics":{"duration_minutes":30.0}}, "confidence":0.5, "evaluation_status":"changed"
+    });
+    let outcome3_path = event_dir.join("outcome3.json");
+    std::fs::write(&outcome3_path, serde_json::to_vec(&outcome3).unwrap()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("outcome")
+        .arg(&outcome3_path)
+        .arg(&root)
+        .assert()
+        .success();
+    let report = |command: &str| -> serde_json::Value {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg(command)
+            .arg(&root)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).unwrap()
+    };
+    let evaluated3 = report("evaluate");
+    assert_eq!(evaluated3["evaluations"][0]["classification"], "Rejected");
+    assert_eq!(
+        evaluated3["evaluations"][0]["comparisons"][0]["actual"],
+        26.0
+    );
+    assert_eq!(report("metrics")["classifications"]["Rejected"], 1);
+    let calibration3 = report("calibration");
+    assert_eq!(calibration3["metrics"]["duration_minutes"]["count"], 1);
+    assert_eq!(
+        calibration3["metrics"]["duration_minutes"]["mean_absolute_error"],
+        6.0
+    );
+    let order: Vec<_> = report("history")["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["event"]["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(order, ["d-1", "o-1", "o-3", "o-2"]);
+    // A misspelled status is refused instead of silently counting as
+    // Inconclusive.
+    let misspelled = serde_json::json!({
+        "id":"o-4", "timestamp":"2026-10-13T15:00:00Z", "plan_revision":"r1", "source":"benchmark", "schema_version":1,
+        "tasks":["render"], "capabilities":[], "decision_id":"d-1",
+        "actual_outcome":{"description":"x","metrics":{}}, "confidence":null, "evaluation_status":"confirm"
+    });
+    let misspelled_path = event_dir.join("outcome4.json");
+    std::fs::write(&misspelled_path, serde_json::to_vec(&misspelled).unwrap()).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("outcome")
+        .arg(&misspelled_path)
+        .arg(&root)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unknown variant `confirm`"));
+    assert_eq!(report("metrics")["outcome_count"], 3);
     std::fs::remove_dir_all(root).unwrap();
 }
 
