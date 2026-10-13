@@ -4328,6 +4328,93 @@ effort buys 20.000 fewer minutes."
     );
 }
 
+/// PC-08: the single-Resolve-instance example serializes exclusive holders,
+/// names the bottleneck, and previews contention relief through impact.
+/// Fails when the schedule ignores capacities (makespan 30, no
+/// resource-limited row) or the alternative cannot relieve it.
+#[test]
+fn resource_contention_example_serializes_and_names_the_bottleneck() {
+    let compile = |objective: &[&str]| {
+        let output = pc_command()
+            .arg("compile")
+            .arg(
+                workspace_root()
+                    .join("examples")
+                    .join("resource-contention")
+                    .join("plan.toml"),
+            )
+            .arg("--json")
+            .args(objective)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let effort = compile(&[]);
+    assert_eq!(effort["makespan_minutes"], 60.0);
+    assert_eq!(effort["selection_status"], "optimal");
+    let limited: Vec<&serde_json::Value> = effort["trace"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["decision"] == "resource-limited")
+        .collect();
+    assert_eq!(limited.len(), 1);
+    assert!(
+        limited[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("`resolve` (capacity 1)")
+    );
+
+    let fast = compile(&["--objective", "makespan"]);
+    assert_eq!(fast["selection_objective"], "makespan");
+    assert!(
+        fast["selection_explanation"]
+            .as_str()
+            .unwrap()
+            .starts_with("Minimized resource-aware")
+    );
+
+    // Accepting the native-grade alternative relieves the Resolve queue:
+    // grade-a and the native grade run side by side, makespan 60 -> 30.
+    let dir = scratch_dir("resource-impact");
+    std::fs::copy(
+        workspace_root().join("examples/resource-contention/plan.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let change = dir.join("change.json");
+    std::fs::write(&change, r#"{"accept_method": ["grade-b-native"]}"#).unwrap();
+    let output = pc_command()
+        .current_dir(workspace_root())
+        .arg("impact")
+        .arg(&change)
+        .arg(dir.join("plan.toml"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["baseline"]["makespan_minutes"],
+        serde_json::json!(60.0)
+    );
+    assert_eq!(
+        report["revised"]["makespan_minutes"],
+        serde_json::json!(30.0)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// `pc capabilities` lists every capability with version, provider, source
 /// and evidence coverage, flagging those with no measurement evidence.
 #[test]

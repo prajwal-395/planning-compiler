@@ -51,7 +51,7 @@ pub struct PlanDoc {
     /// Declared artifact types. Defaults to empty.
     #[serde(default)]
     pub artifact: Vec<ArtifactDecl>,
-    /// Named capacities (reported against, never scheduled under, in v0).
+    /// Named capacities that P6/P7 schedule capability holders against.
     #[serde(default)]
     pub resource: Vec<ResourceDecl>,
     /// Needs: what must be true or produced.
@@ -224,15 +224,16 @@ pub struct ArtifactDecl {
     pub fields: Vec<String>,
 }
 
-/// A named capacity, e.g. `"gpu-1"`. v0 reports usage only.
+/// A named capacity, e.g. `"resolve"` with capacity 1 (see `docs/ir.md`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceDecl {
     /// Resource name.
     pub name: String,
-    /// Available capacity in `unit`.
+    /// Concurrent instances (floored, minimum one slot); must be finite and
+    /// non-negative.
     pub capacity: f64,
-    /// Capacity unit, free-form in v0.
+    /// Capacity unit, free-form and informational (scheduling ignores it).
     #[serde(default)]
     pub unit: String,
 }

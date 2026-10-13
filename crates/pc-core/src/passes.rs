@@ -864,8 +864,26 @@ fn check_estimates(ctx: &mut Ctx) {
     }
 }
 
-/// E012: capability resources name declared resources.
+/// E012: capability resources name declared resources, and declared
+/// capacities are finite and non-negative (P6/P7 schedule against them).
 fn check_resources(ctx: &mut Ctx) {
+    let mut resources: Vec<pc_ir::ResourceDecl> = ctx.doc.resource.to_vec();
+    resources.sort_by(|a, b| a.name.cmp(&b.name));
+    for r in resources {
+        if !r.capacity.is_finite() || r.capacity < 0.0 {
+            let subject = format!("resource:{}", r.name);
+            let line = ctx.locate_id(&r.name);
+            ctx.error(
+                "E012",
+                format!(
+                    "resource `{}` capacity must be a finite non-negative number, got {}",
+                    r.name, r.capacity
+                ),
+                line,
+                subject,
+            );
+        }
+    }
     let mut refs: Vec<(String, String, String)> = Vec::new();
     for c in &ctx.doc.capability {
         for r in &c.resources {

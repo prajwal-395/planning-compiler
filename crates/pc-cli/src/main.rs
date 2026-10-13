@@ -828,6 +828,13 @@ fn run_compile(
     if !critical.is_empty() {
         println!("critical tasks: {}", critical.join(", "));
     }
+    for row in result
+        .trace
+        .iter()
+        .filter(|row| row.decision == "resource-limited")
+    {
+        println!("resource-limited: {}", row.reason);
+    }
     for (task, timing) in timed {
         println!(
             "slack {task}: {:.3} minutes{}",

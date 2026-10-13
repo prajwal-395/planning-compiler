@@ -387,6 +387,21 @@ fn e012_reports_undeclared_resource() {
 }
 
 #[test]
+fn e012_reports_invalid_resource_capacity() {
+    // P6/P7 reject a negative or non-finite capacity, so check must too.
+    for capacity in [-1.0, f64::NAN] {
+        let (text, mut doc) = valid_doc();
+        doc.resource.push(ResourceDecl {
+            name: "resolve".to_string(),
+            capacity,
+            unit: "instances".to_string(),
+        });
+        let report = check("plan.toml", &text, &mut doc, None);
+        assert!(codes(&report).contains(&"E012".to_string()), "{capacity}");
+    }
+}
+
+#[test]
 fn e013_reports_invoke_without_capability() {
     let (text, mut doc) = valid_doc();
     doc.method.push(Method {

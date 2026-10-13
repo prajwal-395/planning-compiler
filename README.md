@@ -33,9 +33,9 @@ v0 specifically does not:
   `pc accept`/`pc reject` and read slices with `pc context`; the core is
   model-free),
 - execute anything or own task status/assignment (`pc sync` only mirrors
-  explicitly mapped external lifecycle state),
-- model people (`docs/adr/0003-no-human-executors.md`),
-- schedule resource capacity.
+  explicitly mapped external lifecycle state; resource caps shape the
+  planned makespan only, running work stays with the execution stack),
+- model people (`docs/adr/0003-no-human-executors.md`).
 
 State is text files in the repo (`docs/adr/0002-text-files.md`). The repo
 is private and unlicensed pending a later decision
@@ -45,8 +45,8 @@ is private and unlicensed pending a later decision
 
 ```
 crates/pc-ir/     IR types, TOML+JSON serde, JSON Schemas (plan + patch)
-crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, P8 frontier, P9 impact/diff, step-7 proposal loop, diagnostics
-crates/pc-select/ P6 exact ILP (effort) or makespan-search method selection with greedy fallback
+crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 resource-constrained schedule, P8 frontier, P9 impact/diff, step-7 proposal loop, diagnostics
+crates/pc-select/ P6 exact ILP (effort) or resource-constrained makespan-search method selection with greedy fallback
 crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan writer, evidence JSONL append/read
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
@@ -56,6 +56,7 @@ crates/pc-mcp/    pc-mcp binary: MCP stdio server (check, compile, frontier, con
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
+examples/resource-contention/  single Resolve instance serializing exclusive holders while CI work overlaps
 examples/ren-native/  real Ren native-throughput planning cycle (plan, pending evidence, decisions)
 tests/fixtures/   golden valid plans + one negative fixture per diagnostic
 docs/             ir.md, passes.md, sync.md, evidence/ (self-plan continuous-validation log), adr/

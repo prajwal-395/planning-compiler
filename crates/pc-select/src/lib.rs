@@ -3,6 +3,15 @@
 //! Tasks are OR variables and methods are AND variables. A selected method
 //! activates each child task; each task's cost is therefore counted once even
 //! when multiple selected methods share it.
+//!
+//! Resource model (PC-08): a method lists the named resources it holds while
+//! it runs, one unit of each, and [`Constraints::capacities`] caps how many
+//! holders may overlap. Makespan selection and [`resource_constrained_schedule`]
+//! schedule leaf work against those caps with a serial schedule-generation
+//! scheme: exact over every precedence-feasible order for small graphs, a
+//! deterministic list-schedule heuristic above that (reported as
+//! `BestFound`, never `Optimal`). Total-effort selection
+//! ignores resources; only time is affected, never cost.
 
 use good_lp::{
     Expression, ProblemVariables, ResolutionError, Solution, SolutionStatus, SolverModel, Variable,
@@ -35,6 +44,10 @@ pub struct Method {
     /// Sibling order edges `(from, to)` between required children: `to`
     /// starts only after `from` finishes.
     pub order_edges: Vec<(String, String)>,
+    /// Named resources this method holds while it runs, one unit of each.
+    /// Leaf methods inherit their capability's resources; decompose methods
+    /// hold none unless set explicitly.
+    pub resources: Vec<String>,
 }
 
 /// Additive objective weights and linear hard upper bounds.
@@ -46,6 +59,10 @@ pub struct Constraints {
     pub limits: BTreeMap<String, f64>,
     /// Candidate `(task, method)` pairs excluded by hard constraints.
     pub forbidden_methods: BTreeSet<(String, String)>,
+    /// Available capacity per named resource: how many holders may overlap.
+    /// Values are instance counts (`floor`ed, minimum one slot); resources
+    /// absent here are unlimited. Values must be finite and non-negative.
+    pub capacities: BTreeMap<String, f64>,
 }
 
 /// Reported quality of a selected solution.
@@ -87,7 +104,8 @@ pub struct Selection {
 pub enum Objective {
     /// Minimize the weighted sum of selected work, counting shared tasks once.
     TotalEffort,
-    /// Minimize dependency-aware completion time using `duration_minutes`.
+    /// Minimize resource-constrained completion time using
+    /// `duration_minutes` and [`Constraints::capacities`].
     Makespan,
 }
 
@@ -280,10 +298,11 @@ pub fn select(
     }
 }
 
-/// Select using either additive total effort or dependency-aware makespan.
+/// Select using either additive total effort or resource-constrained makespan.
 /// Makespan selection searches method assignments of activated tasks exactly
 /// until the time budget expires; a feasible greedy selection is retained as
-/// a fallback.
+/// a fallback. Each candidate is scored with the resource-constrained
+/// schedule, so contention for a limited resource can flip the winner.
 pub fn select_with_objective(
     tasks: &[Task],
     root: &str,
@@ -316,22 +335,30 @@ pub fn select_with_objective(
         fastest: None,
         cheapest: None,
         stopped: false,
+        heuristic: false,
     };
     search.run(0);
     let MakespanSearch {
         fastest,
         cheapest,
         stopped,
+        heuristic,
         ..
     } = search;
+    let heuristic = heuristic || greedy.as_ref().is_some_and(|g| !g.exact);
     let cheapest = [cheapest, greedy.clone()]
         .into_iter()
         .flatten()
         .reduce(|a, b| if b.cheaper_than(&a) { b } else { a });
-    let (chosen, optimality) = settle(fastest, greedy, stopped)?;
+    let (chosen, optimality) = settle(fastest, greedy, stopped, heuristic)?;
     let cheapest = cheapest.expect("a chosen candidate exists");
+    let kind = if constraints.capacities.is_empty() {
+        "dependency-aware"
+    } else {
+        "resource-aware"
+    };
     let mut explanation = format!(
-        "Minimized dependency-aware completion time to {:.3} minutes at weighted effort {:.3}",
+        "Minimized {kind} completion time to {:.3} minutes at weighted effort {:.3}",
         chosen.makespan, chosen.objective
     );
     let label = if stopped {
@@ -365,14 +392,16 @@ pub fn select_with_objective(
 }
 
 /// Pick the search incumbent or the greedy fallback, labeled by whether the
-/// search finished.
+/// search finished and every candidate was scored by the exact schedule.
 fn settle(
     fastest: Option<Candidate>,
     greedy: Option<Candidate>,
     stopped: bool,
+    heuristic: bool,
 ) -> Result<(Candidate, Optimality), SelectError> {
     match (fastest, greedy) {
-        (Some(best), _) if !stopped => Ok((best, Optimality::Optimal)),
+        (Some(best), _) if !stopped && !heuristic => Ok((best, Optimality::Optimal)),
+        (Some(best), _) if !stopped => Ok((best, Optimality::BestFound { gap_percent: None })),
         (Some(best), Some(g)) if g.faster_than(&best) => Ok((g, Optimality::GreedyOnly)),
         (Some(best), _) => Ok((best, Optimality::BestFound { gap_percent: None })),
         (None, Some(g)) if stopped => Ok((g, Optimality::GreedyOnly)),
@@ -388,6 +417,8 @@ struct Candidate {
     totals: BTreeMap<String, f64>,
     objective: f64,
     makespan: f64,
+    /// Whether the makespan came from the exact schedule search.
+    exact: bool,
 }
 
 impl Candidate {
@@ -419,6 +450,7 @@ struct MakespanSearch<'a> {
     fastest: Option<Candidate>,
     cheapest: Option<Candidate>,
     stopped: bool,
+    heuristic: bool,
 }
 
 impl MakespanSearch<'_> {
@@ -463,6 +495,7 @@ impl MakespanSearch<'_> {
         let Some(found) = candidate(self.by_id, self.constraints, &self.selected, self.root) else {
             return;
         };
+        self.heuristic |= !found.exact;
         if self
             .fastest
             .as_ref()
@@ -501,7 +534,7 @@ fn candidate(
     {
         return None;
     }
-    let makespan = schedule_makespan(by_id, methods, root)?;
+    let schedule = schedule_makespan(by_id, methods, root, &constraints.capacities)?;
     let objective = totals
         .iter()
         .map(|(m, v)| constraints.weights.get(m).copied().unwrap_or(0.0) * v)
@@ -510,7 +543,8 @@ fn candidate(
         methods: methods.clone(),
         totals,
         objective,
-        makespan,
+        makespan: schedule.makespan,
+        exact: schedule.exact,
     })
 }
 
@@ -522,51 +556,317 @@ fn chosen_method<'a>(
     by_id.get(task)?.methods.iter().find(|m| m.id == method_id)
 }
 
-/// Critical-path makespan with P7's leaf semantics. A task with a chosen
-/// method is a node when that method has no children or its own
-/// `duration_minutes`; a node runs after its children's nodes. A sibling
-/// order edge `from -> to` makes every node of `to` that is not also a
-/// node of `from` wait for `from`'s nodes, with a node-less `from` relaying
-/// whatever must finish before it. `None` on a precedence cycle.
+/// Critical-path makespan with P7's leaf semantics, extended with resource
+/// caps. A task with a chosen method is a node when that method has no
+/// children or its own `duration_minutes`; a node runs after its children's
+/// nodes. A sibling order edge `from -> to` makes every node of `to` that is
+/// not also a node of `from` wait for `from`'s nodes, with a node-less `from`
+/// relaying whatever must finish before it. Nodes holding a limited resource
+/// additionally wait for a free slot (one unit each, `floor` of the declared
+/// capacity, minimum one). `None` on a precedence cycle.
 fn schedule_makespan(
     by_id: &BTreeMap<&str, &Task>,
     chosen: &BTreeMap<String, String>,
     root: &str,
-) -> Option<f64> {
+    capacities: &BTreeMap<String, f64>,
+) -> Option<ResourceSchedule> {
     let mut schedule = Schedule {
         by_id,
         chosen,
         leaves: BTreeMap::new(),
         durations: Vec::new(),
+        demands: Vec::new(),
+        keys: Vec::new(),
         edges: BTreeSet::new(),
     };
     schedule.leaves(root)?;
     let Schedule {
-        durations, edges, ..
+        durations,
+        demands,
+        keys,
+        edges,
+        ..
     } = schedule;
-    let mut successors = vec![Vec::new(); durations.len()];
-    let mut indegree = vec![0usize; durations.len()];
-    for &(from, to) in &edges {
-        successors[from].push(to);
-        indegree[to] += 1;
+    resource_constrained_schedule(&durations, &edges, &demands, &keys, capacities)
+}
+
+/// One resource-constrained schedule: a start time per node, the span it
+/// reaches, and whether that span is proved minimal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResourceSchedule {
+    /// Start time of each node, indexed like the input durations.
+    pub starts: Vec<f64>,
+    /// Latest finish over all nodes.
+    pub makespan: f64,
+    /// `false` when the graph was too large for the exact order search and
+    /// the span comes from the list-schedule heuristic.
+    pub exact: bool,
+}
+
+/// Resource-constrained schedule over one duration per node, the precedence
+/// edges between them, one demanded-resource set per node, one stable key
+/// per node (ties break by key, so callers numbering the same graph
+/// differently get the same schedule), and the available capacity per
+/// resource (absent resources are unlimited). Uses the serial
+/// schedule-generation scheme: exact over every precedence-feasible order for
+/// small graphs (`EXACT_SCHEDULE_NODES` or fewer nodes), a
+/// deterministic longest-tail-first list schedule beyond that. `None` on a
+/// precedence cycle or an out-of-range edge.
+///
+/// Capacities are instance counts: concurrent holders are capped at
+/// `floor(capacity)` with a minimum of one slot, so a fractional declaration
+/// still serializes exclusive holders rather than bricking the schedule.
+pub fn resource_constrained_schedule(
+    durations: &[f64],
+    edges: &BTreeSet<(usize, usize)>,
+    demands: &[BTreeSet<String>],
+    keys: &[String],
+    capacities: &BTreeMap<String, f64>,
+) -> Option<ResourceSchedule> {
+    let n = durations.len();
+    let mut pred = vec![Vec::new(); n];
+    let mut succ = vec![Vec::new(); n];
+    for &(from, to) in edges {
+        if from >= n || to >= n {
+            return None;
+        }
+        succ[from].push(to);
+        pred[to].push(from);
     }
-    let mut ready: Vec<_> = (0..durations.len()).filter(|&n| indegree[n] == 0).collect();
-    let mut start = vec![0.0f64; durations.len()];
-    let mut makespan = 0.0f64;
+    let slots: BTreeMap<String, usize> = capacities
+        .iter()
+        .map(|(name, cap)| (name.clone(), cap.floor().max(1.0) as usize))
+        .collect();
+    let order = list_order(durations, &pred, &succ, keys)?;
+    let (starts, makespan) = serial_schedule(&order, durations, &pred, demands, &slots);
+    let mut best = ResourceSchedule {
+        starts,
+        makespan,
+        exact: true,
+    };
+    // Without a limited holder precedence alone decides, and any serial
+    // order already yields the exact longest path.
+    let limited = (0..n).any(|i| {
+        demands
+            .get(i)
+            .is_some_and(|need| need.iter().any(|r| slots.contains_key(r.as_str())))
+    });
+    if !limited {
+        return Some(best);
+    }
+    if n > EXACT_SCHEDULE_NODES {
+        best.exact = false;
+        return Some(best);
+    }
+    let mut by_key: Vec<usize> = (0..n).collect();
+    by_key.sort_by(|&a, &b| keys.get(a).cmp(&keys.get(b)).then(a.cmp(&b)));
+    let mut indegree: Vec<usize> = pred.iter().map(Vec::len).collect();
+    let mut order = Vec::with_capacity(n);
+    enumerate_orders(
+        &mut order,
+        &mut indegree,
+        &by_key,
+        &succ,
+        durations,
+        &pred,
+        demands,
+        &slots,
+        &mut best,
+    );
+    Some(best)
+}
+
+/// Above this many schedulable nodes the exact order enumeration yields to a
+/// deterministic list schedule; small planning graphs stay exact.
+const EXACT_SCHEDULE_NODES: usize = 8;
+
+/// Depth-first enumeration of precedence-feasible orders, scoring each with
+/// the serial scheme and keeping a strictly shorter one. Ready nodes visit
+/// in key order so the search is deterministic.
+#[allow(clippy::too_many_arguments)]
+fn enumerate_orders(
+    order: &mut Vec<usize>,
+    indegree: &mut [usize],
+    by_key: &[usize],
+    succ: &[Vec<usize>],
+    durations: &[f64],
+    pred: &[Vec<usize>],
+    demands: &[BTreeSet<String>],
+    slots: &BTreeMap<String, usize>,
+    best: &mut ResourceSchedule,
+) {
+    if order.len() == durations.len() {
+        let (starts, makespan) = serial_schedule(order, durations, pred, demands, slots);
+        if makespan < best.makespan - 1e-9 {
+            best.starts = starts;
+            best.makespan = makespan;
+        }
+        return;
+    }
+    let ready: Vec<usize> = by_key
+        .iter()
+        .copied()
+        .filter(|&i| indegree[i] == 0 && !order.contains(&i))
+        .collect();
+    for node in ready {
+        for &to in &succ[node] {
+            indegree[to] -= 1;
+        }
+        order.push(node);
+        enumerate_orders(
+            order, indegree, by_key, succ, durations, pred, demands, slots, best,
+        );
+        order.pop();
+        for &to in &succ[node] {
+            indegree[to] += 1;
+        }
+    }
+}
+
+/// Deterministic precedence-feasible order: among ready nodes, the longest
+/// remaining path (own duration plus the longest successor chain) first,
+/// ties by key then index. `None` on a precedence cycle.
+fn list_order(
+    durations: &[f64],
+    pred: &[Vec<usize>],
+    succ: &[Vec<usize>],
+    keys: &[String],
+) -> Option<Vec<usize>> {
+    let n = durations.len();
+    let mut outdegree: Vec<usize> = succ.iter().map(Vec::len).collect();
+    let mut sinks: Vec<usize> = (0..n).filter(|&i| outdegree[i] == 0).collect();
+    let mut tail = vec![0.0f64; n];
     let mut seen = 0;
-    while let Some(node) = ready.pop() {
+    while let Some(node) = sinks.pop() {
         seen += 1;
-        let finish = start[node] + durations[node];
-        makespan = makespan.max(finish);
-        for &to in &successors[node] {
-            start[to] = start[to].max(finish);
+        tail[node] += durations[node];
+        for &from in &pred[node] {
+            tail[from] = tail[from].max(tail[node]);
+            outdegree[from] -= 1;
+            if outdegree[from] == 0 {
+                sinks.push(from);
+            }
+        }
+    }
+    if seen != n {
+        return None;
+    }
+    let mut indegree: Vec<usize> = pred.iter().map(Vec::len).collect();
+    let mut ready: Vec<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+    let mut order = Vec::with_capacity(n);
+    while !ready.is_empty() {
+        let pick = (0..ready.len())
+            .min_by(|&a, &b| {
+                let (a, b) = (ready[a], ready[b]);
+                tail[b]
+                    .total_cmp(&tail[a])
+                    .then(keys.get(a).cmp(&keys.get(b)))
+                    .then(a.cmp(&b))
+            })
+            .expect("ready is non-empty");
+        let node = ready.swap_remove(pick);
+        order.push(node);
+        for &to in &succ[node] {
             indegree[to] -= 1;
             if indegree[to] == 0 {
                 ready.push(to);
             }
         }
     }
-    (seen == durations.len()).then_some(makespan)
+    Some(order)
+}
+
+/// Serial schedule-generation scheme for one precedence-feasible order: each
+/// node starts at the earliest time its predecessors have finished and a
+/// slot on every demanded resource is free for its whole duration.
+/// Zero-duration nodes hold nothing and start when ready. Returns the start
+/// per node and the makespan.
+fn serial_schedule(
+    order: &[usize],
+    durations: &[f64],
+    pred: &[Vec<usize>],
+    demands: &[BTreeSet<String>],
+    slots: &BTreeMap<String, usize>,
+) -> (Vec<f64>, f64) {
+    let n = durations.len();
+    let mut starts = vec![0.0f64; n];
+    let mut finish = vec![0.0f64; n];
+    // Committed busy intervals per limited resource.
+    let mut busy: BTreeMap<String, Vec<(f64, f64)>> = BTreeMap::new();
+    let mut makespan = 0.0f64;
+    for &node in order {
+        let mut start = pred[node].iter().map(|&p| finish[p]).fold(0.0, f64::max);
+        let duration = durations[node];
+        if duration > 0.0 {
+            if let Some(need) = demands.get(node) {
+                start = earliest_slot(start, duration, need, slots, &busy);
+                for resource in need {
+                    if slots.contains_key(resource.as_str()) {
+                        busy.entry(resource.clone())
+                            .or_default()
+                            .push((start, start + duration));
+                    }
+                }
+            }
+        }
+        starts[node] = start;
+        finish[node] = start + duration;
+        makespan = makespan.max(finish[node]);
+    }
+    (starts, makespan)
+}
+
+/// Earliest `t >= ready` whose whole `[t, t + duration)` fits within every
+/// demanded resource's free slots: peak concurrent use over the window stays
+/// below capacity. Advances past the earliest-ending overlapping holder while
+/// any resource is full somewhere in the window.
+fn earliest_slot(
+    mut t: f64,
+    duration: f64,
+    need: &BTreeSet<String>,
+    slots: &BTreeMap<String, usize>,
+    busy: &BTreeMap<String, Vec<(f64, f64)>>,
+) -> f64 {
+    loop {
+        let end = t + duration;
+        let mut advance = None;
+        for resource in need {
+            let Some(capacity) = slots.get(resource.as_str()).copied() else {
+                continue;
+            };
+            let Some(intervals) = busy.get(resource.as_str()) else {
+                continue;
+            };
+            let overlapping: Vec<(f64, f64)> = intervals
+                .iter()
+                .copied()
+                .filter(|&(s, e)| e > t && s < end)
+                .collect();
+            // Usage only rises at a holder's start, so the peak sits at the
+            // window start or at one of those starts.
+            let peak = std::iter::once(t)
+                .chain(overlapping.iter().map(|&(s, _)| s).filter(|&s| s > t))
+                .map(|p| {
+                    overlapping
+                        .iter()
+                        .filter(|&&(s, e)| s <= p && e > p)
+                        .count()
+                })
+                .max()
+                .unwrap_or(0);
+            if peak >= capacity {
+                let earliest_end = overlapping
+                    .iter()
+                    .map(|&(_, e)| e)
+                    .fold(f64::INFINITY, f64::min);
+                advance = Some(advance.map_or(earliest_end, |a: f64| a.min(earliest_end)));
+            }
+        }
+        match advance {
+            Some(next) => t = next,
+            None => return t,
+        }
+    }
 }
 
 struct Schedule<'a, 'b> {
@@ -574,6 +874,8 @@ struct Schedule<'a, 'b> {
     chosen: &'b BTreeMap<String, String>,
     leaves: BTreeMap<String, BTreeSet<usize>>,
     durations: Vec<f64>,
+    demands: Vec<BTreeSet<String>>,
+    keys: Vec<String>,
     edges: BTreeSet<(usize, usize)>,
 }
 
@@ -608,6 +910,9 @@ impl<'a> Schedule<'a, '_> {
         if method.children.is_empty() || duration > 0.0 {
             let node = self.durations.len();
             self.durations.push(duration);
+            self.demands
+                .push(method.resources.iter().cloned().collect());
+            self.keys.push(id.to_owned());
             for &leaf in &all {
                 self.edges.insert((leaf, node));
             }
@@ -655,6 +960,18 @@ fn validate_graph(
             )));
         }
     }
+    for (resource, capacity) in &constraints.capacities {
+        if resource.is_empty() {
+            return Err(SelectError::Invalid(
+                "resource name must not be empty".into(),
+            ));
+        }
+        if !capacity.is_finite() || *capacity < 0.0 {
+            return Err(SelectError::Invalid(format!(
+                "invalid capacity for resource `{resource}`"
+            )));
+        }
+    }
     for task in by_id.values() {
         let mut ids = BTreeSet::new();
         for method in &task.methods {
@@ -668,6 +985,14 @@ fn validate_graph(
                 if !value.is_finite() || *value < 0.0 {
                     return Err(SelectError::Invalid(format!(
                         "invalid cost for `{}` metric `{metric}`",
+                        method.id
+                    )));
+                }
+            }
+            for resource in &method.resources {
+                if resource.is_empty() {
+                    return Err(SelectError::Invalid(format!(
+                        "method `{}` holds a resource with an empty name",
                         method.id
                     )));
                 }
@@ -968,6 +1293,7 @@ mod tests {
                     costs: BTreeMap::from([("cost".into(), f64::from(*cost))]),
                     children: (i+1..rows.len()).filter(|child| mask & (1 << (child - i - 1)) != 0).map(|child| format!("t{child}")).collect(),
                     order_edges: vec![],
+                    resources: vec![],
                 };
                 Task {
                 id: format!("t{i}"),
@@ -990,12 +1316,14 @@ mod tests {
                         costs: BTreeMap::new(),
                         children: vec!["a1".into(), "a2".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                     Method {
                         id: "shared".into(),
                         costs: BTreeMap::new(),
                         children: vec!["b1".into(), "b2".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                 ],
             },
@@ -1006,6 +1334,7 @@ mod tests {
                     costs: BTreeMap::from([("cost".into(), 5.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1015,6 +1344,7 @@ mod tests {
                     costs: BTreeMap::from([("cost".into(), 5.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1025,12 +1355,14 @@ mod tests {
                         costs: BTreeMap::new(),
                         children: vec!["common".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                     Method {
                         id: "fallback1".into(),
                         costs: BTreeMap::from([("cost".into(), 5.0)]),
                         children: vec![],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                 ],
             },
@@ -1042,12 +1374,14 @@ mod tests {
                         costs: BTreeMap::new(),
                         children: vec!["common".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                     Method {
                         id: "fallback2".into(),
                         costs: BTreeMap::from([("cost".into(), 5.0)]),
                         children: vec![],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                 ],
             },
@@ -1058,6 +1392,7 @@ mod tests {
                     costs: BTreeMap::from([("cost".into(), 8.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
         ];
@@ -1086,12 +1421,14 @@ mod tests {
                     costs: BTreeMap::from([("money".into(), 11.0), ("quality".into(), 0.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 },
                 Method {
                     id: "feasible".into(),
                     costs: BTreeMap::from([("money".into(), 9.0), ("quality".into(), 4.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 },
             ],
         }];
@@ -1119,12 +1456,14 @@ mod tests {
                     costs: BTreeMap::from([("money".into(), 11.0), ("quality".into(), 0.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 },
                 Method {
                     id: "feasible".into(),
                     costs: BTreeMap::from([("money".into(), 9.0), ("quality".into(), 4.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 },
             ],
         }];
@@ -1152,12 +1491,14 @@ mod tests {
                         costs: BTreeMap::from([("cost".into(), 1.0)]),
                         children: vec![],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                     Method {
                         id: "detour".into(),
                         costs: BTreeMap::from([("cost".into(), 5.0)]),
                         children: vec!["side".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                 ],
             },
@@ -1168,6 +1509,7 @@ mod tests {
                     costs: BTreeMap::new(),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
         ];
@@ -1196,6 +1538,7 @@ mod tests {
                 costs: BTreeMap::from([("cost".into(), 1.0)]),
                 children: vec![],
                 order_edges: vec![],
+                resources: vec![],
             }],
         }];
         let result = select(
@@ -1224,12 +1567,14 @@ mod tests {
                         costs: BTreeMap::new(),
                         children: vec!["a".into(), "b".into(), "c".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                     Method {
                         id: "serial".into(),
                         costs: BTreeMap::new(),
                         children: vec!["x".into()],
                         order_edges: vec![],
+                        resources: vec![],
                     },
                 ],
             },
@@ -1243,6 +1588,7 @@ mod tests {
                     ]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1255,6 +1601,7 @@ mod tests {
                     ]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1267,6 +1614,7 @@ mod tests {
                     ]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1279,6 +1627,7 @@ mod tests {
                     ]),
                     children: vec!["y".into()],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1291,6 +1640,7 @@ mod tests {
                     ]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
         ];
@@ -1333,6 +1683,7 @@ mod tests {
                     costs: BTreeMap::new(),
                     children: vec!["left".into(), "right".into()],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1342,6 +1693,7 @@ mod tests {
                     costs: BTreeMap::from([("duration_minutes".into(), 3.0)]),
                     children: vec!["shared".into()],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1351,6 +1703,7 @@ mod tests {
                     costs: BTreeMap::from([("duration_minutes".into(), 4.0)]),
                     children: vec!["shared".into()],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
             Task {
@@ -1360,6 +1713,7 @@ mod tests {
                     costs: BTreeMap::from([("duration_minutes".into(), 5.0)]),
                     children: vec![],
                     order_edges: vec![],
+                    resources: vec![],
                 }],
             },
         ];
@@ -1384,6 +1738,7 @@ mod tests {
                 costs: BTreeMap::from([("duration_minutes".into(), 8.0)]),
                 children: vec![],
                 order_edges: vec![],
+                resources: vec![],
             }],
         }];
         let constraints = Constraints {
@@ -1411,6 +1766,7 @@ mod tests {
                 .iter()
                 .map(|(a, b)| ((*a).into(), (*b).into()))
                 .collect(),
+            resources: vec![],
         }
     }
 
@@ -1420,6 +1776,7 @@ mod tests {
             costs: costs.iter().map(|(k, v)| ((*k).into(), *v)).collect(),
             children: vec![],
             order_edges: vec![],
+            resources: vec![],
         }
     }
 
@@ -1695,16 +2052,295 @@ mod tests {
             totals: BTreeMap::from([("effort".to_owned(), objective)]),
             objective,
             makespan: 10.0,
+            exact: true,
         };
         let incumbent = scored("incumbent", 5.0);
         let greedy = scored("greedy", 3.0);
         assert_eq!(
-            settle(Some(incumbent.clone()), Some(greedy.clone()), true),
+            settle(Some(incumbent.clone()), Some(greedy.clone()), true, false),
             Ok((greedy.clone(), Optimality::GreedyOnly))
         );
         assert_eq!(
-            settle(Some(greedy.clone()), Some(incumbent.clone()), true),
+            settle(Some(greedy.clone()), Some(incumbent.clone()), true, false),
             Ok((greedy, Optimality::BestFound { gap_percent: None }))
         );
+    }
+
+    fn holding(id: &str, duration: f64, resources: &[&str]) -> Method {
+        Method {
+            id: id.into(),
+            costs: BTreeMap::from([("duration_minutes".into(), duration)]),
+            children: vec![],
+            order_edges: vec![],
+            resources: resources.iter().map(|r| (*r).into()).collect(),
+        }
+    }
+
+    fn resolve_tasks() -> Vec<Task> {
+        vec![
+            task(
+                "root",
+                vec![
+                    plain("resolve-heavy", &["r1", "r2"], &[]),
+                    plain("offload", &["g1", "g2"], &[]),
+                ],
+            ),
+            task("r1", vec![holding("r1", 20.0, &["resolve"])]),
+            task("r2", vec![holding("r2", 20.0, &["resolve"])]),
+            task("g1", vec![holding("g1", 20.0, &["resolve"])]),
+            task("g2", vec![holding("g2", 20.0, &["gpu"])]),
+        ]
+    }
+
+    /// Acceptance case 3 from the captain's section 5.1: resource contention
+    /// changes the best plan. Without caps both alternatives finish in 20
+    /// minutes and the first wins; with one Resolve instance the
+    /// resolve-heavy plan serializes to 40 while offloading one task to a
+    /// GPU worker stays at 20. Fails on a precedence-only makespan, which
+    /// scores both at 20 and never flips.
+    #[test]
+    fn resource_contention_changes_the_best_plan() {
+        let tasks = resolve_tasks();
+        let unlimited = select_with_objective(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            Duration::from_secs(2),
+            Objective::Makespan,
+        )
+        .unwrap();
+        assert_eq!(unlimited.methods["root"], "resolve-heavy");
+        assert_eq!(unlimited.makespan, Some(20.0));
+        assert!(
+            unlimited
+                .explanation
+                .starts_with("Minimized dependency-aware"),
+            "unlimited schedule keeps the old label: {}",
+            unlimited.explanation
+        );
+        let limited = select_with_objective(
+            &tasks,
+            "root",
+            &Constraints {
+                capacities: BTreeMap::from([("resolve".into(), 1.0), ("gpu".into(), 2.0)]),
+                ..Constraints::default()
+            },
+            Duration::from_secs(2),
+            Objective::Makespan,
+        )
+        .unwrap();
+        assert_eq!(limited.methods["root"], "offload");
+        assert_eq!(limited.makespan, Some(20.0));
+        assert_eq!(limited.optimality, Optimality::Optimal);
+        assert!(
+            limited.explanation.starts_with("Minimized resource-aware"),
+            "limited schedule names the resource model: {}",
+            limited.explanation
+        );
+        // The loser under contention serializes its two Resolve holders.
+        let heavy_only = Constraints {
+            capacities: BTreeMap::from([("resolve".into(), 1.0)]),
+            forbidden_methods: BTreeSet::from([("root".into(), "offload".into())]),
+            ..Constraints::default()
+        };
+        let heavy = select_with_objective(
+            &tasks,
+            "root",
+            &heavy_only,
+            Duration::from_secs(2),
+            Objective::Makespan,
+        )
+        .unwrap();
+        assert_eq!(heavy.methods["root"], "resolve-heavy");
+        assert_eq!(heavy.makespan, Some(40.0));
+    }
+
+    /// Two exclusive holders serialize while work on other resources still
+    /// overlaps them. Fails on a precedence-only schedule, which reports 20.
+    #[test]
+    fn exclusive_holders_serialize_while_other_work_overlaps() {
+        let tasks = vec![
+            task("root", vec![plain("all", &["a", "b", "c"], &[])]),
+            task("a", vec![holding("a", 20.0, &["resolve"])]),
+            task("b", vec![holding("b", 20.0, &["resolve"])]),
+            task("c", vec![holding("c", 20.0, &["gpu"])]),
+        ];
+        let result = select_with_objective(
+            &tasks,
+            "root",
+            &Constraints {
+                capacities: BTreeMap::from([("resolve".into(), 1.0), ("gpu".into(), 2.0)]),
+                ..Constraints::default()
+            },
+            Duration::from_secs(2),
+            Objective::Makespan,
+        )
+        .unwrap();
+        assert_eq!(result.makespan, Some(40.0));
+        assert_eq!(result.optimality, Optimality::Optimal);
+    }
+
+    /// A resource with capacity two runs two holders concurrently; the same
+    /// plan under capacity one serializes them. Fails when every capacity is
+    /// treated as exclusive.
+    #[test]
+    fn capacity_above_one_allows_concurrent_holders() {
+        let tasks = vec![
+            task("root", vec![plain("all", &["a", "b"], &[])]),
+            task("a", vec![holding("a", 20.0, &["gpu"])]),
+            task("b", vec![holding("b", 20.0, &["gpu"])]),
+        ];
+        let run = |capacity: f64| {
+            select_with_objective(
+                &tasks,
+                "root",
+                &Constraints {
+                    capacities: BTreeMap::from([("gpu".into(), capacity)]),
+                    ..Constraints::default()
+                },
+                Duration::from_secs(2),
+                Objective::Makespan,
+            )
+            .unwrap()
+        };
+        assert_eq!(run(2.0).makespan, Some(20.0));
+        assert_eq!(run(1.0).makespan, Some(40.0));
+    }
+
+    /// A negative capacity is a malformed constraint, not silent unlimited
+    /// parallelism. Fails when validation ignores the capacities map.
+    #[test]
+    fn invalid_capacity_is_rejected() {
+        let tasks = vec![task("root", vec![holding("only", 1.0, &["resolve"])])];
+        assert_eq!(
+            select_with_objective(
+                &tasks,
+                "root",
+                &Constraints {
+                    capacities: BTreeMap::from([("resolve".into(), -1.0)]),
+                    ..Constraints::default()
+                },
+                Duration::from_secs(1),
+                Objective::Makespan,
+            ),
+            Err(SelectError::Invalid(
+                "invalid capacity for resource `resolve`".into()
+            ))
+        );
+    }
+
+    /// A resource nobody declared a capacity for never constrains the plan.
+    /// Fails when unknown resources block scheduling instead of reading as
+    /// unlimited.
+    #[test]
+    fn undeclared_capacity_reads_as_unlimited() {
+        let tasks = vec![
+            task("root", vec![plain("all", &["a", "b"], &[])]),
+            task("a", vec![holding("a", 20.0, &["resolve"])]),
+            task("b", vec![holding("b", 20.0, &["resolve"])]),
+        ];
+        let result = select_with_objective(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            Duration::from_secs(2),
+            Objective::Makespan,
+        )
+        .unwrap();
+        assert_eq!(result.makespan, Some(20.0));
+    }
+
+    /// Peak concurrency, not the count of every holder touching the window,
+    /// decides whether a slot is free: back-to-back holders on a capacity-2
+    /// resource leave one slot open the whole time. Fails when overlaps are
+    /// counted over the whole window, which pushes the start to 5.
+    #[test]
+    fn earliest_slot_counts_peak_concurrency() {
+        let slots = BTreeMap::from([("ci".to_owned(), 2)]);
+        let busy = BTreeMap::from([("ci".to_owned(), vec![(0.0, 5.0), (5.0, 10.0)])]);
+        let need = BTreeSet::from(["ci".to_owned()]);
+        assert_eq!(earliest_slot(0.0, 10.0, &need, &slots, &busy), 0.0);
+        let full = BTreeMap::from([("ci".to_owned(), vec![(0.0, 5.0), (5.0, 10.0), (2.0, 7.0)])]);
+        assert_eq!(earliest_slot(0.0, 10.0, &need, &slots, &full), 7.0);
+    }
+
+    /// Graphs past the exact-search size use the list heuristic, so the
+    /// makespan is not proved minimal and the selection must not claim it.
+    /// Fails when the heuristic span is labeled `optimal`.
+    #[test]
+    fn heuristic_schedule_is_reported_best_found() {
+        let ids: Vec<String> = (0..EXACT_SCHEDULE_NODES + 1)
+            .map(|i| format!("t{i}"))
+            .collect();
+        let children: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let mut tasks = vec![task("root", vec![plain("all", &children, &[])])];
+        for id in &ids {
+            tasks.push(task(id, vec![holding(id, 10.0, &["resolve"])]));
+        }
+        let result = select_with_objective(
+            &tasks,
+            "root",
+            &Constraints {
+                capacities: BTreeMap::from([("resolve".into(), 1.0)]),
+                ..Constraints::default()
+            },
+            Duration::from_secs(2),
+            Objective::Makespan,
+        )
+        .unwrap();
+        assert_eq!(result.makespan, Some(90.0));
+        assert_eq!(
+            result.optimality,
+            Optimality::BestFound { gap_percent: None }
+        );
+    }
+
+    /// The schedule depends on node keys, not on how a caller numbered the
+    /// nodes, so P6 and P7 agree on the heuristic span. Fails when ties
+    /// break by index: here index order runs the short chain head first and
+    /// finishes at 40, key and tail order run the long chain first for 30.
+    #[test]
+    fn schedule_is_independent_of_node_numbering() {
+        // a(10, res) -> c(20); b(10, res); edge a -> c. Numbered two ways.
+        let n = EXACT_SCHEDULE_NODES + 1;
+        let build = |perm: &[usize]| {
+            let mut durations = vec![0.0; n];
+            let mut demands = vec![BTreeSet::new(); n];
+            let mut keys = vec![String::new(); n];
+            let spec = [("a", 10.0, true), ("b", 10.0, true), ("c", 20.0, false)];
+            for (logical, &(key, duration, holds)) in spec.iter().enumerate() {
+                let at = perm[logical];
+                durations[at] = duration;
+                keys[at] = key.into();
+                if holds {
+                    demands[at].insert("res".to_owned());
+                }
+            }
+            for logical in spec.len()..n {
+                keys[perm[logical]] = format!("z{logical}");
+            }
+            let edges = BTreeSet::from([(perm[0], perm[2])]);
+            let schedule = resource_constrained_schedule(
+                &durations,
+                &edges,
+                &demands,
+                &keys,
+                &BTreeMap::from([("res".to_owned(), 1.0)]),
+            )
+            .unwrap();
+            assert!(!schedule.exact);
+            let by_key: BTreeMap<String, f64> = keys
+                .iter()
+                .cloned()
+                .zip(schedule.starts.iter().copied())
+                .collect();
+            (schedule.makespan, by_key)
+        };
+        let forward: Vec<usize> = (0..n).collect();
+        let mut reversed = forward.clone();
+        reversed.reverse();
+        let (span, starts) = build(&forward);
+        assert_eq!(span, 30.0);
+        assert_eq!(build(&reversed), (span, starts));
     }
 }

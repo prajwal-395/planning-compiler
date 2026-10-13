@@ -1,0 +1,114 @@
+ir_version = 0
+
+[plan]
+id = "resource-contention"
+title = "Single Resolve instance with overlapping CI analysis"
+description = "PC-08 example: one DaVinci Resolve instance (capacity 1) serializes the two grades while CI analysis overlaps them. All figures invented; no real Ren data."
+
+[objective]
+root_task = "deliver"
+weights = { duration_minutes = 1.0 }
+
+[[objective.acceptance]]
+kind = "manual"
+description = "Captain rules the reels shippable."
+
+[[resource]]
+name = "resolve"
+capacity = 1.0
+unit = "instances"
+
+[[resource]]
+name = "ci-executor"
+capacity = 4.0
+unit = "instances"
+
+[[task]]
+id = "deliver"
+title = "Deliver the graded reels"
+state = "decomposed"
+
+[[task]]
+id = "grade-a"
+title = "Grade reel A in Resolve"
+state = "resolved"
+
+[[task]]
+id = "grade-b"
+title = "Grade reel B in Resolve"
+state = "resolved"
+
+[[task]]
+id = "analyze"
+title = "Analyze footage on CI"
+state = "resolved"
+
+# No order edges: everything may run concurrently, but the single Resolve
+# instance still serializes grade-a and grade-b (30 + 30), while analysis
+# (30 on a CI executor with capacity 4) overlaps them. Makespan is 60.
+[[method]]
+id = "reels-pipeline"
+task = "deliver"
+kind = "decompose"
+subtasks = ["grade-a", "grade-b", "analyze"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "grade-a-in-resolve"
+task = "grade-a"
+kind = "invoke"
+capability = "resolve-grade@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "grade-b-in-resolve"
+task = "grade-b"
+kind = "invoke"
+capability = "resolve-grade@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "analyze-on-ci"
+task = "analyze"
+kind = "invoke"
+capability = "ci-analyze@1"
+status = "accepted"
+provenance = "human:test"
+
+# The contention-relief hypothesis: grading reel B natively avoids the
+# Resolve queue. Accepting it (preview with pc impact) drops the makespan
+# from 60 to 30, since grade-a and the native grade then run side by side.
+[[method]]
+id = "grade-b-native"
+task = "grade-b"
+kind = "invoke"
+capability = "native-grade@1"
+status = "proposed"
+provenance = "agent:claude"
+assumptions = [
+  "Native grading matches Resolve output for reel B; fallback is grade-b-in-resolve.",
+]
+
+[[capability]]
+id = "resolve-grade@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 30.0, likely = 30.0, high = 30.0, provenance = "declared" }]
+resources = ["resolve"]
+
+[[capability]]
+id = "ci-analyze@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 30.0, likely = 30.0, high = 30.0, provenance = "declared" }]
+resources = ["ci-executor"]
+
+[[capability]]
+id = "native-grade@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 25.0, likely = 25.0, high = 25.0, provenance = "declared" }]
+resources = ["ci-executor"]

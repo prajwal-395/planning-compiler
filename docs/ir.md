@@ -75,8 +75,14 @@ How measured totals render as observed ranges is owned by P5 in `passes.md`.
   valid for existing plans.
 - **Artifact.** A declared type: `name` plus its `fields`. Every contract
   entry must name a declared artifact and declared fields.
-- **Resource.** A named capacity (e.g. `ci-minutes`). v0 only validates
-  references; reporting usage against capacity arrives with scheduling.
+- **Resource.** A named capacity (e.g. `resolve` with capacity 1). A
+  capability names the resources it holds while it runs, one unit of each;
+  P6/P7 schedule holders against `floor` of the declared capacity, read as
+  a count of concurrent instances whatever its `unit` (minimum one slot, so
+  a budget-style total such as CI minutes is not a consumable pool;
+  undeclared resources are unlimited), so exclusive holders serialize while
+  other work overlaps them. This is planning-time contention only: the
+  existing execution infrastructure stays responsible for running work.
 - **Evidence.** An append-only observation: `subject`
   (`capability:<id>`, `method:<id>` or `task:<id>`), `metric`, `value`,
   `unit`, RFC 3339 `time`, `source`, an optional typed `basis`

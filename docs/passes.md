@@ -30,7 +30,7 @@ Parse (in `pc-store`), then:
 | E009 | unsatisfied input | each consumed field is produced by another live task or a plan external input |
 | E010 | unknown metric | estimates and evidence name known metrics (objective weights are E015) |
 | E011 | invalid estimate | finite, `low <= likely <= high`, non-negative, risk in `[0,1]`, `measured` cites observations |
-| E012 | undefined resource | capability resources name declared resources |
+| E012 | invalid resource | capability resources name declared resources; declared capacities are finite and non-negative |
 | E013 | method shape | `invoke` names a capability and no subtasks/edges; `decompose` names no capability and at least one subtask; order endpoints are subtasks of the same method |
 | E014 | invalid evidence | subject is `capability:`, `method:` or `task:` with a non-empty id, timestamp is RFC 3339, value is finite and non-negative, basis is `absolute` or `distance-from:<capability>` when recorded, one attributed capability and metric (or pending subject) carries one basis (units are checked in P1) |
 | E015 | invalid objective | weights name known metrics and are finite/non-negative; budget non-negative; floor in `[0,1]`; criteria carry their kind's fields |
@@ -225,17 +225,25 @@ chosen method or the missing estimate that made them ineligible.
 
 `pc compile --objective makespan` (default `effort`) instead minimizes the
 dependency-aware completion time of the selection, breaking ties by lower
-weighted effort, under the same hard limits and with unlimited parallelism.
-It exhaustively searches method assignments over activated tasks within the
-time budget, scoring each with P7's leaf-based CPM (order edges included),
-so the makespan P6 minimizes is the one P7 reports. Status labels match the
-effort ILP: `optimal` when the search completes, `best-found` for a
-time-limited incumbent, and `greedy-only` when the effort-greedy fallback is
+weighted effort, under the same hard limits and the declared resource
+capacities (a method holds one unit of each resource its capability names;
+resources without a declared capacity are unlimited). It exhaustively
+searches method assignments over activated tasks within the time budget,
+scoring each with the resource-constrained schedule (P7's leaf-based CPM
+plus a serial schedule-generation scheme against the caps, exact for small
+graphs; order edges included; ties in the schedule break by task id), so
+the makespan P6 minimizes is the one P7 reports and contention can flip the
+winner away from the precedence-only choice. Status labels match the
+effort ILP: `optimal` when the search completes and every candidate was
+scored by the exact schedule, `best-found` for a time-limited incumbent or
+when a graph too large for the exact schedule was scored by the
+longest-tail-first list heuristic, and `greedy-only` when the effort-greedy fallback is
 faster or the only feasible result. `selection_objective` and
 `selection_explanation` appear in `--json`; under `makespan` the text output
 adds an `objective:` line whose explanation compares the result with the
 lowest-effort selection found, stating how much extra effort buys how many
-fewer minutes.
+fewer minutes. The explanation reads `resource-aware` when capacities are
+declared and `dependency-aware` otherwise.
 
 ## P7: schedule-analyze (step 2+)
 
@@ -243,7 +251,21 @@ fewer minutes.
 It preserves three-point estimates, uses PERT expected durations for CPM,
 reports earliest/latest times, slack, critical tasks, parallel width (tasks
 with zero expected duration are not counted), and the
-low/likely/high makespan. The text headline reads
+low/likely/high makespan. Each bound is the resource-constrained span over
+the executable tasks' bound durations (the CPM span when no declared
+capacity binds); holders of a limited resource wait for a free slot while
+other work still overlaps them. Earliest times are the starts of that one
+expected-duration schedule, and latest times run backward over precedence
+edges plus each limited resource's slot order (a holder points to the next
+holder on the same slot whenever every slot is busy at that holder's start,
+whether or not it was delayed), so
+slack, critical tasks, parallel width and the P8 frontier all describe the
+same contended schedule. When caps stretch the expected makespan past
+the precedence span, the trace carries one `resource-limited` row per
+resource that held back critical work (a critical task delayed past its
+precedence-ready time while the resource was saturated throughout the delay, even when
+spare slots leave every earlier holder slack), naming its capacity and holding tasks, and `pc compile` prints it,
+so a long makespan beside idle-looking tasks reads as contention. The text headline reads
 `compiled: <root> (<path>); makespan low <L>, likely <M>, high <H>,
 expected <E> (optimistic) minutes; parallel width <W>`: the low, likely
 and high spans are the CPM makespan over each executable task's low,

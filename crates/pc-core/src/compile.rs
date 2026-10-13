@@ -9,7 +9,7 @@
 use pc_ir::{MethodKind, MethodStatus, PlanDoc};
 use pc_select::{
     Constraints as SelectionConstraints, Method as SelectionMethod, Objective, Optimality,
-    Task as SelectionTask,
+    Task as SelectionTask, resource_constrained_schedule,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -153,14 +153,16 @@ pub struct CompiledPlan {
     /// Evidence for subjects not in the plan, held until the subject is
     /// proposed. Sorted by `(subject, metric, basis)`.
     pub pending_evidence: Vec<crate::estimate::PendingEvidence>,
-    /// Expected duration in minutes, equal to the CPM makespan over PERT
-    /// expected task durations. This is the optimistic PERT estimate: CPM
+    /// Expected duration in minutes, equal to the resource-constrained
+    /// makespan over PERT expected task durations (the CPM span when no
+    /// resource caps bind). This is the optimistic PERT estimate: CPM
     /// over expectations ignores merge bias, so the text labels it
     /// `(optimistic)`. Kept for compatibility; prefer `makespan_range`.
     #[serde(serialize_with = "crate::json::ser_f64_3")]
     pub makespan_minutes: f64,
-    /// Low, likely, high and expected makespan in minutes: the CPM span over
-    /// each task's low, likely, high and PERT expected durations. Matches
+    /// Low, likely, high and expected makespan in minutes: the
+    /// resource-constrained span over each task's low, likely, high and
+    /// PERT expected durations (the CPM span when no caps bind). Matches
     /// `totals["duration_minutes"]` when executable work exists (zero range
     /// otherwise). The `expected` equals `makespan_minutes` and carries the
     /// same optimistic PERT bias.
@@ -232,6 +234,8 @@ struct Node {
     predicted: BTreeMap<String, EstimateRange>,
     duration: EstimateRange,
     predicted_duration: EstimateRange,
+    /// Named resources the invoking capability holds while this node runs.
+    resources: BTreeSet<String>,
 }
 
 struct Walk<'a> {
@@ -240,6 +244,8 @@ struct Walk<'a> {
     effective: BTreeMap<String, BTreeMap<String, EstimateRange>>,
     predicted: BTreeMap<String, BTreeMap<String, EstimateRange>>,
     measured: BTreeSet<(String, String)>,
+    /// Capability id to the resources it draws on, from the plan.
+    capability_resources: BTreeMap<String, Vec<String>>,
     nodes: Vec<Node>,
     edges: BTreeSet<(usize, usize)>,
     unresolved: BTreeSet<String>,
@@ -316,6 +322,13 @@ impl<'a> Walk<'a> {
                 let duration = estimates.get("duration_minutes").copied().unwrap_or(zero());
                 let predicted_duration =
                     predicted.get("duration_minutes").copied().unwrap_or(zero());
+                let resources = self
+                    .capability_resources
+                    .get(capability_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
                 let n = self.nodes.len();
                 self.nodes.push(Node {
                     task: task.id.clone(),
@@ -324,6 +337,7 @@ impl<'a> Walk<'a> {
                     predicted,
                     duration,
                     predicted_duration,
+                    resources,
                 });
                 if let Some(capability) = method.capability.as_deref() {
                     self.trace.push(CompileTrace {
@@ -438,6 +452,11 @@ pub fn compile_with_objective_and_selection_duration(
     // no longer decide.
     let estimated = crate::estimate::estimate(doc);
     let eff = estimated.effective_map();
+    let capability_resources: BTreeMap<String, Vec<String>> = doc
+        .capability
+        .iter()
+        .map(|c| (c.id.clone(), c.resources.clone()))
+        .collect();
     let mut selection_tasks = Vec::with_capacity(doc.task.len());
     for task in &doc.task {
         let skipped = matches!(
@@ -458,6 +477,14 @@ pub fn compile_with_objective_and_selection_duration(
                             .collect()
                     })
                     .unwrap_or_default();
+                // A leaf holds its capability's resources while it runs;
+                // decompose methods hold none.
+                let resources = m
+                    .capability
+                    .as_deref()
+                    .and_then(|id| capability_resources.get(id))
+                    .cloned()
+                    .unwrap_or_default();
                 SelectionMethod {
                     id: m.id.clone(),
                     costs,
@@ -467,6 +494,7 @@ pub fn compile_with_objective_and_selection_duration(
                         .iter()
                         .map(|e| (e.from.clone(), e.to.clone()))
                         .collect(),
+                    resources,
                 }
             })
             .collect();
@@ -483,6 +511,11 @@ pub fn compile_with_objective_and_selection_duration(
     selection_tasks.sort_by(|a, b| a.id.cmp(&b.id));
     let mut constraints = SelectionConstraints {
         weights: doc.objective.weights.clone(),
+        capacities: doc
+            .resource
+            .iter()
+            .map(|r| (r.name.clone(), r.capacity))
+            .collect(),
         ..SelectionConstraints::default()
     };
     if let Some(budget) = doc.objective.budget_usd {
@@ -605,6 +638,7 @@ pub fn compile_with_objective_and_selection_duration(
             map
         },
         measured: estimated.measured_set(),
+        capability_resources,
         nodes: Vec::new(),
         edges: BTreeSet::new(),
         unresolved: BTreeSet::new(),
@@ -653,7 +687,7 @@ pub fn compile_with_objective_and_selection_duration(
     // stay beside them so every total says how much of it rests on guesses.
     let mut totals = rollup(&nodes, |n| &n.estimates);
     let predicted_totals = rollup(&nodes, |n| &n.predicted);
-    let (duration, timings, width) = cpm(&nodes, &edges)?;
+    let (duration, timings, width, contention) = cpm(&nodes, &edges, &constraints.capacities)?;
     let makespan = duration.expected;
     let makespan_range = duration;
     if !nodes.is_empty() {
@@ -661,7 +695,12 @@ pub fn compile_with_objective_and_selection_duration(
     }
     // Same graph, declared durations: only the makespan is kept, as the
     // predicted column beside the effective makespan.
-    let (predicted_duration, _, _) = cpm_with(&nodes, &edges, |n| &n.predicted_duration)?;
+    let (predicted_duration, ..) = cpm_with(
+        &nodes,
+        &edges,
+        |n| &n.predicted_duration,
+        &constraints.capacities,
+    )?;
     let mut predicted_full = predicted_totals;
     if !nodes.is_empty() {
         predicted_full.insert("duration_minutes".into(), predicted_duration);
@@ -761,6 +800,22 @@ pub fn compile_with_objective_and_selection_duration(
             makespan_range.low, makespan_range.likely, makespan_range.high, makespan,
         ),
     });
+    // Name the bottleneck when resource caps stretch the schedule past what
+    // dependencies explain, so a long makespan beside idle-looking tasks
+    // reads as contention, not a broken critical path.
+    for (resource, slots, holders) in
+        binding_resources(&nodes, &constraints.capacities, &contention)
+    {
+        trace.push(CompileTrace {
+            subject: "plan".into(),
+            decision: "resource-limited".into(),
+            reason: format!(
+                "`{resource}` (capacity {slots}) extends the expected makespan from {:.3} to {makespan:.3} minutes; holders: {}",
+                contention.precedence_span,
+                holders.join(", "),
+            ),
+        });
+    }
     // Provenance report: every measured profile plus every used
     // capability's metrics, sorted by (capability, metric, basis) as
     // estimated.
@@ -958,18 +1013,51 @@ fn zero() -> EstimateRange {
     }
 }
 
+/// How resource caps shaped the expected schedule: the span precedence
+/// alone would give, and the limited resources whose saturation held back
+/// critical work (a critical task delayed past its precedence-ready time
+/// while the resource was saturated throughout the delay). `delayed` is
+/// empty unless the caps stretch the makespan past `precedence_span`.
+struct Contention {
+    precedence_span: f64,
+    delayed: BTreeSet<String>,
+}
+
 fn cpm(
     nodes: &[Node],
     edges: &BTreeSet<(usize, usize)>,
-) -> Result<(EstimateRange, BTreeMap<String, TaskTiming>, usize), CompileError> {
-    cpm_with(nodes, edges, |n| &n.duration)
+    capacities: &BTreeMap<String, f64>,
+) -> Result<
+    (
+        EstimateRange,
+        BTreeMap<String, TaskTiming>,
+        usize,
+        Contention,
+    ),
+    CompileError,
+> {
+    cpm_with(nodes, edges, |n| &n.duration, capacities)
 }
 
+/// CPM over the resource-constrained schedule. Earliest times are the
+/// chosen schedule's starts; latest times run backward over precedence
+/// edges plus each limited resource's slot order (a holder points to the
+/// next holder on the same slot when every slot is busy at that holder's
+/// start), so slack, criticality and width all describe one schedule.
 fn cpm_with(
     nodes: &[Node],
     edges: &BTreeSet<(usize, usize)>,
     pick: impl Fn(&Node) -> &EstimateRange,
-) -> Result<(EstimateRange, BTreeMap<String, TaskTiming>, usize), CompileError> {
+    capacities: &BTreeMap<String, f64>,
+) -> Result<
+    (
+        EstimateRange,
+        BTreeMap<String, TaskTiming>,
+        usize,
+        Contention,
+    ),
+    CompileError,
+> {
     let n = nodes.len();
     let mut pred = vec![Vec::new(); n];
     let mut succ = vec![Vec::new(); n];
@@ -1000,36 +1088,127 @@ fn cpm_with(
         tasks.sort();
         return Err(CompileError::PrecedenceCycle { tasks });
     }
-    let schedule = |duration: fn(&EstimateRange) -> f64| {
-        let mut es = vec![0.0; n];
-        let mut ef = vec![0.0; n];
-        for &i in &order {
-            es[i] = pred[i].iter().map(|p| ef[*p]).fold(0.0, f64::max);
-            ef[i] = es[i] + duration(pick(&nodes[i]));
-        }
-        let span = ef.iter().copied().fold(0.0, f64::max);
-        (es, ef, span)
+    let expected: Vec<f64> = nodes.iter().map(|node| pick(node).expected).collect();
+    let mut precedence_ef = vec![0.0; n];
+    for &i in &order {
+        let es = pred[i]
+            .iter()
+            .map(|p| precedence_ef[*p])
+            .fold(0.0, f64::max);
+        precedence_ef[i] = es + expected[i];
+    }
+    let precedence_span = precedence_ef.iter().copied().fold(0.0, f64::max);
+    // The graph is acyclic (checked above), so the scheduler always
+    // returns a schedule.
+    let demands: Vec<BTreeSet<String>> = nodes.iter().map(|node| node.resources.clone()).collect();
+    let keys: Vec<String> = nodes.iter().map(|node| node.task.clone()).collect();
+    let schedule_for = |duration: fn(&EstimateRange) -> f64| {
+        let durations: Vec<f64> = nodes.iter().map(|node| duration(pick(node))).collect();
+        resource_constrained_schedule(&durations, edges, &demands, &keys, capacities)
+            .expect("acyclic precedence graph always schedules")
     };
-    let (_, _, low) = schedule(|d| d.low);
-    let (_, _, likely) = schedule(|d| d.likely);
-    let (_, _, high) = schedule(|d| d.high);
-    let (es, ef, makespan) = schedule(|d| d.expected);
+    let chosen = schedule_for(|d| d.expected);
     let duration = EstimateRange {
-        low,
-        likely,
-        high,
-        expected: makespan,
+        low: schedule_for(|d| d.low).makespan,
+        likely: schedule_for(|d| d.likely).makespan,
+        high: schedule_for(|d| d.high).makespan,
+        expected: chosen.makespan,
     };
+    let makespan = duration.expected;
+    let es = chosen.starts;
+    let ef: Vec<f64> = (0..n).map(|i| es[i] + expected[i]).collect();
+    // Whether every slot of `r` is busy at each instant of `[from, to)`.
+    // Occupancy only changes at holder starts and finishes, so checking
+    // `from` and each such point inside the interval covers it.
+    let saturated_over = |r: &String, from: f64, to: f64| {
+        let slots = capacities[r.as_str()].floor().max(1.0) as usize;
+        let holders: Vec<usize> = (0..n)
+            .filter(|&k| expected[k] > 0.0 && demands[k].contains(r))
+            .collect();
+        std::iter::once(from)
+            .chain(holders.iter().flat_map(|&k| [es[k], ef[k]]))
+            .filter(|&t| t >= from - 1e-9 && t < to - 1e-9)
+            .all(|t| {
+                holders
+                    .iter()
+                    .filter(|&&k| es[k] <= t + 1e-9 && ef[k] > t + 1e-9)
+                    .count()
+                    >= slots
+            })
+    };
+    let position: Vec<usize> = {
+        let mut position = vec![0; n];
+        for (at, &i) in order.iter().enumerate() {
+            position[i] = at;
+        }
+        position
+    };
+    let mut blockers = vec![Vec::new(); n];
+    for r in capacities.keys() {
+        let mut holders: Vec<usize> = (0..n)
+            .filter(|&k| expected[k] > 0.0 && demands[k].contains(r))
+            .collect();
+        holders.sort_by(|&a, &b| es[a].total_cmp(&es[b]).then(position[a].cmp(&position[b])));
+        let slots = capacities[r].floor().max(1.0) as usize;
+        let mut last: Vec<Option<usize>> = vec![None; slots];
+        let full_at = |t: f64| {
+            holders
+                .iter()
+                .filter(|&&k| es[k] <= t + 1e-9 && ef[k] > t + 1e-9)
+                .count()
+                >= slots
+        };
+        for &j in &holders {
+            let slot = (0..slots)
+                .min_by(|&a, &b| {
+                    let free = |s: usize| last[s].map_or(f64::NEG_INFINITY, |i| ef[i]);
+                    free(a).total_cmp(&free(b))
+                })
+                .expect("capacity gives at least one slot");
+            if let Some(i) = last[slot].filter(|_| full_at(es[j])) {
+                if !blockers[i].contains(&j) {
+                    blockers[i].push(j);
+                }
+            }
+            last[slot] = Some(j);
+        }
+    }
+    // Every edge, precedence or resource, points to a start no earlier
+    // than its source's, so latest start first is a reverse topological
+    // order of their union.
+    let mut backward: Vec<usize> = (0..n).collect();
+    backward.sort_by(|&a, &b| es[b].total_cmp(&es[a]).then(position[b].cmp(&position[a])));
     let mut lf = vec![makespan; n];
     let mut ls = vec![0.0; n];
-    for &i in order.iter().rev() {
-        lf[i] = if succ[i].is_empty() {
-            makespan
-        } else {
-            succ[i].iter().map(|s| ls[*s]).fold(f64::INFINITY, f64::min)
-        };
-        ls[i] = lf[i] - pick(&nodes[i]).expected;
+    for i in backward {
+        lf[i] = succ[i]
+            .iter()
+            .chain(&blockers[i])
+            .map(|s| ls[*s])
+            .fold(makespan, f64::min);
+        ls[i] = lf[i] - expected[i];
     }
+    let critical = |i: usize| ls[i] - es[i] < 1e-9;
+    let delayed: BTreeSet<String> = if makespan > precedence_span + 1e-9 {
+        let mut delayed = BTreeSet::new();
+        for j in (0..n).filter(|&j| critical(j)) {
+            let ready_at = pred[j].iter().map(|p| ef[*p]).fold(0.0, f64::max);
+            if es[j] <= ready_at + 1e-9 {
+                continue;
+            }
+            delayed.extend(
+                demands[j]
+                    .iter()
+                    .filter(|r| {
+                        capacities.contains_key(r.as_str()) && saturated_over(r, ready_at, es[j])
+                    })
+                    .cloned(),
+            );
+        }
+        delayed
+    } else {
+        BTreeSet::new()
+    };
     let mut timing = BTreeMap::new();
     for i in 0..n {
         let slack = (ls[i] - es[i]).max(0.0);
@@ -1057,5 +1236,37 @@ fn cpm_with(
         active += delta;
         width = width.max(active.max(0) as usize);
     }
-    Ok((duration, timing, width))
+    Ok((
+        duration,
+        timing,
+        width,
+        Contention {
+            precedence_span,
+            delayed,
+        },
+    ))
+}
+
+/// Resources that held back critical work and so stretched the expected
+/// makespan past the precedence span. Each entry names the resource, its
+/// slot count, and the holding task ids in lexical order. Empty when caps
+/// change nothing.
+fn binding_resources(
+    nodes: &[Node],
+    capacities: &BTreeMap<String, f64>,
+    contention: &Contention,
+) -> Vec<(String, usize, Vec<String>)> {
+    contention
+        .delayed
+        .iter()
+        .map(|resource| {
+            let slots = capacities[resource].floor().max(1.0) as usize;
+            let holders: BTreeSet<String> = nodes
+                .iter()
+                .filter(|node| node.duration.expected > 0.0 && node.resources.contains(resource))
+                .map(|node| node.task.clone())
+                .collect();
+            (resource.clone(), slots, holders.into_iter().collect())
+        })
+        .collect()
 }

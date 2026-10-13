@@ -778,10 +778,10 @@
     },
     "ResourceDecl": {
       "additionalProperties": false,
-      "description": "A named capacity, e.g. `\"gpu-1\"`. v0 reports usage only.",
+      "description": "A named capacity, e.g. `\"resolve\"` with capacity 1 (see `docs/ir.md`).",
       "properties": {
         "capacity": {
-          "description": "Available capacity in `unit`.",
+          "description": "Concurrent instances (floored, minimum one slot); must be finite and non-negative.",
           "format": "double",
           "type": "number"
         },
@@ -791,7 +791,7 @@
         },
         "unit": {
           "default": "",
-          "description": "Capacity unit, free-form in v0.",
+          "description": "Capacity unit, free-form and informational (scheduling ignores it).",
           "type": "string"
         }
       },
@@ -1057,7 +1057,7 @@
     },
     "resource": {
       "default": [],
-      "description": "Named capacities (reported against, never scheduled under, in v0).",
+      "description": "Named capacities that P6/P7 schedule capability holders against.",
       "items": {
         "$ref": "#/definitions/ResourceDecl"
       },
