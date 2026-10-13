@@ -212,6 +212,20 @@ selection uses recursive tree cost and stable method-id tie breaking.
 Unchosen alternatives of needed tasks are traced as `not selected`, naming the
 chosen method or the missing estimate that made them ineligible.
 
+`pc compile --objective makespan` (default `effort`) instead minimizes the
+dependency-aware completion time of the selection, breaking ties by lower
+weighted effort, under the same hard limits and with unlimited parallelism.
+It exhaustively searches method assignments over activated tasks within the
+time budget, scoring each with P7's leaf-based CPM (order edges included),
+so the makespan P6 minimizes is the one P7 reports. Status labels match the
+effort ILP: `optimal` when the search completes, `best-found` for a
+time-limited incumbent, and `greedy-only` when the effort-greedy fallback is
+faster or the only feasible result. `selection_objective` and
+`selection_explanation` appear in `--json`; under `makespan` the text output
+adds an `objective:` line whose explanation compares the result with the
+lowest-effort selection found, stating how much extra effort buys how many
+fewer minutes.
+
 ## P7: schedule-analyze (step 2+)
 
 `pc compile` traverses from the objective root through selected accepted methods.

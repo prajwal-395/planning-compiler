@@ -21,7 +21,7 @@ pub mod propose;
 
 pub use compile::{
     CompileError, CompileTrace, CompiledPlan, EstimateRange, MetricBasis, OpenWorkSummary,
-    ProvenanceRow, TaskTiming, compile, compile_with_budget,
+    ProvenanceRow, TaskTiming, compile, compile_with_budget, compile_with_objective,
 };
 pub use diagnostic::{Diagnostic, render_human};
 pub use estimate::{
@@ -37,6 +37,7 @@ pub use passes::{
     Counts, Ctx, EstimatePass, MatchPass, Pass, Report, ResolvePass, SharePass, TraceEvent,
     ValidatePass, check,
 };
+pub use pc_select::Objective;
 pub use propose::{
     CapabilityView, ContextError, ContextReport, DEFAULT_CONTEXT_BUDGET_TOKENS, MATCH_ID_PREFIX,
     MethodView, ParentView, PatchError, TaskView, accept_method, apply_patch, context,

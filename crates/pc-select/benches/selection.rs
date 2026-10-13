@@ -12,6 +12,7 @@ fn instance(n: usize) -> Vec<Task> {
             id: "all-work".into(),
             costs: BTreeMap::new(),
             children: (0..n - 2).map(|i| format!("t{i}")).collect(),
+            order_edges: vec![],
         }],
     });
     for i in 0..n - 2 {
@@ -22,11 +23,13 @@ fn instance(n: usize) -> Vec<Task> {
                     id: format!("individual-{i}"),
                     costs: BTreeMap::from([("cost".into(), 5.0)]),
                     children: vec![],
+                    order_edges: vec![],
                 },
                 Method {
                     id: format!("reuse-{i}"),
                     costs: BTreeMap::from([("cost".into(), 0.5)]),
                     children: vec!["shared".into()],
+                    order_edges: vec![],
                 },
             ],
         });
@@ -37,6 +40,7 @@ fn instance(n: usize) -> Vec<Task> {
             id: "shared-work".into(),
             costs: BTreeMap::from([("cost".into(), 100.0)]),
             children: vec![],
+            order_edges: vec![],
         }],
     });
     tasks

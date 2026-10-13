@@ -3744,3 +3744,47 @@ fn beads_jsonl_round_trip_is_byte_identical() {
         std::fs::read(output).unwrap()
     );
 }
+
+/// `pc compile --objective makespan` trades total work for elapsed time
+/// and explains the trade; effort stays the default objective.
+#[test]
+fn compile_objective_flag_switches_between_effort_and_makespan() {
+    let compile = |objective: &[&str]| {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg("compile")
+            .arg(
+                workspace_root()
+                    .join("tests")
+                    .join("fixtures")
+                    .join("makespan-tradeoff"),
+            )
+            .arg("--json")
+            .args(objective)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let effort = compile(&[]);
+    assert_eq!(effort["selection_objective"], "effort");
+    assert_eq!(effort["selection"]["deliver"], "chain");
+    assert_eq!(effort["makespan_minutes"], 40.0);
+    assert_eq!(effort, compile(&["--objective", "effort"]));
+
+    let fast = compile(&["--objective", "makespan"]);
+    assert_eq!(fast["selection_objective"], "makespan");
+    assert_eq!(fast["selection_status"], "optimal");
+    assert_eq!(fast["selection"]["deliver"], "fan-out");
+    assert_eq!(fast["makespan_minutes"], 20.0);
+    assert_eq!(
+        fast["selection_explanation"],
+        "Minimized dependency-aware completion time to 20.000 minutes at weighted effort 60.000; \
+the effort-optimal selection takes 40.000 minutes at weighted effort 40.000, so 20.000 more \
+effort buys 20.000 fewer minutes."
+    );
+}

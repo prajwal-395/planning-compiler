@@ -44,7 +44,7 @@ is private and unlicensed pending a later decision
 ```
 crates/pc-ir/     IR types, TOML+JSON serde, JSON Schemas (plan + patch)
 crates/pc-core/   Passes P1-P5, P6 selection input, roll-ups, P7 CPM, P8 frontier, P9 impact/diff, step-7 proposal loop, diagnostics
-crates/pc-select/ P6 exact ILP method selection with greedy fallback
+crates/pc-select/ P6 exact ILP (effort) or makespan-search method selection with greedy fallback
 crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan writer, evidence JSONL append/read
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)

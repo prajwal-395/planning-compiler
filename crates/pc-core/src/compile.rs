@@ -8,7 +8,7 @@
 
 use pc_ir::{MethodKind, MethodStatus, PlanDoc};
 use pc_select::{
-    Constraints as SelectionConstraints, Method as SelectionMethod, Optimality,
+    Constraints as SelectionConstraints, Method as SelectionMethod, Objective, Optimality,
     Task as SelectionTask,
 };
 use serde::{Deserialize, Serialize};
@@ -178,6 +178,11 @@ pub struct CompiledPlan {
     pub selection_status: String,
     /// P6 time budget in milliseconds.
     pub selection_time_budget_ms: u64,
+    /// P6 objective: `effort` (weighted total) or `makespan`.
+    pub selection_objective: String,
+    /// Why the P6 objective favored the chosen methods; under `makespan`
+    /// it compares the result with the lowest-effort selection.
+    pub selection_explanation: String,
     /// Chosen method per needed task: the P6 selection P8 and P9 read
     /// without re-solving.
     pub selection: BTreeMap<String, String>,
@@ -391,6 +396,16 @@ pub fn compile_with_budget(
     doc: &PlanDoc,
     selection_budget: std::time::Duration,
 ) -> Result<CompiledPlan, CompileError> {
+    compile_with_objective(doc, selection_budget, Objective::TotalEffort)
+}
+
+/// Analyze the plan with P6 selecting methods for weighted total effort or
+/// for dependency-aware makespan.
+pub fn compile_with_objective(
+    doc: &PlanDoc,
+    selection_budget: std::time::Duration,
+    objective: Objective,
+) -> Result<CompiledPlan, CompileError> {
     let accepted: Vec<_> = doc
         .method
         .iter()
@@ -425,6 +440,11 @@ pub fn compile_with_budget(
                     id: m.id.clone(),
                     costs,
                     children: m.subtasks.clone(),
+                    order_edges: m
+                        .order_edges
+                        .iter()
+                        .map(|e| (e.from.clone(), e.to.clone()))
+                        .collect(),
                 }
             })
             .collect();
@@ -502,11 +522,12 @@ pub fn compile_with_budget(
     constraints
         .forbidden_methods
         .extend(ineligible.keys().cloned());
-    let selection = pc_select::select(
+    let selection = pc_select::select_with_objective(
         &selection_tasks,
         &doc.objective.root_task,
         &constraints,
         selection_budget,
+        objective,
     )
     .map_err(|error| match error {
         pc_select::SelectError::Infeasible => CompileError::SelectionInfeasible,
@@ -833,6 +854,12 @@ pub fn compile_with_budget(
         trace,
         selection_status: selection_status(&selection.optimality),
         selection_time_budget_ms: selection.time_budget.as_millis() as u64,
+        selection_objective: match objective {
+            Objective::TotalEffort => "effort",
+            Objective::Makespan => "makespan",
+        }
+        .into(),
+        selection_explanation: selection.explanation,
         selection: selection.methods,
         open_work,
     })

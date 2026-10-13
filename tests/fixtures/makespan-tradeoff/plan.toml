@@ -1,0 +1,105 @@
+ir_version = 0
+
+[plan]
+id = "makespan-tradeoff"
+title = "Parallel work versus less total work"
+
+[objective]
+root_task = "deliver"
+weights = { duration_minutes = 1.0 }
+
+[[task]]
+id = "deliver"
+title = "Deliver the document"
+state = "decomposed"
+
+[[task]]
+id = "a"
+title = "Draft section A"
+state = "resolved"
+
+[[task]]
+id = "b"
+title = "Draft section B"
+state = "resolved"
+
+[[task]]
+id = "c"
+title = "Draft section C"
+state = "resolved"
+
+[[task]]
+id = "x"
+title = "Draft the outline"
+state = "resolved"
+
+[[task]]
+id = "y"
+title = "Write from the outline"
+state = "resolved"
+
+# fan-out runs three independent 20-minute tasks: 60 minutes of work, 20
+# minutes elapsed. chain orders two 20-minute tasks: 40 minutes of work, 40
+# minutes elapsed. Effort selection picks chain; makespan selection fan-out.
+[[method]]
+id = "fan-out"
+task = "deliver"
+kind = "decompose"
+subtasks = ["a", "b", "c"]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "chain"
+task = "deliver"
+kind = "decompose"
+subtasks = ["x", "y"]
+order_edges = [{ from = "x", to = "y" }]
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-a"
+task = "a"
+kind = "invoke"
+capability = "write@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-b"
+task = "b"
+kind = "invoke"
+capability = "write@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-c"
+task = "c"
+kind = "invoke"
+capability = "write@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-x"
+task = "x"
+kind = "invoke"
+capability = "write@1"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "do-y"
+task = "y"
+kind = "invoke"
+capability = "write@1"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "write@1"
+kind = "tool"
+version = "1"
+estimates = [{ metric = "duration_minutes", low = 20.0, likely = 20.0, high = 20.0, provenance = "declared" }]

@@ -4,7 +4,7 @@
 //! clean, `1` means diagnostics were found, `2` means the invocation itself
 //! was wrong (reserved for clap usage errors).
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Deterministic compiler for work: validate plans, never execute them.
@@ -68,6 +68,10 @@ enum Commands {
         /// Maximum exact P6 solve time in milliseconds.
         #[arg(long, default_value_t = 2000)]
         selection_time_budget_ms: u64,
+        /// What P6 minimizes: weighted total effort, or dependency-aware
+        /// completion time.
+        #[arg(long, value_enum, default_value_t = SelectionObjective::Effort)]
+        objective: SelectionObjective,
     },
     /// Explain a task, method, or capability in the accepted plan.
     Explain {
@@ -269,7 +273,8 @@ fn main() {
             path,
             json,
             selection_time_budget_ms,
-        } => run_compile(&plan_path(path), json, selection_time_budget_ms),
+            objective,
+        } => run_compile(&plan_path(path), json, selection_time_budget_ms, objective),
         Commands::Explain {
             target,
             path,
@@ -405,11 +410,29 @@ fn open_work_line(summary: &pc_core::OpenWorkSummary) -> String {
     )
 }
 
-fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
+/// P6 objective selectable on `pc compile`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SelectionObjective {
+    /// Minimize weighted total effort, counting shared work once.
+    Effort,
+    /// Minimize dependency-aware completion time.
+    Makespan,
+}
+
+fn run_compile(
+    path: &std::path::Path,
+    json: bool,
+    selection_time_budget_ms: u64,
+    objective: SelectionObjective,
+) {
     let (loaded, _) = load_checked(path);
-    let result = match pc_core::compile_with_budget(
+    let result = match pc_core::compile_with_objective(
         &loaded.doc,
         std::time::Duration::from_millis(selection_time_budget_ms),
+        match objective {
+            SelectionObjective::Effort => pc_core::Objective::TotalEffort,
+            SelectionObjective::Makespan => pc_core::Objective::Makespan,
+        },
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -438,6 +461,9 @@ fn run_compile(path: &std::path::Path, json: bool, selection_time_budget_ms: u64
         "selection: {} ({} ms budget)",
         result.selection_status, result.selection_time_budget_ms
     );
+    if let SelectionObjective::Makespan = objective {
+        println!("objective: makespan; {}", result.selection_explanation);
+    }
     for (metric, range) in &result.totals {
         let Some(column) = result.basis.get(metric) else {
             continue;
