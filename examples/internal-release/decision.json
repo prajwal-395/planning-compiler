@@ -1,0 +1,27 @@
+{
+  "id": "internal-release-demo-2026-10-13",
+  "timestamp": "2026-10-13T12:00:00Z",
+  "plan_revision": "release-demo",
+  "source": "internal-release-example",
+  "schema_version": 1,
+  "tasks": ["grade-b"],
+  "capabilities": ["resolve-grade@1", "native-grade@1"],
+  "objective": "Demonstrate a recorded planning decision",
+  "project_revision": "example",
+  "alternatives": [
+    {"id": "resolve", "description": "Use the Resolve-backed method"},
+    {"id": "native", "description": "Use the native method"}
+  ],
+  "selected_alternative": "resolve",
+  "initial_decision": "resolve",
+  "compiler_recommendation": "resolve",
+  "decision_provenance": "Illustrative documentation event",
+  "supporting_evidence": [],
+  "compiler_runs": [],
+  "constraints": ["Preserve output fidelity"],
+  "predicted_outcome": {
+    "description": "Illustrative 30 minute estimate",
+    "metrics": {"duration_minutes": 30.0}
+  },
+  "baseline_alternative": "resolve"
+}

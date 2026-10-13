@@ -77,6 +77,9 @@ still round-trips untouched.
 
 ## Use
 
+For reproducible installation, MCP setup, and runnable examples of the
+integrated workflows, see [Internal release guide](docs/internal-release.md).
+
 ```sh
 pc init [path]     # scaffold .plan/plan.toml (or <path>/plan.toml) that passes pc check; refuses to overwrite
 pc check [path]    # run P1-P5; exit 0 clean, 1 diagnostics, 2 usage

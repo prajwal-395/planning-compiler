@@ -1,0 +1,17 @@
+{
+  "id": "internal-release-outcome-2026-10-13",
+  "timestamp": "2026-10-13T13:00:00Z",
+  "plan_revision": "release-demo",
+  "source": "internal-release-example",
+  "schema_version": 1,
+  "tasks": ["grade-b"],
+  "capabilities": ["resolve-grade@1"],
+  "decision_id": "internal-release-demo-2026-10-13",
+  "actual_outcome": {
+    "description": "Illustrative observed 32 minute result",
+    "metrics": {"duration_minutes": 32.0}
+  },
+  "confidence": 0.8,
+  "evaluation_status": "confirmed",
+  "usefulness": "neutral"
+}

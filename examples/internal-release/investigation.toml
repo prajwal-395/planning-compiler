@@ -1,0 +1,42 @@
+
+# Synthetic VOI illustration only; these utility values are not measurements.
+[[investigation]]
+task = "grade-b"
+cost = 0.5
+cost_source = "internal-release-example:assumed-review-cost"
+
+[[investigation.hypotheses]]
+id = "native-faster"
+source = "internal-release-example:assumption"
+
+[investigation.hypotheses.probability]
+low = 0.5
+high = 0.5
+provenance = "declared"
+source = "internal-release-example:assumption"
+
+[[investigation.hypotheses.alternatives]]
+alternative = "grade-b-in-resolve"
+value = 0.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "grade-b-native"
+value = 3.0
+
+[[investigation.hypotheses]]
+id = "resolve-faster"
+source = "internal-release-example:assumption"
+
+[investigation.hypotheses.probability]
+low = 0.5
+high = 0.5
+provenance = "declared"
+source = "internal-release-example:assumption"
+
+[[investigation.hypotheses.alternatives]]
+alternative = "grade-b-in-resolve"
+value = 3.0
+
+[[investigation.hypotheses.alternatives]]
+alternative = "grade-b-native"
+value = 0.0
