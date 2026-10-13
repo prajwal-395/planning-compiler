@@ -18,6 +18,7 @@ pub mod frontier;
 pub mod impact;
 pub mod inventory;
 pub mod json;
+pub mod pareto;
 pub mod passes;
 pub mod propose;
 
@@ -37,6 +38,10 @@ pub use impact::{
     diff, impact, status_str,
 };
 pub use inventory::{InventoryReport, InventoryRow, inventory, render_inventory_text};
+pub use pareto::{
+    Dominance, DominatedAlternative, IncompleteAlternative, ParetoAlternative, ParetoReport,
+    pareto_frontier,
+};
 pub use passes::{
     Counts, Ctx, EstimatePass, MatchPass, Pass, Report, ResolvePass, SharePass, TraceEvent,
     ValidatePass, check,

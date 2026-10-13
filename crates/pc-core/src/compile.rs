@@ -413,35 +413,22 @@ pub fn compile_with_budget(
     compile_with_objective(doc, selection_budget, Objective::TotalEffort)
 }
 
-/// Analyze the plan with P6 selecting methods for weighted total effort or
-/// for dependency-aware makespan.
-pub fn compile_with_objective(
-    doc: &PlanDoc,
-    selection_budget: std::time::Duration,
-    objective: Objective,
-) -> Result<CompiledPlan, CompileError> {
-    compile_with_objective_and_selection_duration(doc, selection_budget, objective)
-        .map(|(compiled, _)| compiled)
-}
+/// P6 selection inputs shared by weighted selection and Pareto evaluation:
+/// the accepted-method tasks with P5 effective expected costs, plus hard
+/// limits and the ineligibility reasons that forbid methods under them.
+pub(crate) type SelectionInputs = (
+    Vec<SelectionTask>,
+    SelectionConstraints,
+    BTreeMap<(String, String), Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+);
 
-/// Observation of the P6 selection solver for one compile, kept outside
-/// `CompiledPlan` so deterministic outputs remain byte-for-byte stable.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SelectionObservation {
-    /// Wall-clock time spent inside the P6 selection solver.
-    pub duration: std::time::Duration,
-    /// Solver-reported optimality, including the gap when one is known.
-    pub optimality: Optimality,
-}
-
-/// Analyze a plan under the given P6 objective and also return the P6
-/// selection-solver observation. The measurement is kept outside
-/// `CompiledPlan` so deterministic outputs remain byte-for-byte stable.
-pub fn compile_with_objective_and_selection_duration(
+/// Build the [`SelectionInputs`] for weighted selection and Pareto
+/// evaluation.
+pub(crate) fn selection_inputs(
     doc: &PlanDoc,
-    selection_budget: std::time::Duration,
-    objective: Objective,
-) -> Result<(CompiledPlan, SelectionObservation), CompileError> {
+    estimated: &crate::estimate::EstimateReport,
+) -> SelectionInputs {
     let accepted: Vec<_> = doc
         .method
         .iter()
@@ -450,7 +437,6 @@ pub fn compile_with_objective_and_selection_duration(
     // P5 folds evidence into effective estimates before selection, so
     // appending evidence can flip the chosen methods. Declared guesses alone
     // no longer decide.
-    let estimated = crate::estimate::estimate(doc);
     let eff = estimated.effective_map();
     let capability_resources: BTreeMap<String, Vec<String>> = doc
         .capability
@@ -526,7 +512,7 @@ pub fn compile_with_objective_and_selection_duration(
             .limits
             .insert("quality_loss".into(), -floor.ln());
     }
-    let mut ineligible: BTreeMap<(String, String), Vec<&str>> = BTreeMap::new();
+    let mut ineligible: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for selection_task in &mut selection_tasks {
         for method in &mut selection_task.methods {
             let Some(source) = doc
@@ -550,7 +536,7 @@ pub fn compile_with_objective_and_selection_duration(
                 ineligible
                     .entry((selection_task.id.clone(), method.id.clone()))
                     .or_default()
-                    .push("missing money_usd estimate under budget_usd");
+                    .push("missing money_usd estimate under budget_usd".to_owned());
             }
             if doc.objective.quality_floor.is_some_and(|floor| floor > 0.0) {
                 if let Some(risk) = eff
@@ -569,7 +555,7 @@ pub fn compile_with_objective_and_selection_duration(
                     ineligible
                         .entry((selection_task.id.clone(), method.id.clone()))
                         .or_default()
-                        .push("missing failure_risk estimate under quality_floor");
+                        .push("missing failure_risk estimate under quality_floor".to_owned());
                 }
             }
         }
@@ -577,6 +563,47 @@ pub fn compile_with_objective_and_selection_duration(
     constraints
         .forbidden_methods
         .extend(ineligible.keys().cloned());
+    (
+        selection_tasks,
+        constraints,
+        ineligible,
+        capability_resources,
+    )
+}
+
+/// Analyze the plan with P6 selecting methods for weighted total effort or
+/// for dependency-aware makespan.
+pub fn compile_with_objective(
+    doc: &PlanDoc,
+    selection_budget: std::time::Duration,
+    objective: Objective,
+) -> Result<CompiledPlan, CompileError> {
+    compile_with_objective_and_selection_duration(doc, selection_budget, objective)
+        .map(|(compiled, _)| compiled)
+}
+
+/// Observation of the P6 selection solver for one compile, kept outside
+/// `CompiledPlan` so deterministic outputs remain byte-for-byte stable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionObservation {
+    /// Wall-clock time spent inside the P6 selection solver.
+    pub duration: std::time::Duration,
+    /// Solver-reported optimality, including the gap when one is known.
+    pub optimality: Optimality,
+}
+
+/// Analyze a plan under the given P6 objective and also return the P6
+/// selection-solver observation. The measurement is kept outside
+/// `CompiledPlan` so deterministic outputs remain byte-for-byte stable.
+pub fn compile_with_objective_and_selection_duration(
+    doc: &PlanDoc,
+    selection_budget: std::time::Duration,
+    objective: Objective,
+) -> Result<(CompiledPlan, SelectionObservation), CompileError> {
+    let estimated = crate::estimate::estimate(doc);
+    let (selection_tasks, constraints, ineligible, capability_resources) =
+        selection_inputs(doc, &estimated);
+    let eff = estimated.effective_map();
     let selection_started = std::time::Instant::now();
     let selection = pc_select::select_with_objective(
         &selection_tasks,

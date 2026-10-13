@@ -7,6 +7,7 @@
 //! `serialize_with` on the float fields of the report structs.
 
 use serde::Serializer;
+use std::collections::BTreeMap;
 
 /// Decimals carried in `--json` output, matching the `{:.3}` text renderer.
 pub const JSON_DECIMALS: i32 = 3;
@@ -34,6 +35,20 @@ pub fn ser_opt_f64_3<S: Serializer>(value: &Option<f64>, serializer: S) -> Resul
         Some(v) => serializer.serialize_some(&round3(*v)),
         None => serializer.serialize_none(),
     }
+}
+
+/// `serialize_with` for `BTreeMap<String, f64>` fields in `--json`
+/// reports: every value rounds like the text renderer.
+pub fn ser_map_f64_3<S: Serializer>(
+    map: &BTreeMap<String, f64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+    let mut out = serializer.serialize_map(Some(map.len()))?;
+    for (key, value) in map {
+        out.serialize_entry(key, &round3(*value))?;
+    }
+    out.end()
 }
 
 #[cfg(test)]

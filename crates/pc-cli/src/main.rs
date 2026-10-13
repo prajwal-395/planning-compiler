@@ -76,6 +76,11 @@ enum Commands {
         /// completion time.
         #[arg(long, value_enum, default_value_t = SelectionObjective::Effort)]
         objective: SelectionObjective,
+        /// Also evaluate the deterministic Pareto frontier over feasible
+        /// selections: non-dominated alternatives plus dominated ones naming
+        /// what dominates them. Weighted selection is unchanged.
+        #[arg(long)]
+        pareto: bool,
     },
     /// Explain a task, method, or capability in the accepted plan.
     Explain {
@@ -387,7 +392,14 @@ fn main() {
             json,
             selection_time_budget_ms,
             objective,
-        } => run_compile(&plan_path(path), json, selection_time_budget_ms, objective),
+            pareto,
+        } => run_compile(
+            &plan_path(path),
+            json,
+            selection_time_budget_ms,
+            objective,
+            pareto,
+        ),
         Commands::Explain {
             target,
             path,
@@ -824,6 +836,7 @@ fn run_compile(
     json: bool,
     selection_time_budget_ms: u64,
     objective: SelectionObjective,
+    pareto: bool,
 ) {
     let started = std::time::Instant::now();
     let (loaded, report, validation_duration) = load_checked(path);
@@ -855,9 +868,33 @@ fn run_compile(
         },
     );
     if json {
+        if !pareto {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).unwrap_or_default()
+            );
+            return;
+        }
+        let frontier = match pc_core::pareto_frontier(
+            &loaded.doc,
+            std::time::Duration::from_millis(selection_time_budget_ms),
+        ) {
+            Ok(frontier) => frontier,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+        let mut value = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
+        if let serde_json::Value::Object(ref mut map) = value {
+            map.insert(
+                "pareto".to_string(),
+                serde_json::to_value(&frontier).unwrap_or(serde_json::Value::Null),
+            );
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&result).unwrap_or_default()
+            serde_json::to_string_pretty(&value).unwrap_or_default()
         );
         return;
     }
@@ -957,6 +994,120 @@ fn run_compile(
     }
     for entry in &result.pending_evidence {
         println!("{}", pending_line(entry));
+    }
+    if pareto {
+        let frontier = match pc_core::pareto_frontier(
+            &loaded.doc,
+            std::time::Duration::from_millis(selection_time_budget_ms),
+        ) {
+            Ok(frontier) => frontier,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+        print_pareto(&frontier);
+    }
+}
+
+/// One text line per Pareto alternative: the compared measures, the kept
+/// weighted objective, and the method choices, all at `{:.3}` precision.
+fn pareto_alternative_line(
+    id: &str,
+    objectives: &std::collections::BTreeMap<String, f64>,
+    compared: &[String],
+    weighted: f64,
+    methods: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let values = if compared.is_empty() {
+        "(nothing compared)".to_string()
+    } else {
+        compared
+            .iter()
+            .map(|d| format!("{d} {:.3}", objectives.get(d).copied().unwrap_or(0.0)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let choices = methods
+        .iter()
+        .map(|(task, method)| format!("{task}={method}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{id}: {values}; weighted {weighted:.3}; methods {choices}")
+}
+
+/// Pareto text section for `pc compile --pareto`: the compared measures
+/// beside the ones listed as not compared, the non-dominated frontier,
+/// dominated alternatives naming what dominates them, and incomplete
+/// alternatives shown separately, never ranked. Weighted selection output
+/// above is unchanged.
+fn print_pareto(frontier: &pc_core::ParetoReport) {
+    if frontier.compared.is_empty() {
+        println!(
+            "pareto compared: none ({} evaluated, {})",
+            frontier.evaluated, frontier.status,
+        );
+    } else {
+        println!(
+            "pareto compared: {} ({} evaluated, {})",
+            frontier.compared.join(", "),
+            frontier.evaluated,
+            frontier.status,
+        );
+    }
+    if !frontier.not_compared.is_empty() {
+        println!("not compared: {}", frontier.not_compared.join(", "));
+    }
+    println!("pareto frontier ({}):", frontier.frontier.len());
+    for alt in &frontier.frontier {
+        println!(
+            "{}",
+            pareto_alternative_line(
+                &alt.id,
+                &alt.objectives,
+                &frontier.compared,
+                alt.objective,
+                &alt.methods
+            )
+        );
+    }
+    println!("dominated ({}):", frontier.dominated.len());
+    for alt in &frontier.dominated {
+        println!(
+            "{}; dominated by {}",
+            pareto_alternative_line(
+                &alt.id,
+                &alt.objectives,
+                &frontier.compared,
+                alt.objective,
+                &alt.methods
+            ),
+            alt.dominated_by
+                .iter()
+                .map(|d| {
+                    let mut text = format!("{} on {}", d.by, d.on.join(", "));
+                    if !d.unknown.is_empty() {
+                        text.push_str(&format!(" ({} unknown)", d.unknown.join(", ")));
+                    }
+                    text
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    println!("incomplete ({}):", frontier.incomplete.len());
+    for alt in &frontier.incomplete {
+        println!(
+            "{} ({} unknown; not ranked)",
+            pareto_alternative_line(
+                &alt.id,
+                &alt.objectives,
+                &frontier.compared,
+                alt.objective,
+                &alt.methods
+            ),
+            alt.unknown.join(", ")
+        );
     }
 }
 

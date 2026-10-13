@@ -245,6 +245,38 @@ lowest-effort selection found, stating how much extra effort buys how many
 fewer minutes. The explanation reads `resource-aware` when capacities are
 declared and `dependency-aware` otherwise.
 
+`pc compile --pareto` keeps that weighted selection and additionally
+evaluates the deterministic Pareto frontier over the same feasible
+assignments (P6 inputs: accepted methods, P5 effective expected costs, hard
+limits). All alternatives compare only on the measures known for every one
+of them that values anything: an assignment values a metric when every
+chosen cost-bearing method of it prices the metric (cost-free
+decompositions never void one, while an activated open task with no
+accepted method values nothing), and a measure is compared when every
+value-carrying assignment values it, so value-less assignments never void
+the shared set. A measure only some alternatives price is listed as not
+compared, never invented. `duration_minutes` compares as
+`makespan_minutes` (CPM), `failure_risk` combines as `1 - product(1 -
+risk)`, the rest are summed, and the internal `quality_loss` limit cost is
+never a measure; lower is better on every compared measure. One shared
+measure set keeps dominance transitive, so no cycle can empty the
+frontier. The search stops after 10,000 feasible assignments or the time
+budget. `--json` adds a `pareto` object with `compared`, `not_compared`,
+the non-dominated `frontier`, and the `dominated` remainder (each
+alternative with its `objectives` and `unknown` measures). Each dominated
+alternative lists `dominated_by` entries `{by, on, unknown}`: the
+dominator's id, the compared measures the dominance was decided on, and
+the measures unknown for either side. Alternatives with no value on a
+compared measure are `incomplete`: shown separately, never ranked. The
+object also carries `status` (`optimal`, or `best-found (gap unavailable)`
+when the budget or the assignment cap cuts the search short),
+`evaluated` and `time_budget_ms`; the text prints the same frontier,
+dominated and incomplete lines at `{:.3}` precision with the kept weighted
+objective beside each alternative. Without the flag both outputs are
+byte-identical to before. See `tests/fixtures/pareto-tradeoff/plan.toml`
+(the captain's A/B/C/D example: three tradeoffs on the frontier, D
+dominated).
+
 ## P7: schedule-analyze (step 2+)
 
 `pc compile` traverses from the objective root through selected accepted methods.

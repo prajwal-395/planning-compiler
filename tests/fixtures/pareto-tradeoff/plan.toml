@@ -1,0 +1,84 @@
+ir_version = 0
+
+[plan]
+id = "pareto-tradeoff"
+title = "Time versus cost tradeoffs"
+
+[objective]
+root_task = "ship"
+weights = { duration_minutes = 1.0, money_usd = 1.0 }
+
+[[task]]
+id = "ship"
+title = "Ship the feature"
+state = "resolved"
+
+# Captain's PC-09 example: A 10 min/$12, B 14/$4, C 12/$7 are each optimal
+# under different tradeoffs; D 20/$15 is dominated (A beats it on both).
+[[method]]
+id = "via-a"
+task = "ship"
+kind = "invoke"
+capability = "cap-a"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-b"
+task = "ship"
+kind = "invoke"
+capability = "cap-b"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-c"
+task = "ship"
+kind = "invoke"
+capability = "cap-c"
+status = "accepted"
+provenance = "human:test"
+
+[[method]]
+id = "via-d"
+task = "ship"
+kind = "invoke"
+capability = "cap-d"
+status = "accepted"
+provenance = "human:test"
+
+[[capability]]
+id = "cap-a"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 10.0, likely = 10.0, high = 10.0, provenance = "declared" },
+  { metric = "money_usd", low = 12.0, likely = 12.0, high = 12.0, provenance = "declared" },
+]
+
+[[capability]]
+id = "cap-b"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 14.0, likely = 14.0, high = 14.0, provenance = "declared" },
+  { metric = "money_usd", low = 4.0, likely = 4.0, high = 4.0, provenance = "declared" },
+]
+
+[[capability]]
+id = "cap-c"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 12.0, likely = 12.0, high = 12.0, provenance = "declared" },
+  { metric = "money_usd", low = 7.0, likely = 7.0, high = 7.0, provenance = "declared" },
+]
+
+[[capability]]
+id = "cap-d"
+kind = "tool"
+version = "1"
+estimates = [
+  { metric = "duration_minutes", low = 20.0, likely = 20.0, high = 20.0, provenance = "declared" },
+  { metric = "money_usd", low = 15.0, likely = 15.0, high = 15.0, provenance = "declared" },
+]

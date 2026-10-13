@@ -391,6 +391,502 @@ pub fn select_with_objective(
     })
 }
 
+/// One feasible method assignment on the Pareto frontier: no other complete
+/// alternative is better on the compared measures. Weighted `objective` is
+/// preserved beside the multi-objective vector for when preferences are
+/// clear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParetoAlternative {
+    /// Stable id (`alt-<n>`) in deterministic sort order.
+    pub id: String,
+    /// Chosen method per needed task.
+    pub methods: BTreeMap<String, String>,
+    /// Summed selected costs per metric (shared tasks counted once).
+    pub totals: BTreeMap<String, f64>,
+    /// Dependency-aware completion time over `duration_minutes`.
+    pub makespan: f64,
+    /// Weighted total-effort objective for this assignment.
+    pub objective: f64,
+    /// Values over the dimensions this alternative prices.
+    pub objectives: BTreeMap<String, f64>,
+    /// Valued dimensions this alternative does not price, sorted.
+    pub unknown: Vec<String>,
+}
+
+/// One pairwise dominance: `by` is no worse on every compared measure
+/// (`on`) and strictly better on at least one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dominance {
+    /// Id of the dominating alternative.
+    pub by: String,
+    /// Compared measures the dominance was decided on, sorted.
+    pub on: Vec<String>,
+    /// Valued dimensions unknown for either side, so not compared, sorted.
+    pub unknown: Vec<String>,
+}
+
+/// One feasible assignment another complete alternative dominates on the
+/// compared measures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DominatedAlternative {
+    /// Stable id (`alt-<n>`) in deterministic sort order.
+    pub id: String,
+    /// Chosen method per needed task.
+    pub methods: BTreeMap<String, String>,
+    /// Summed selected costs per metric (shared tasks counted once).
+    pub totals: BTreeMap<String, f64>,
+    /// Dependency-aware completion time over `duration_minutes`.
+    pub makespan: f64,
+    /// Weighted total-effort objective for this assignment.
+    pub objective: f64,
+    /// Values over the dimensions this alternative prices.
+    pub objectives: BTreeMap<String, f64>,
+    /// Valued dimensions this alternative does not price, sorted.
+    pub unknown: Vec<String>,
+    /// Frontier alternatives dominating this one, in id order.
+    /// Transitivity of comparison on one shared measure set guarantees a
+    /// frontier dominator exists.
+    pub dominated_by: Vec<Dominance>,
+}
+
+/// One feasible assignment with no value on a compared measure: shown
+/// separately, never ranked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncompleteAlternative {
+    /// Stable id (`alt-<n>`) in deterministic sort order.
+    pub id: String,
+    /// Chosen method per needed task.
+    pub methods: BTreeMap<String, String>,
+    /// Summed selected costs per metric (shared tasks counted once).
+    pub totals: BTreeMap<String, f64>,
+    /// Dependency-aware completion time over `duration_minutes`.
+    pub makespan: f64,
+    /// Weighted total-effort objective for this assignment.
+    pub objective: f64,
+    /// Values over the dimensions this alternative prices.
+    pub objectives: BTreeMap<String, f64>,
+    /// Valued dimensions this alternative does not price, sorted.
+    pub unknown: Vec<String>,
+}
+
+/// Deterministic Pareto evaluation over complete feasible assignments.
+///
+/// All alternatives compare only on the measures known for every one of
+/// them that values anything: a metric is valued in an assignment when
+/// every chosen cost-bearing method (one with costs or without children;
+/// cost-free decompositions do not count) prices it, and it is compared
+/// when every feasible assignment that values any metric values it.
+/// Value-less assignments never void the shared set; they are incomplete
+/// instead. A measure only some alternatives price is listed as not
+/// compared. `duration_minutes` becomes `makespan_minutes` (CPM),
+/// `failure_risk` combines as `1 - product(1 - risk)`, the rest are summed.
+/// One shared measure set keeps dominance transitive, so no dominance
+/// cycle can empty the frontier. Weighted objectives are preserved per
+/// alternative for when preferences are clear.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParetoReport {
+    /// Measures known for every feasible assignment, in lexical order.
+    pub compared: Vec<String>,
+    /// Valued measures known for only some assignments, in lexical order:
+    /// listed, never compared.
+    pub not_compared: Vec<String>,
+    /// Non-dominated complete alternatives in deterministic order.
+    pub frontier: Vec<ParetoAlternative>,
+    /// Dominated complete alternatives in deterministic order.
+    pub dominated: Vec<DominatedAlternative>,
+    /// Alternatives with no value on a compared measure: shown separately,
+    /// never ranked.
+    pub incomplete: Vec<IncompleteAlternative>,
+    /// `Optimal` when the assignment search ran to completion, `BestFound`
+    /// when the time budget or [`MAX_PARETO_ASSIGNMENTS`] cut it short.
+    pub optimality: Optimality,
+    /// Feasible assignments evaluated (deduplicated).
+    pub evaluated: usize,
+}
+
+/// Most feasible assignments the Pareto search collects before it stops
+/// and reports [`Optimality::BestFound`], bounding dominance work.
+pub const MAX_PARETO_ASSIGNMENTS: usize = 10_000;
+
+/// Evaluate the Pareto frontier over feasible method selections.
+///
+/// Exhaustively searches method assignments of activated tasks until the
+/// time budget expires or [`MAX_PARETO_ASSIGNMENTS`] are collected, like
+/// [`select_with_objective`] with [`Objective::Makespan`], then ranks the
+/// complete assignments (those pricing every compared measure) into the
+/// non-dominated frontier and the dominated remainder naming its
+/// dominators; the rest are shown separately as incomplete, never ranked.
+/// `internal_metrics` (synthetic costs a caller adds only to enforce hard
+/// limits) are never valued. `unresolved` names method-less tasks whose
+/// work is still unknown (unlike done or dropped work): an assignment
+/// activating one values no metric.
+/// Deterministic: same inputs, byte-identical report.
+pub fn pareto(
+    tasks: &[Task],
+    root: &str,
+    constraints: &Constraints,
+    internal_metrics: &[&str],
+    unresolved: &BTreeSet<String>,
+    time_budget: Duration,
+) -> Result<ParetoReport, SelectError> {
+    let by_id: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    if by_id.len() != tasks.len() {
+        return Err(SelectError::Invalid("duplicate task id".into()));
+    }
+    if !by_id.contains_key(root) {
+        return Err(SelectError::Invalid(format!("missing root task `{root}`")));
+    }
+    validate_graph(&by_id, constraints)?;
+    let greedy = greedy_select(&by_id, &reachable_tasks(&by_id, root), root, constraints)?
+        .and_then(|g| candidate(&by_id, constraints, &g.methods, root).map(|c| (g.methods, c)));
+    let mut search = ParetoSearch {
+        by_id: &by_id,
+        root,
+        constraints,
+        start: Instant::now(),
+        budget: time_budget,
+        selected: BTreeMap::new(),
+        queue: vec![root.to_owned()],
+        found: Vec::new(),
+        stopped: false,
+    };
+    search.run(0);
+    let mut found = search.found;
+    if let Some((methods, _)) = greedy
+        && !found.iter().any(|c: &Candidate| c.methods == methods)
+        && let Some(scored) = candidate(&by_id, constraints, &methods, root)
+    {
+        found.push(scored);
+    }
+    // Deduplicate identical assignments; sort deterministically by the
+    // selected methods so ids are stable whatever the search order.
+    found.sort_by(|a, b| methods_cmp(&a.methods, &b.methods));
+    found.dedup_by(|a, b| a.methods == b.methods);
+    if found.is_empty() {
+        if search.stopped {
+            return Err(SelectError::TimeLimit);
+        }
+        return Err(SelectError::Infeasible);
+    }
+    let optimality = if search.stopped {
+        Optimality::BestFound { gap_percent: None }
+    } else {
+        Optimality::Optimal
+    };
+    // Each alternative knows only the metrics it values; a measure is
+    // compared only when every alternative that values anything values
+    // it, so value-less alternatives never void the shared set (they are
+    // incomplete instead) and one shared set decides every dominance, so
+    // cycles are impossible.
+    let known: Vec<BTreeSet<String>> = found
+        .iter()
+        .map(|c| {
+            valued_metrics(&by_id, unresolved, c)
+                .into_iter()
+                .filter(|m| !internal_metrics.contains(&m.as_str()))
+                .map(|m| {
+                    if m == "duration_minutes" {
+                        "makespan_minutes".to_owned()
+                    } else {
+                        m
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let union: BTreeSet<String> = known.iter().flatten().cloned().collect();
+    let valued: Vec<&BTreeSet<String>> = known.iter().filter(|k| !k.is_empty()).collect();
+    let compared: Vec<String> = match valued.split_first() {
+        None => Vec::new(),
+        Some((first, rest)) => first
+            .iter()
+            .filter(|m| rest.iter().all(|k| k.contains(*m)))
+            .cloned()
+            .collect(),
+    };
+    let not_compared: Vec<String> = union
+        .iter()
+        .filter(|m| !compared.contains(m))
+        .cloned()
+        .collect();
+    let complete: Vec<bool> = known
+        .iter()
+        .map(|k| compared.iter().all(|m| k.contains(m)))
+        .collect();
+    let mut frontier = Vec::new();
+    let mut dominated: Vec<DominatedAlternative> = Vec::new();
+    let mut incomplete = Vec::new();
+    // Deterministic global order: complete alternatives by compared values
+    // then method map, incomplete ones by method map after them, so
+    // `alt-<n>` ids are stable whatever the search order.
+    let vectors: Vec<Vec<f64>> = found
+        .iter()
+        .map(|c| pareto_vector(&by_id, c, &compared))
+        .collect();
+    let mut order: Vec<usize> = (0..found.len()).collect();
+    order.sort_by(|&a, &b| {
+        complete[b]
+            .cmp(&complete[a])
+            .then_with(|| {
+                vectors[a]
+                    .iter()
+                    .zip(&vectors[b])
+                    .map(|(x, y)| x.total_cmp(y))
+                    .find(|o| o.is_ne())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| methods_cmp(&found[a].methods, &found[b].methods))
+    });
+    // Classic skyline on one shared measure set is transitive, so every
+    // dominated alternative has a frontier dominator.
+    let dominates = |a: usize, b: usize| {
+        complete[a]
+            && complete[b]
+            && !compared.is_empty()
+            && vectors[a].iter().zip(&vectors[b]).all(|(x, y)| x <= y)
+            && vectors[a].iter().zip(&vectors[b]).any(|(x, y)| x < y)
+    };
+    let mut is_dominated = vec![false; found.len()];
+    for &b in &order {
+        if complete[b] {
+            is_dominated[b] = order.iter().any(|&a| a != b && dominates(a, b));
+        }
+    }
+    let ids: BTreeMap<usize, String> = order
+        .iter()
+        .enumerate()
+        .map(|(rank, &idx)| (idx, format!("alt-{rank}")))
+        .collect();
+    let unknown_of = |idx: usize| -> Vec<String> {
+        union
+            .iter()
+            .filter(|d| !known[idx].contains(*d))
+            .cloned()
+            .collect()
+    };
+    let objectives_of = |idx: usize| -> BTreeMap<String, f64> {
+        known[idx]
+            .iter()
+            .map(|d| (d.clone(), metric_value(&by_id, &found[idx], d)))
+            .collect()
+    };
+    let dominance_by = |a: usize, b: usize| -> Dominance {
+        Dominance {
+            by: ids[&a].clone(),
+            on: compared.clone(),
+            unknown: union
+                .iter()
+                .filter(|d| !known[a].contains(*d) || !known[b].contains(*d))
+                .cloned()
+                .collect(),
+        }
+    };
+    for &idx in &order {
+        let candidate = &found[idx];
+        let alternative = |id: String| {
+            (
+                id,
+                candidate.methods.clone(),
+                candidate.totals.clone(),
+                candidate.makespan,
+                candidate.objective,
+                objectives_of(idx),
+                unknown_of(idx),
+            )
+        };
+        if !complete[idx] {
+            let (id, methods, totals, makespan, objective, objectives, unknown) =
+                alternative(ids[&idx].clone());
+            incomplete.push(IncompleteAlternative {
+                id,
+                methods,
+                totals,
+                makespan,
+                objective,
+                objectives,
+                unknown,
+            });
+            continue;
+        }
+        if !is_dominated[idx] {
+            let (id, methods, totals, makespan, objective, objectives, unknown) =
+                alternative(ids[&idx].clone());
+            frontier.push(ParetoAlternative {
+                id,
+                methods,
+                totals,
+                makespan,
+                objective,
+                objectives,
+                unknown,
+            });
+            continue;
+        }
+        // Transitivity on one shared measure set guarantees a frontier
+        // dominator: every dominator chain ends at an undominated one that
+        // still dominates through the chain.
+        let dominated_by: Vec<Dominance> = order
+            .iter()
+            .filter(|&&a| complete[a] && !is_dominated[a] && dominates(a, idx))
+            .map(|&a| dominance_by(a, idx))
+            .collect();
+        let (id, methods, totals, makespan, objective, objectives, unknown) =
+            alternative(ids[&idx].clone());
+        dominated.push(DominatedAlternative {
+            id,
+            methods,
+            totals,
+            makespan,
+            objective,
+            objectives,
+            unknown,
+            dominated_by,
+        });
+    }
+    Ok(ParetoReport {
+        compared,
+        not_compared,
+        frontier,
+        dominated,
+        incomplete,
+        optimality,
+        evaluated: found.len(),
+    })
+}
+
+/// Metrics an assignment carries values for: priced by some chosen method
+/// and by every chosen cost-bearing method. A cost-free method with
+/// children is a structural decomposition and leaves metrics valued; a
+/// leaf or costed method missing a metric makes it unknown, and an
+/// activated unresolved task prices nothing, so it makes every metric
+/// unknown.
+fn valued_metrics(
+    by_id: &BTreeMap<&str, &Task>,
+    unresolved: &BTreeSet<String>,
+    candidate: &Candidate,
+) -> BTreeSet<String> {
+    let mut valued: BTreeSet<String> = candidate.totals.keys().cloned().collect();
+    for (task, method_id) in &candidate.methods {
+        let Some(method) = chosen_method(by_id, task, method_id) else {
+            continue;
+        };
+        if method
+            .children
+            .iter()
+            .any(|child| unresolved.contains(child))
+        {
+            return BTreeSet::new();
+        }
+        if !method.costs.is_empty() || method.children.is_empty() {
+            valued.retain(|m| method.costs.contains_key(m));
+        }
+    }
+    valued
+}
+
+/// Value of one valued measure for an assignment: makespan for time,
+/// independently-combined risk for `failure_risk`, summed totals else.
+/// Values snap to a 1e-6 grid so float noise between equal sums never
+/// decides dominance.
+fn metric_value(by_id: &BTreeMap<&str, &Task>, candidate: &Candidate, dimension: &str) -> f64 {
+    let value = if dimension == "makespan_minutes" {
+        candidate.makespan
+    } else if dimension == "failure_risk" {
+        let residual: f64 = candidate
+            .methods
+            .iter()
+            .filter_map(|(task, method_id)| {
+                chosen_method(by_id, task, method_id)?
+                    .costs
+                    .get("failure_risk")
+            })
+            .map(|risk| 1.0 - risk.clamp(0.0, 1.0))
+            .product();
+        1.0 - residual
+    } else {
+        candidate.totals[dimension]
+    };
+    (value * 1e6).round() / 1e6
+}
+
+/// Comparison vector for one complete assignment in compared order.
+fn pareto_vector(
+    by_id: &BTreeMap<&str, &Task>,
+    candidate: &Candidate,
+    compared: &[String],
+) -> Vec<f64> {
+    compared
+        .iter()
+        .map(|dimension| metric_value(by_id, candidate, dimension))
+        .collect()
+}
+
+/// Deterministic order over method maps: sorted `(task, method)` pairs.
+fn methods_cmp(a: &BTreeMap<String, String>, b: &BTreeMap<String, String>) -> std::cmp::Ordering {
+    let mut av: Vec<(&String, &String)> = a.iter().collect();
+    let mut bv: Vec<(&String, &String)> = b.iter().collect();
+    av.sort();
+    bv.sort();
+    av.cmp(&bv)
+}
+
+/// Exhaustive branch over methods of activated tasks, collecting every
+/// feasible assignment until the time budget expires or
+/// [`MAX_PARETO_ASSIGNMENTS`] are collected.
+struct ParetoSearch<'a> {
+    by_id: &'a BTreeMap<&'a str, &'a Task>,
+    root: &'a str,
+    constraints: &'a Constraints,
+    start: Instant,
+    budget: Duration,
+    selected: BTreeMap<String, String>,
+    queue: Vec<String>,
+    found: Vec<Candidate>,
+    stopped: bool,
+}
+
+impl ParetoSearch<'_> {
+    fn run(&mut self, mut index: usize) {
+        if self.found.len() >= MAX_PARETO_ASSIGNMENTS || self.start.elapsed() >= self.budget {
+            self.stopped = true;
+            return;
+        }
+        let by_id = self.by_id;
+        while index < self.queue.len()
+            && (self.selected.contains_key(&self.queue[index])
+                || by_id[self.queue[index].as_str()].methods.is_empty())
+        {
+            index += 1;
+        }
+        if index == self.queue.len() {
+            if let Some(scored) = candidate(self.by_id, self.constraints, &self.selected, self.root)
+            {
+                self.found.push(scored);
+            }
+            return;
+        }
+        let task = by_id[self.queue[index].as_str()];
+        for method in &task.methods {
+            if self
+                .constraints
+                .forbidden_methods
+                .contains(&(task.id.clone(), method.id.clone()))
+            {
+                continue;
+            }
+            self.selected.insert(task.id.clone(), method.id.clone());
+            let len = self.queue.len();
+            self.queue.extend(method.children.iter().cloned());
+            self.run(index + 1);
+            self.queue.truncate(len);
+            self.selected.remove(&task.id);
+            if self.stopped {
+                break;
+            }
+        }
+    }
+}
+
 /// Pick the search incumbent or the greedy fallback, labeled by whether the
 /// search finished and every candidate was scored by the exact schedule.
 fn settle(
@@ -2043,6 +2539,553 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.makespan, Some(10.0));
+    }
+
+    #[test]
+    fn pareto_marks_dominated_alternative_with_dominators() {
+        // Captain's PC-09 example: A 10 min/$12, B 14/$4, C 12/$7 are each
+        // optimal under different tradeoffs, while D 20/$15 is dominated.
+        // Fails when D lands on the frontier or names no dominator.
+        let priced = |id: &str, minutes: f64, usd: f64| Method {
+            id: id.into(),
+            costs: BTreeMap::from([
+                ("duration_minutes".into(), minutes),
+                ("money_usd".into(), usd),
+            ]),
+            children: vec![],
+            order_edges: vec![],
+            resources: vec![],
+        };
+        let tasks = vec![Task {
+            id: "root".into(),
+            methods: vec![
+                priced("a", 10.0, 12.0),
+                priced("b", 14.0, 4.0),
+                priced("c", 12.0, 7.0),
+                priced("d", 20.0, 15.0),
+            ],
+        }];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.compared, vec!["makespan_minutes", "money_usd"]);
+        assert_eq!(report.not_compared, Vec::<String>::new());
+        assert_eq!(report.optimality, Optimality::Optimal);
+        assert_eq!(report.evaluated, 4);
+        let frontier: Vec<&str> = report
+            .frontier
+            .iter()
+            .map(|alt| alt.methods["root"].as_str())
+            .collect();
+        assert_eq!(frontier, vec!["a", "c", "b"]);
+        assert_eq!(report.dominated.len(), 1);
+        assert_eq!(report.dominated[0].methods["root"], "d");
+        assert!(report.incomplete.is_empty());
+        let frontier_ids: Vec<&str> = report.frontier.iter().map(|alt| alt.id.as_str()).collect();
+        assert!(
+            report.dominated[0]
+                .dominated_by
+                .iter()
+                .any(|d| frontier_ids.contains(&d.by.as_str())),
+            "dominated alternative must name a frontier dominator"
+        );
+        let by_id: BTreeMap<&str, &str> = report
+            .frontier
+            .iter()
+            .map(|alt| (alt.methods["root"].as_str(), alt.id.as_str()))
+            .collect();
+        assert!(report.dominated[0].dominated_by.contains(&Dominance {
+            by: by_id["a"].to_owned(),
+            on: vec!["makespan_minutes".into(), "money_usd".into()],
+            unknown: vec![],
+        }));
+        // Weighted objectives survive beside the frontier for when
+        // preferences are clear.
+        assert!(report.frontier.iter().all(|alt| alt.objective >= 0.0));
+    }
+
+    #[test]
+    fn pareto_compares_only_measures_known_for_every_alternative() {
+        // `priced` values money, `bare` does not: money is listed as not
+        // compared, and the pair still compares on time alone. Fails when
+        // money is compared or `bare` is ranked incomplete.
+        let tasks = vec![Task {
+            id: "root".into(),
+            methods: vec![
+                Method {
+                    id: "priced".into(),
+                    costs: BTreeMap::from([
+                        ("duration_minutes".into(), 10.0),
+                        ("money_usd".into(), 100.0),
+                    ]),
+                    children: vec![],
+                    order_edges: vec![],
+                    resources: vec![],
+                },
+                Method {
+                    id: "bare".into(),
+                    costs: BTreeMap::from([("duration_minutes".into(), 5.0)]),
+                    children: vec![],
+                    order_edges: vec![],
+                    resources: vec![],
+                },
+            ],
+        }];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.compared, vec!["makespan_minutes"]);
+        assert_eq!(report.not_compared, vec!["money_usd"]);
+        assert!(report.incomplete.is_empty());
+        assert_eq!(report.frontier.len(), 1);
+        assert_eq!(report.frontier[0].methods["root"], "bare");
+        assert_eq!(report.dominated.len(), 1);
+        assert_eq!(report.dominated[0].methods["root"], "priced");
+        assert_eq!(
+            report.dominated[0].dominated_by,
+            vec![Dominance {
+                by: report.frontier[0].id.clone(),
+                on: vec!["makespan_minutes".into()],
+                unknown: vec!["money_usd".into()],
+            }]
+        );
+    }
+
+    #[test]
+    fn pareto_reports_sparse_reliability_as_not_compared() {
+        // The reviewer's case: reliability (`failure_risk`) priced for A
+        // only. Time and money are still compared, so D is dominated by A
+        // on those two with failure_risk named as not compared. Fails when
+        // one sparse metric stops every other comparison.
+        let priced = |id: &str, minutes: f64, usd: f64| Method {
+            id: id.into(),
+            costs: BTreeMap::from([
+                ("duration_minutes".into(), minutes),
+                ("money_usd".into(), usd),
+            ]),
+            children: vec![],
+            order_edges: vec![],
+            resources: vec![],
+        };
+        let mut risky_a = priced("a", 10.0, 12.0);
+        risky_a.costs.insert("failure_risk".into(), 0.05);
+        let tasks = vec![Task {
+            id: "root".into(),
+            methods: vec![
+                risky_a,
+                priced("b", 14.0, 4.0),
+                priced("c", 12.0, 7.0),
+                priced("d", 20.0, 15.0),
+            ],
+        }];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.compared, vec!["makespan_minutes", "money_usd"]);
+        assert_eq!(report.not_compared, vec!["failure_risk"]);
+        assert!(report.incomplete.is_empty());
+        let frontier: Vec<&str> = report
+            .frontier
+            .iter()
+            .map(|alt| alt.methods["root"].as_str())
+            .collect();
+        assert_eq!(frontier, vec!["a", "c", "b"]);
+        assert_eq!(report.dominated.len(), 1);
+        assert_eq!(report.dominated[0].methods["root"], "d");
+        let by_a = Dominance {
+            by: report.frontier[0].id.clone(),
+            on: vec!["makespan_minutes".into(), "money_usd".into()],
+            unknown: vec!["failure_risk".into()],
+        };
+        assert!(
+            report.dominated[0].dominated_by.contains(&by_a),
+            "{:?}",
+            report.dominated[0].dominated_by
+        );
+    }
+
+    #[test]
+    fn pareto_sparse_estimates_never_empty_the_frontier() {
+        // Each pair shares exactly one measure, and no measure is known for
+        // all three: nothing is compared, so every alternative is complete
+        // and the frontier holds all three. Fails on an empty frontier.
+        let tasks = vec![Task {
+            id: "root".into(),
+            methods: vec![
+                Method {
+                    id: "m1".into(),
+                    costs: BTreeMap::from([
+                        ("duration_minutes".into(), 1.0),
+                        ("failure_risk".into(), 0.2),
+                    ]),
+                    children: vec![],
+                    order_edges: vec![],
+                    resources: vec![],
+                },
+                Method {
+                    id: "m2".into(),
+                    costs: BTreeMap::from([
+                        ("duration_minutes".into(), 2.0),
+                        ("money_usd".into(), 1.0),
+                    ]),
+                    children: vec![],
+                    order_edges: vec![],
+                    resources: vec![],
+                },
+                Method {
+                    id: "m3".into(),
+                    costs: BTreeMap::from([
+                        ("money_usd".into(), 2.0),
+                        ("failure_risk".into(), 0.1),
+                    ]),
+                    children: vec![],
+                    order_edges: vec![],
+                    resources: vec![],
+                },
+            ],
+        }];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(report.compared.is_empty());
+        assert_eq!(
+            report.not_compared,
+            vec!["failure_risk", "makespan_minutes", "money_usd"]
+        );
+        assert_eq!(report.evaluated, 3);
+        assert_eq!(report.frontier.len(), 3);
+        assert!(report.dominated.is_empty());
+        assert!(report.incomplete.is_empty());
+    }
+
+    #[test]
+    fn pareto_respects_hard_limits_and_reports_no_valued_objective() {
+        // A money cap removes the dear alternative before dominance, so the
+        // frontier never offers infeasible work. Fails on an infeasible id.
+        let priced = |id: &str, usd: f64| Method {
+            id: id.into(),
+            costs: BTreeMap::from([("money_usd".into(), usd)]),
+            children: vec![],
+            order_edges: vec![],
+            resources: vec![],
+        };
+        let tasks = vec![Task {
+            id: "root".into(),
+            methods: vec![priced("cheap", 4.0), priced("dear", 12.0)],
+        }];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints {
+                limits: BTreeMap::from([("money_usd".into(), 10.0)]),
+                ..Constraints::default()
+            },
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.compared, vec!["money_usd"]);
+        assert_eq!(report.frontier.len(), 1);
+        assert_eq!(report.frontier[0].methods["root"], "cheap");
+        assert!(report.dominated.is_empty());
+
+        // No valued metric anywhere: nothing is compared, so the single
+        // alternative is vacuously complete and holds the frontier alone
+        // instead of inventing a ranking.
+        let bare = vec![Task {
+            id: "root".into(),
+            methods: vec![Method {
+                id: "m".into(),
+                costs: BTreeMap::new(),
+                children: vec![],
+                order_edges: vec![],
+                resources: vec![],
+            }],
+        }];
+        let empty = pareto(
+            &bare,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(empty.compared.is_empty());
+        assert!(empty.not_compared.is_empty());
+        assert_eq!(empty.frontier.len(), 1);
+        assert!(empty.dominated.is_empty());
+        assert!(empty.incomplete.is_empty());
+        assert_eq!(empty.evaluated, 1);
+    }
+
+    #[test]
+    fn pareto_compares_all_alternatives_on_shared_measures_only() {
+        // Every assignment prices time and money, but only some price
+        // reliability: time and money are compared, reliability is listed
+        // as not compared, and dominance stays transitive. Cost-free
+        // decomposition `r` must not void a measure by itself. Fails when
+        // the sparse reliability column stops the money comparison.
+        let tasks = vec![
+            task(
+                "root",
+                vec![
+                    plain("r", &["s", "t"], &[]),
+                    work("r-alt", &[("money_usd", 10.0), ("duration_minutes", 1.0)]),
+                ],
+            ),
+            task(
+                "s",
+                vec![
+                    work(
+                        "s1",
+                        &[
+                            ("duration_minutes", 5.0),
+                            ("money_usd", 5.0),
+                            ("failure_risk", 0.2),
+                        ],
+                    ),
+                    work("s2", &[("duration_minutes", 5.0), ("money_usd", 6.0)]),
+                ],
+            ),
+            task(
+                "t",
+                vec![
+                    work(
+                        "t1",
+                        &[
+                            ("duration_minutes", 3.0),
+                            ("money_usd", 1.0),
+                            ("failure_risk", 0.1),
+                        ],
+                    ),
+                    work("t2", &[("duration_minutes", 4.0), ("money_usd", 2.0)]),
+                ],
+            ),
+        ];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.evaluated, 5);
+        assert_eq!(report.compared, vec!["makespan_minutes", "money_usd"]);
+        assert_eq!(report.not_compared, vec!["failure_risk"]);
+        assert!(report.incomplete.is_empty());
+        // `(makespan, money)`: r-alt (1, 10) is fastest, r/s1/t1 (5, 6)
+        // cheapest; the (5, 7), (5, 7) and (5, 8) assignments are worse
+        // than (5, 6) on money at equal time.
+        let frontier: Vec<&str> = report
+            .frontier
+            .iter()
+            .map(|alt| alt.methods["root"].as_str())
+            .collect();
+        assert_eq!(frontier, vec!["r-alt", "r"]);
+        assert_eq!(report.frontier[1].methods["s"], "s1");
+        assert_eq!(report.frontier[1].methods["t"], "t1");
+        assert_eq!(report.dominated.len(), 3);
+        for alt in &report.dominated {
+            assert_eq!(alt.methods["root"], "r");
+            assert!(
+                alt.dominated_by
+                    .iter()
+                    .any(|d| d.on == vec!["makespan_minutes".to_owned(), "money_usd".to_owned()]),
+                "{alt:?}"
+            );
+        }
+
+        // Fully priced alternatives keep every measure through the same
+        // cost-free decomposition.
+        let priced = vec![
+            task("root", vec![plain("r", &["s"], &[])]),
+            task(
+                "s",
+                vec![
+                    work("fast", &[("duration_minutes", 5.0), ("money_usd", 9.0)]),
+                    work("slow", &[("duration_minutes", 8.0), ("money_usd", 2.0)]),
+                    work("worse", &[("duration_minutes", 9.0), ("money_usd", 9.0)]),
+                ],
+            ),
+        ];
+        let report = pareto(
+            &priced,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.compared, vec!["makespan_minutes", "money_usd"]);
+        assert_eq!(report.frontier.len(), 2);
+        assert_eq!(report.dominated.len(), 1);
+        assert_eq!(report.dominated[0].methods["s"], "worse");
+    }
+
+    #[test]
+    fn pareto_shows_unresolved_work_separately_without_ranking_it() {
+        // `split` leaves `b` without a method: its time and cost are unknown,
+        // so `split` is incomplete and shown separately, never ranked, while
+        // complete `whole` still dominates `whole2`. Done or dropped
+        // method-less work stays out of `unresolved` and keeps `split`
+        // priced. Fails when `split` is ranked, `whole` is labeled
+        // dominated while `b` is open, or `whole2` is not.
+        let tasks = vec![
+            task(
+                "root",
+                vec![
+                    plain("split", &["a", "b"], &[]),
+                    work("whole", &[("duration_minutes", 8.0), ("money_usd", 8.0)]),
+                    work("whole2", &[("duration_minutes", 10.0), ("money_usd", 10.0)]),
+                ],
+            ),
+            task(
+                "a",
+                vec![work("a", &[("duration_minutes", 5.0), ("money_usd", 5.0)])],
+            ),
+            task("b", vec![]),
+        ];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::from(["b".to_owned()]),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.evaluated, 3);
+        assert_eq!(report.compared, vec!["makespan_minutes", "money_usd"]);
+        assert!(report.not_compared.is_empty());
+        assert_eq!(report.frontier.len(), 1);
+        assert_eq!(report.frontier[0].methods["root"], "whole");
+        assert_eq!(report.dominated.len(), 1);
+        assert_eq!(report.dominated[0].methods["root"], "whole2");
+        assert_eq!(
+            report.dominated[0].dominated_by,
+            vec![Dominance {
+                by: report.frontier[0].id.clone(),
+                on: vec!["makespan_minutes".into(), "money_usd".into()],
+                unknown: vec![],
+            }]
+        );
+        assert_eq!(report.incomplete.len(), 1);
+        assert_eq!(report.incomplete[0].methods["root"], "split");
+        assert_eq!(
+            report.incomplete[0].unknown,
+            vec!["makespan_minutes".to_owned(), "money_usd".to_owned()]
+        );
+
+        let done = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(done.compared, vec!["makespan_minutes", "money_usd"]);
+        assert!(done.incomplete.is_empty());
+        assert_eq!(done.frontier.len(), 1);
+        assert_eq!(done.frontier[0].methods["root"], "split");
+        assert_eq!(done.dominated.len(), 2);
+    }
+
+    #[test]
+    fn pareto_excludes_internal_metrics_from_dimensions() {
+        let tasks = vec![task(
+            "root",
+            vec![
+                work("a", &[("failure_risk", 0.1), ("quality_loss", 0.105)]),
+                work("b", &[("failure_risk", 0.3), ("quality_loss", 0.357)]),
+            ],
+        )];
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &["quality_loss"],
+            &BTreeSet::new(),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(report.compared, vec!["failure_risk"]);
+        assert_eq!(report.frontier.len(), 1);
+        assert_eq!(
+            report.frontier[0].objectives.keys().collect::<Vec<_>>(),
+            vec!["failure_risk"]
+        );
+        assert_eq!(report.dominated.len(), 1);
+        assert_eq!(report.dominated[0].methods["root"], "b");
+    }
+
+    #[test]
+    fn pareto_caps_collected_assignments_and_reports_best_found() {
+        // 2^14 feasible assignments exceed the cap; the search must stop
+        // there and say the frontier is best-found, not optimal.
+        let leaves: Vec<String> = (0..14).map(|n| format!("t{n}")).collect();
+        let children: Vec<&str> = leaves.iter().map(String::as_str).collect();
+        let mut tasks = vec![task("root", vec![plain("r", &children, &[])])];
+        for (n, id) in leaves.iter().enumerate() {
+            tasks.push(task(
+                id,
+                vec![
+                    work("fast", &[("duration_minutes", 1.0), ("money_usd", 2.0)]),
+                    work(
+                        "cheap",
+                        &[("duration_minutes", 2.0 + n as f64), ("money_usd", 1.0)],
+                    ),
+                ],
+            ));
+        }
+        let report = pareto(
+            &tasks,
+            "root",
+            &Constraints::default(),
+            &[],
+            &BTreeSet::new(),
+            Duration::from_secs(600),
+        )
+        .unwrap();
+        assert!(report.evaluated <= MAX_PARETO_ASSIGNMENTS + 1);
+        assert_eq!(
+            report.optimality,
+            Optimality::BestFound { gap_percent: None }
+        );
+        assert!(
+            report.frontier.len() + report.dominated.len() + report.incomplete.len()
+                == report.evaluated
+        );
     }
 
     #[test]

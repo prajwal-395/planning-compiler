@@ -5001,6 +5001,170 @@ effort buys 20.000 fewer minutes."
     );
 }
 
+/// PC-09: `pc compile --pareto` exposes the non-dominated frontier and names
+/// what dominates the dominated remainder, while plain `pc compile` stays
+/// byte-identical (weighted selection unchanged).
+#[test]
+fn compile_pareto_flag_exposes_frontier_and_dominated() {
+    let fixture = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("pareto-tradeoff");
+    // Without the flag there is no pareto section: weighted output keeps
+    // its shape for existing consumers.
+    let plain = Command::cargo_bin("pc")
+        .unwrap()
+        .current_dir(workspace_root().join("tests").join("fixtures"))
+        .arg("compile")
+        .arg("pareto-tradeoff")
+        .output()
+        .unwrap();
+    assert!(plain.status.success());
+    let text = String::from_utf8(plain.stdout).unwrap();
+    assert!(!text.contains("pareto compared"), "{text}");
+    assert!(!text.contains("pareto frontier"), "{text}");
+    assert!(text.contains("selection: optimal"), "{text}");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("compile")
+        .arg(&fixture)
+        .arg("--pareto")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    // Weighted selection still picks the cheapest weighted tradeoff.
+    assert!(text.contains("selection: optimal"), "{text}");
+    assert!(
+        text.contains("pareto compared: makespan_minutes, money_usd"),
+        "{text}"
+    );
+    assert!(text.contains("pareto frontier (3):"), "{text}");
+    assert!(text.contains("dominated (1):"), "{text}");
+    assert!(text.contains("incomplete (0):"), "{text}");
+    // The dominated alternative names its dominators, not just its numbers.
+    // Fails when the dominated line carries no `dominated by` clause.
+    let dominated = text
+        .lines()
+        .find(|line| line.contains("ship=via-d"))
+        .expect("dominated via-d line");
+    assert!(dominated.contains("dominated by"), "{dominated}");
+    assert!(dominated.contains("alt-0"), "{dominated}");
+
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("compile")
+        .arg(&fixture)
+        .arg("--pareto")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Weighted selection is preserved beside the frontier.
+    assert_eq!(value["selection"], serde_json::json!({"ship": "via-b"}));
+    let pareto = &value["pareto"];
+    assert_eq!(
+        pareto["compared"],
+        serde_json::json!(["makespan_minutes", "money_usd"])
+    );
+    assert_eq!(
+        pareto["not_compared"],
+        serde_json::json!([]),
+        "fully priced measures leave nothing uncompared"
+    );
+    assert_eq!(pareto["status"], "optimal");
+    assert_eq!(pareto["evaluated"], 4);
+    assert_eq!(pareto["frontier"].as_array().unwrap().len(), 3);
+    let dominated = pareto["dominated"].as_array().unwrap();
+    assert_eq!(dominated.len(), 1);
+    assert_eq!(
+        dominated[0]["methods"],
+        serde_json::json!({"ship": "via-d"})
+    );
+    assert!(
+        !dominated[0]["dominated_by"].as_array().unwrap().is_empty(),
+        "dominated alternatives must name dominators: {pareto}"
+    );
+    assert_eq!(
+        pareto["incomplete"].as_array().unwrap().len(),
+        0,
+        "{pareto}"
+    );
+    // Determinism: two runs give byte-identical JSON.
+    let again = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("compile")
+        .arg(&fixture)
+        .arg("--pareto")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(output.stdout, again.stdout);
+}
+
+/// PC-09 reviewer case: reliability priced for one capability only is
+/// listed as not compared, yet D is still dominated by A on the compared
+/// time and money. Fails when the sparse metric voids the comparison.
+#[test]
+fn compile_pareto_sparse_reliability_stays_not_compared() {
+    let dir = scratch_dir("pareto-sparse-risk");
+    let mut plan = std::fs::read_to_string(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("pareto-tradeoff")
+            .join("plan.toml"),
+    )
+    .unwrap();
+    plan = plan.replace(
+        r#"{ metric = "money_usd", low = 12.0, likely = 12.0, high = 12.0, provenance = "declared" },
+]"#,
+        r#"{ metric = "money_usd", low = 12.0, likely = 12.0, high = 12.0, provenance = "declared" },
+  { metric = "failure_risk", low = 0.05, likely = 0.05, high = 0.05, provenance = "declared" },
+]"#,
+    );
+    std::fs::write(dir.join("plan.toml"), plan).unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("compile")
+        .arg(dir.join("plan.toml"))
+        .arg("--pareto")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let pareto = &value["pareto"];
+    assert_eq!(
+        pareto["compared"],
+        serde_json::json!(["makespan_minutes", "money_usd"])
+    );
+    assert_eq!(pareto["not_compared"], serde_json::json!(["failure_risk"]));
+    let dominated = pareto["dominated"].as_array().unwrap();
+    assert_eq!(dominated.len(), 1);
+    assert_eq!(
+        dominated[0]["methods"],
+        serde_json::json!({"ship": "via-d"})
+    );
+    let by_a = dominated[0]["dominated_by"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["on"] == serde_json::json!(["makespan_minutes", "money_usd"]))
+        .expect("D dominated on time and money");
+    assert_eq!(by_a["unknown"], serde_json::json!(["failure_risk"]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
 /// PC-08: the single-Resolve-instance example serializes exclusive holders,
 /// names the bottleneck, and previews contention relief through impact.
 /// Fails when the schedule ignores capacities (makespan 30, no
