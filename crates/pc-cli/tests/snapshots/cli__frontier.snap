@@ -2,8 +2,10 @@
 source: crates/pc-cli/tests/cli.rs
 expression: "String::from_utf8(output.stdout).unwrap()"
 ---
-frontier: 0 ranked, 1 unestimated, 1 blocked (examples/transcription-substitution/plan.toml)
+execution frontier: 0 ranked, 1 unestimated, 1 blocked (examples/transcription-substitution/plan.toml)
 unestimated (no share of open acceptable weighted cost; structural order, not ranked against the list above):
 0.333 task:select-lines [open-task] (critical) (blocked): no accepted method; on the selected path from the root (required by ship-reels); blocked by transcribe-footage
 blocked (fails typed contract matching, accepting would be E008; no share, not ranked):
 method:via-hybrid [blocked-alternative] (critical): accepting it would drop transcript.segment_confidence (consumed by select-lines)
+discovery frontier: 1 investigation(s)
+task:transcribe-footage [critical=true, uncertainty=0.500, alternatives=1, downstream decisions=1, investigation cost=unknown, material-change likelihood=unknown]: Investigate whether an alternative to capability:whisperx@3 improves task:transcribe-footage (1 proposed alternative(s))

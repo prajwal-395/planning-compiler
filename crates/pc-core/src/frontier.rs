@@ -112,6 +112,33 @@ pub struct FrontierItem {
     pub reason: String,
 }
 
+/// A plan question worth investigating, separate from work ready to execute.
+/// Missing investigation cost and change likelihood stay unknown until the IR
+/// carries evidence for them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryItem {
+    /// Task whose selected approach or alternatives are being investigated.
+    pub subject: String,
+    /// Whether the decision affects the selected critical path.
+    pub critical: bool,
+    /// Decision uncertainty on the execution frontier's scale: the measured
+    /// factor when the selected capability is backed by evidence on an
+    /// objective-weighted metric, the uncertain factor otherwise (including
+    /// when no capability is selected).
+    #[serde(serialize_with = "crate::json::ser_f64_3")]
+    pub uncertainty: f64,
+    /// Proposed invocation alternatives currently available to investigate.
+    pub alternatives: usize,
+    /// Number of downstream decisions depending on this task.
+    pub downstream_decisions: usize,
+    /// Investigation effort is not represented in the current IR.
+    pub investigation_cost: Option<f64>,
+    /// Likelihood that investigation materially changes the selected plan.
+    pub material_change_likelihood: Option<f64>,
+    /// Human-readable investigation question.
+    pub question: String,
+}
+
 impl FrontierItem {
     /// One text line naming the entry, its kind and its flags, shared by
     /// `pc context` and `pc explain task:` so both read identically.
@@ -152,6 +179,9 @@ pub struct FrontierReport {
     /// planned: every reachable task has an accepted method and no critical
     /// cost rests on guesses.
     pub blocked: Vec<FrontierItem>,
+    /// Ranked information-acquisition work. Unknown cost and likelihood are
+    /// intentionally null; PC-11 will evaluate value of information.
+    pub discovery: Vec<DiscoveryItem>,
 }
 
 /// Rank unresolved work in a checked plan.
@@ -190,6 +220,75 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
         .map(|(cap, _)| cap)
         .collect();
     let backed = |cap: Option<&str>| cap.is_some_and(|c| backed_caps.contains(c));
+
+    // Discovery candidates come only from structured uncertainty already in
+    // the plan: proposed invocation alternatives or selected capabilities
+    // without evidence on an objective-weighted metric. Cost and probability
+    // are not present in this IR and must not be guessed.
+    let mut proposed_by_task: BTreeMap<&str, Vec<&pc_ir::Method>> = BTreeMap::new();
+    for method in &doc.method {
+        if method.kind == pc_ir::MethodKind::Invoke
+            && method.status == MethodStatus::Proposed
+            && live.contains(&method.task)
+        {
+            proposed_by_task
+                .entry(&method.task)
+                .or_default()
+                .push(method);
+        }
+    }
+    let selected_by_task: BTreeMap<&str, &pc_ir::Method> = compiled
+        .selection
+        .iter()
+        .filter_map(|(task, id)| {
+            methods
+                .get(id.as_str())
+                .map(|method| (task.as_str(), *method))
+        })
+        .collect();
+    let mut discovery = Vec::new();
+    for task in &live {
+        let alternatives = proposed_by_task.get(task.as_str()).map_or(0, Vec::len);
+        let selected_cap = selected_by_task
+            .get(task.as_str())
+            .and_then(|method| method.capability.as_deref());
+        let uncertain = selected_cap.is_some() && !backed(selected_cap);
+        if alternatives == 0 && !uncertain {
+            continue;
+        }
+        let uncertainty = if backed(selected_cap) {
+            MEASURED_FACTOR
+        } else {
+            UNCERTAIN_FACTOR
+        };
+        let question = match (selected_cap, alternatives) {
+            (Some(cap), n) if n > 0 => format!(
+                "Investigate whether an alternative to capability:{cap} improves task:{task} ({n} proposed alternative(s))"
+            ),
+            (Some(cap), _) => format!(
+                "Investigate whether evidence or another approach changes task:{task} via capability:{cap}"
+            ),
+            (_, n) => format!("Investigate the {n} proposed alternative(s) for task:{task}"),
+        };
+        discovery.push(DiscoveryItem {
+            subject: format!("task:{task}"),
+            critical: on_path.contains(task),
+            uncertainty,
+            alternatives,
+            downstream_decisions: dependents.get(task).copied().unwrap_or(0),
+            investigation_cost: None,
+            material_change_likelihood: None,
+            question,
+        });
+    }
+    discovery.sort_by(|a, b| {
+        b.critical
+            .cmp(&a.critical)
+            .then_with(|| b.uncertainty.total_cmp(&a.uncertainty))
+            .then_with(|| b.alternatives.cmp(&a.alternatives))
+            .then_with(|| b.downstream_decisions.cmp(&a.downstream_decisions))
+            .then_with(|| a.subject.cmp(&b.subject))
+    });
 
     // Pending invokes on live tasks, their weighted costs, and the ones
     // that fail typed contract matching (accepting them would be E008).
@@ -405,6 +504,7 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
         items: ranked(items),
         unestimated: ranked(unestimated),
         blocked,
+        discovery,
     }
 }
 
@@ -846,6 +946,21 @@ estimates = [{ metric = "duration_minutes", low = 2.0, likely = 4.0, high = 6.0,
         let mut sorted = scores.clone();
         sorted.sort_by(|a, b| b.total_cmp(a));
         assert_eq!(scores, sorted);
+    }
+
+    #[test]
+    fn discovery_without_selected_capability_is_uncertain() {
+        let mut plan = doc();
+        assert!(checked(&mut plan).ok());
+        let compiled = crate::compile(&plan).unwrap();
+        let report = frontier(&plan, &compiled);
+        let open = report
+            .discovery
+            .iter()
+            .find(|item| item.subject == "task:open-work")
+            .unwrap();
+        assert_eq!(open.alternatives, 1);
+        assert_eq!(open.uncertainty, UNCERTAIN_FACTOR);
     }
 
     fn frontier_fixture() -> PlanDoc {

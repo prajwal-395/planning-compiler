@@ -304,6 +304,19 @@ this holds for open tasks, proposals and blocked alternatives alike.
 `--json` emits the ranked report. A blocked entry names the dropped fields and the live tasks consuming them.
 The same violation is also a `pc check` contract note (see P2 scope notes).
 
+PC-10 adds a separate `discovery` list to the same report. It contains
+actionable investigations for tasks with proposed invocation alternatives or
+an unbacked selected capability. It ranks known decision importance first
+(critical path, then evidence uncertainty, alternatives, downstream decisions)
+with subject as a deterministic tie-breaker. Uncertainty uses the execution
+frontier's scale: the measured factor only when the selected capability is
+backed by evidence on an objective-weighted metric, the uncertain factor when
+it is unbacked or no capability is selected. Investigation cost and the
+likelihood of materially changing the plan serialize as `null`: the current
+IR does not model them, and PC-11 owns value-of-information evaluation. The
+text output labels these separately as the discovery frontier; the existing
+`items`, `unestimated`, and `blocked` groups are execution work.
+
 ## P9: impact/diff (step 6)
 
 `pc impact <change.json> [path]` previews a hypothetical change without

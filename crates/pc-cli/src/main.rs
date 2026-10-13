@@ -1206,7 +1206,7 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
         return;
     }
     println!(
-        "frontier: {} ranked, {} unestimated, {} blocked ({})",
+        "execution frontier: {} ranked, {} unestimated, {} blocked ({})",
         report.items.len(),
         report.unestimated.len(),
         report.blocked.len(),
@@ -1244,6 +1244,25 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
             "blocked (fails typed contract matching, accepting would be E008; no share, not ranked):"
         );
         report.blocked.iter().for_each(print_item);
+    }
+    println!(
+        "discovery frontier: {} investigation(s)",
+        report.discovery.len()
+    );
+    for item in &report.discovery {
+        println!(
+            "{} [critical={}, uncertainty={:.3}, alternatives={}, downstream decisions={}, investigation cost={}, material-change likelihood={}]: {}",
+            item.subject,
+            item.critical,
+            item.uncertainty,
+            item.alternatives,
+            item.downstream_decisions,
+            item.investigation_cost
+                .map_or_else(|| "unknown".to_string(), |v| format!("{v:.3}")),
+            item.material_change_likelihood
+                .map_or_else(|| "unknown".to_string(), |v| format!("{v:.3}")),
+            item.question,
+        );
     }
 }
 

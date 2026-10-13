@@ -327,6 +327,26 @@ fn self_plan_compiles_and_explains_accepted_work() {
         String::from_utf8(output.stdout).unwrap()
     };
     let report: serde_json::Value = serde_json::from_str(&frontier(true)).unwrap();
+    // PC-10 defect: execution candidates alone hide plan investigations, and
+    // absent IR fields must not be turned into invented cost/probability.
+    let discovery = report["discovery"].as_array().unwrap();
+    assert!(
+        !discovery.is_empty(),
+        "proposed alternatives should create investigation work: {report}"
+    );
+    assert!(
+        discovery
+            .iter()
+            .any(|item| item["alternatives"].as_u64().unwrap_or(0) > 0),
+        "{report}"
+    );
+    assert!(
+        discovery
+            .iter()
+            .all(|item| item["investigation_cost"].is_null()
+                && item["material_change_likelihood"].is_null()),
+        "unknown discovery quantities must remain unknown: {report}"
+    );
     let subjects = |group: &str| -> Vec<String> {
         report[group]
             .as_array()
