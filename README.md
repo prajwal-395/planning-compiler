@@ -49,7 +49,7 @@ crates/pc-store/  plan loader (plus `LoadedPlan::check`, shared P1-P5 run), plan
 crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate integration: holds, kinds, repos, priorities, date gates and bodies ride along as IR passthrough)
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
 crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, schema)
-crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier)
+crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier, context, impact, diff)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
@@ -99,9 +99,13 @@ current directory otherwise, so a bare `pc check` finds what a bare `pc init`
 made. A bare `pc init` refuses when the current directory already holds a plan.
 
 For tool-only agents, `pc-mcp` (`cargo run -q -p pc-mcp`) is a read-only
-MCP stdio server whose `check`, `compile` and `frontier` tools take a plan
-`path` (plus optional `selection_time_budget_ms`) and return the same JSON as
-the matching `pc <verb> --json`; write verbs are not exposed.
+MCP stdio server whose tools return the same JSON as the matching
+`pc <verb> --json`. `check` takes a plan `path`; `compile` and `frontier`
+take `path` plus optional `selection_time_budget_ms`; `context` takes `task`,
+`path` and optional `budget`; `impact` takes a `change` object (as in
+`change.json`), `path` and optional `selection_time_budget_ms`; `diff` takes
+plans `a` and `b` plus optional `selection_time_budget_ms`. Write verbs are
+not exposed yet; they will be added in a later change.
 
 Every command is non-interactive with `--json` output in the style of the
 `axi` tools. Diagnostics look like a compiler:

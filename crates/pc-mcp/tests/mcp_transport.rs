@@ -113,7 +113,10 @@ async fn tools_match_cli_json() {
         BTreeSet::from([
             "check".to_string(),
             "compile".to_string(),
+            "context".to_string(),
             "frontier".to_string(),
+            "impact".to_string(),
+            "diff".to_string(),
         ]),
         "write verbs stay out of scope"
     );
@@ -144,7 +147,45 @@ async fn tools_match_cli_json() {
             got_frontier, expected_frontier,
             "frontier parity for {plan}"
         );
+
+        let expected_context: serde_json::Value =
+            pc_json(&["context", "transcribe-footage", plan.as_str(), "--json"]);
+        let got_context = call_tool_json(
+            &client,
+            "context",
+            serde_json::json!({"task": "transcribe-footage", "path": plan}),
+        )
+        .await;
+        assert_eq!(got_context, expected_context, "context parity for {plan}");
+
+        let expected_diff: serde_json::Value =
+            pc_json(&["diff", plan.as_str(), plan.as_str(), "--json"]);
+        let got_diff =
+            call_tool_json(&client, "diff", serde_json::json!({"a": plan, "b": plan})).await;
+        assert_eq!(got_diff, expected_diff, "diff parity for {plan}");
     }
+
+    let plan = workspace_root().join("examples/transcription-substitution/plan.toml");
+    let change_path =
+        std::env::temp_dir().join(format!("pc-mcp-impact-{}.json", std::process::id()));
+    std::fs::write(&change_path, r#"{"accept_method":["via-hybrid"]}"#).unwrap();
+    let expected_impact: serde_json::Value = pc_json(&[
+        "impact",
+        change_path.to_str().unwrap(),
+        plan.to_str().unwrap(),
+        "--json",
+    ]);
+    std::fs::remove_file(change_path).unwrap();
+    let got_impact = call_tool_json(
+        &client,
+        "impact",
+        serde_json::json!({
+            "path": plan,
+            "change": {"accept_method": ["via-hybrid"]}
+        }),
+    )
+    .await;
+    assert_eq!(got_impact, expected_impact, "impact parity");
 
     client.cancel().await.unwrap();
 }
@@ -162,20 +203,24 @@ async fn dirty_plan_is_a_tool_error_not_a_crash() {
     let report = call_tool_json(&client, "check", serde_json::json!({"path": plan})).await;
     assert_eq!(report["diagnostics"][0]["code"], "E008");
 
-    // `compile` and `frontier` require a clean check: they report a
-    // tool-level error instead of crashing the server.
-    for tool in ["compile", "frontier"] {
+    // `compile`, `frontier`, `context` and `impact` require a clean check:
+    // they report a tool-level error instead of crashing the server.
+    for tool in ["compile", "frontier", "context", "impact"] {
         let params = CallToolRequestParams::new(tool).with_arguments(
-            serde_json::json!({"path": plan})
-                .as_object()
-                .unwrap()
-                .clone(),
+            serde_json::json!({
+                "path": plan,
+                "task": "transcribe-footage",
+                "change": {},
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
         );
         let result = client.call_tool(params).await.unwrap();
         assert_eq!(result.is_error, Some(true), "{tool} must fail cleanly");
         // The server still answers afterwards.
         let tools = client.list_all_tools().await.unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 6);
     }
 
     client.cancel().await.unwrap();
