@@ -1,4 +1,4 @@
-# Step 8 dogfood: pre-registered criteria and decision log
+# Self-plan validation: pre-registered criteria and decision log
 
 Step 8 of the scoping report (`firstmate/data/planning-compiler-scope/report.md`,
 section 4.2) requires the compiler to prove it "changes or catches a real
@@ -9,6 +9,9 @@ logs every entry under them.
 Fixed 2026-10-10, before the first compiler-assisted decision. Later entries
 may add log rows; they may not weaken sections 1-3 without a dated note
 saying what changed and why.
+
+Started as the step-8 dogfood. Since the 2026-10-13 evaluation policy
+(entry 3) it is the continuous-validation log, not a gate on other work.
 
 ## 1. What counts
 
@@ -44,6 +47,11 @@ If two weeks pass with nothing changed or caught at a cost the captain
 would notice, step 8 reports that plainly and stops expanding: the compiler
 goes back to the triage queue rather than accumulating maintenance.
 
+Dated note, 2026-10-13: the two-week window above is retired as a gate by
+the continuous-validation policy in entry 3. Its criteria are kept as
+written, as historical; they were not met (three days ran, nothing was
+changed or caught beyond entry 2) and nothing in this log claims they were.
+
 ## 4. Measurement discipline
 
 - Duration observations from the forge are recorded with typed basis
@@ -53,10 +61,11 @@ goes back to the triage queue rather than accumulating maintenance.
   `distance-from:<capability>`, never as absolute accuracy (PR 8, gap G4).
 - One attributed family carries one basis; mixes are refused with E014,
   never resolved by majority.
-- Out of scope for this dogfood: the live Ren cycle, any real Ren data,
-  import/export adapters, gaps G2/G3/G5, and any compiler code change.
-  A compiler defect found through the dogfood is logged as a finding for
-  firstmate, not fixed here.
+- Out of scope for this log: any compiler code change. A compiler defect
+  found through validation is logged as a finding for firstmate, not fixed
+  here. (Until the 2026-10-13 policy the original dogfood also excluded the
+  live Ren cycle, any real Ren data, import/export adapters and gaps
+  G2/G3/G5; those are now ordinary plan work, the live Ren cycle as PC-06.)
 
 Binding constraints (captain, 2026-10-10): no LLM calls in the core,
 text-file state, typed matching only, people left out, task tracking out
@@ -235,3 +244,31 @@ Once step-8 lands, the order between the backends and item 01 stays the
 report's value order (section 4.2) until item 01 carries an estimate. No
 compiler defect surfaced in this read beyond the entry-1 tie the fix
 addresses, so no new finding for firstmate.
+
+### Entry 3 - 2026-10-13, continuous-validation policy (PC-01)
+
+What changed: the captain's Planning Compiler development and integration
+plan of 2026-10-13 (section 2, P0) replaces the time-based dogfood with
+continuous outcome measurement. In `examples/self-plan/`, `dogfood-2wk` is
+replaced by `continuous-validation`, an ongoing quality process kept as a
+task but outside every decomposition, so it neither blocks work nor holds
+`step-8` open. The live Ren cycle moves to `PC-06`, behind only `PC-01` and
+`PC-02` (section 11, lane A). The `step-8 -> post-mvp` order edge is
+removed, so post-MVP and PC-02..PC-18 work follow only their own explicit
+dependencies. `post-mvp-01-tasks-axi`, `post-mvp-02-beads` and
+`post-mvp-05-mcp` are marked `done` for the merged PRs 21, 22 and 18.
+
+Why: the two-week wait serialized useful development behind a fixed
+calendar period without producing decisions (entry 2: the only ready line
+was the dogfood itself). Observations now start immediately and accumulate
+under sections 1, 2 and 4.
+
+What it does not change: sections 1, 2 and 4's measurement rules, and the
+baseline evidence in section 5, stand. The original two-week criteria
+(section 3) remain historical and unmet; this shorter period is not
+presented as satisfying them, and entries 1-2 are not reinterpreted.
+
+Maintenance: 0.35 minutes timed for the plan and evidence edit session.
+The follow-up review session that moved this note out of the plan's
+evidence into this log was not timed, and says so instead of inventing a
+number.

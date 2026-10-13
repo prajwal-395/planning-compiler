@@ -224,7 +224,9 @@ fn self_plan_compiles_and_explains_accepted_work() {
     let text = String::from_utf8(output.stdout).unwrap();
     // Every finished step is a done leaf and no remaining task has an
     // accepted method, so there is no executable work to roll up: makespan
-    // 0 with no metric totals, and the open step-8/post-MVP work listed.
+    // 0 with no metric totals, and the open post-MVP and PC work listed.
+    // Continuous validation is an ongoing process outside the
+    // decomposition, so it is never unresolved development work.
     assert!(
         text.contains(
             "makespan low 0.000, likely 0.000, high 0.000, expected 0.000 (optimistic) minutes"
@@ -233,9 +235,10 @@ fn self_plan_compiles_and_explains_accepted_work() {
     );
     assert!(text.contains("parallel width 0"), "{text}");
     assert!(!text.contains("duration_minutes:"), "{text}");
-    assert!(text.contains("unresolved: dogfood-2wk"), "{text}");
-    assert!(text.contains("post-mvp-01-tasks-axi"), "{text}");
+    assert!(text.contains("unresolved: PC-02, PC-03"), "{text}");
     assert!(text.contains("post-mvp-11-mining"), "{text}");
+    assert!(!text.contains("continuous-validation"), "{text}");
+    assert!(!text.contains("post-mvp-01-tasks-axi"), "{text}");
 
     let mut explain = Command::cargo_bin("pc").unwrap();
     explain.current_dir(workspace_root());
@@ -275,7 +278,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     let text = explain("method:plan-steps");
     assert!(
         text.contains(
-            "method:plan-steps: assumes (Steps stay independently shippable in report section 4.2 order.)"
+            "method:plan-steps: assumes (Steps stay independently shippable in report section 4.2 order; PC backlog hard dependencies follow section 11"
         ),
         "{text}"
     );
@@ -284,9 +287,9 @@ fn self_plan_compiles_and_explains_accepted_work() {
         text.contains("method:step-8-plan: assumes (Retrospective accepted as step 8's first proof point (3/3 pass with documented nuances).)"),
         "{text}"
     );
-    let text = explain("task:dogfood-2wk");
+    let text = explain("task:PC-06");
     assert!(
-        text.contains("task:dogfood-2wk: unresolved (no accepted method)"),
+        text.contains("task:PC-06: unresolved (no accepted method)"),
         "{text}"
     );
 
@@ -307,9 +310,9 @@ fn self_plan_compiles_and_explains_accepted_work() {
     // The frontier ranks estimated proposals by their share of the open
     // acceptable weighted cost (scheduling before store, pricey backends
     // before cheap ones), each followed by its open task. Unestimated work
-    // is a separate structural group, never ranked against costed work:
-    // dogfood-2wk is the only ready item, and everything behind step-8 or
-    // dogfood-2wk inherits the block.
+    // is a separate structural group, never ranked against costed work.
+    // No waiting period gates anything: post-MVP work is ready alongside the
+    // PC lane heads, and only the PC backlog's explicit dependencies block.
     let frontier = |json: bool| {
         let mut cmd = Command::cargo_bin("pc").unwrap();
         cmd.current_dir(workspace_root())
@@ -370,17 +373,29 @@ fn self_plan_compiles_and_explains_accepted_work() {
     assert_eq!(
         subjects("unestimated"),
         [
-            "task:dogfood-2wk",
-            "task:live-ren-cycle",
-            "task:post-mvp-01-tasks-axi",
-            "task:post-mvp-02-beads",
             "task:post-mvp-03-taskmaster",
             "task:post-mvp-04-skill-scan",
-            "task:post-mvp-05-mcp",
             "task:post-mvp-06-proposer",
             "task:post-mvp-07-pareto",
             "task:post-mvp-10-rewrite",
             "task:post-mvp-11-mining",
+            "task:PC-02",
+            "task:PC-05",
+            "task:PC-07",
+            "task:PC-10",
+            "task:PC-12",
+            "task:PC-14",
+            "task:PC-03",
+            "task:PC-04",
+            "task:PC-06",
+            "task:PC-08",
+            "task:PC-09",
+            "task:PC-11",
+            "task:PC-13",
+            "task:PC-15",
+            "task:PC-16",
+            "task:PC-17",
+            "task:PC-18",
         ],
         "{report}"
     );
@@ -392,20 +407,45 @@ fn self_plan_compiles_and_explains_accepted_work() {
         .filter(|item| item["ready"] == true)
         .map(|item| item["subject"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(ready, ["task:dogfood-2wk"], "{report}");
+    assert_eq!(
+        ready,
+        [
+            "task:post-mvp-03-taskmaster",
+            "task:post-mvp-04-skill-scan",
+            "task:post-mvp-06-proposer",
+            "task:post-mvp-07-pareto",
+            "task:post-mvp-10-rewrite",
+            "task:post-mvp-11-mining",
+            "task:PC-02",
+            "task:PC-05",
+            "task:PC-07",
+            "task:PC-10",
+            "task:PC-12",
+            "task:PC-14",
+            "method:sched-via-aries",
+            "task:post-mvp-08-scheduling",
+            "method:store-via-postgres",
+            "task:post-mvp-09-sqlite",
+            "method:sched-via-pumpkin",
+            "method:store-via-sqlite",
+        ],
+        "{report}"
+    );
     // Genuine ties say so instead of hiding behind subject order, and
-    // blocked work names what blocks it.
+    // blocked work names what blocks it: the live Ren cycle (PC-06) waits
+    // only on decision recording, never on step-8 or a waiting period.
     let text = frontier(false);
     assert!(
-        text.contains("frontier: 6 ranked, 11 unestimated, 0 blocked"),
+        text.contains("frontier: 6 ranked, 23 unestimated, 0 blocked"),
         "{text}"
     );
     assert!(
-        text.contains("task:live-ren-cycle [open-task] (critical) (blocked) (tied)"),
+        text.contains("task:PC-06 [open-task] (critical) (blocked) (tied)"),
         "{text}"
     );
-    assert!(text.contains("blocked by dogfood-2wk"), "{text}");
-    assert!(text.contains("blocked by step-8"), "{text}");
+    assert!(text.contains("blocked by PC-02;"), "{text}");
+    assert!(!text.contains("blocked by step-8"), "{text}");
+    assert!(!text.contains("continuous-validation"), "{text}");
     assert!(
         text.contains("weighted expected cost 190.217 of 335.323 open"),
         "{text}"
@@ -438,7 +478,7 @@ fn self_plan_compile_reports_open_work() {
     );
     assert!(
         text.contains(
-            "open work: estimated weighted cost 335.323 across 2 tasks; 11 open tasks unestimated"
+            "open work: estimated weighted cost 335.323 across 2 tasks; 23 open tasks unestimated"
         ),
         "{text}"
     );
@@ -475,10 +515,10 @@ fn self_plan_compile_reports_open_work() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(unestimated.len(), 11, "{open}");
-    assert!(unestimated.contains(&"dogfood-2wk".to_string()), "{open}");
+    assert_eq!(unestimated.len(), 23, "{open}");
+    assert!(unestimated.contains(&"PC-06".to_string()), "{open}");
     assert!(
-        unestimated.contains(&"post-mvp-01-tasks-axi".to_string()),
+        !unestimated.contains(&"continuous-validation".to_string()),
         "{open}"
     );
     assert!(

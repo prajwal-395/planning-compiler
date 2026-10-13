@@ -2,4 +2,4 @@
 source: crates/pc-cli/tests/cli.rs
 expression: "String::from_utf8(output.stdout).unwrap()"
 ---
-ok: 28 tasks, 12 methods, 6 capabilities, 1 artifacts, 10 evidence (examples/self-plan/plan.toml)
+ok: 45 tasks, 12 methods, 6 capabilities, 1 artifacts, 10 evidence (examples/self-plan/plan.toml)

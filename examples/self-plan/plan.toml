@@ -3,7 +3,7 @@ ir_version = 0
 [plan]
 id = "self-plan"
 title = "planning-compiler implementation plan"
-description = "Dogfood fixture: steps 0-7 and the PR 8 gap fixes shipped (done), step 8 in progress (retro done, dogfood current, live Ren cycle next), post-MVP open in report 4.2 value order. PR open-to-merge times are absolute duration evidence on capability:crewmate@1."
+description = "Self-plan: steps 0-7 and PR 8 gap fixes shipped; step 8 retains the Ren retrospective; the live Ren cycle is PC-06. The 2026-10-13 evaluation policy (docs/evidence/dogfood.md) makes continuous-validation an ongoing process outside the decomposition; it does not satisfy or rewrite the original two-week criteria. Post-MVP and PC-02..PC-18 work proceed according to their explicit dependencies. PR open-to-merge times are absolute duration evidence on capability:crewmate@1."
 
 [objective]
 root_task = "ship-compiler"
@@ -97,13 +97,8 @@ title = "Ren transcription retrospective (3/3 pass)"
 state = "done"
 
 [[task]]
-id = "dogfood-2wk"
-title = "Dogfood the self-plan for 2+ weeks"
-state = "open"
-
-[[task]]
-id = "live-ren-cycle"
-title = "One live Ren planning cycle"
+id = "continuous-validation"
+title = "Continuously validate planning quality, accuracy, and performance"
 state = "open"
 
 [[task]]
@@ -114,12 +109,12 @@ state = "decomposed"
 [[task]]
 id = "post-mvp-01-tasks-axi"
 title = "tasks-axi backlog.md import/export (Firstmate integration)"
-state = "open"
+state = "done"
 
 [[task]]
 id = "post-mvp-02-beads"
 title = "Beads JSONL import/export"
-state = "open"
+state = "done"
 
 [[task]]
 id = "post-mvp-03-taskmaster"
@@ -134,7 +129,7 @@ state = "open"
 [[task]]
 id = "post-mvp-05-mcp"
 title = "MCP server (rmcp)"
-state = "open"
+state = "done"
 
 [[task]]
 id = "post-mvp-06-proposer"
@@ -167,6 +162,96 @@ title = "Repeated-procedure mining (Experiment B)"
 state = "open"
 
 [[task]]
+id = "PC-01"
+title = "Update the self-plan and remove the two-week gate"
+state = "done"
+
+[[task]]
+id = "PC-02"
+title = "Introduce decision and outcome event schemas"
+state = "open"
+
+[[task]]
+id = "PC-03"
+title = "Add automatic performance instrumentation"
+state = "open"
+
+[[task]]
+id = "PC-04"
+title = "Implement outcome evaluation and reporting"
+state = "open"
+
+[[task]]
+id = "PC-05"
+title = "Build project-state reconciliation"
+state = "open"
+
+[[task]]
+id = "PC-06"
+title = "Run the first live Ren planning cycle"
+state = "open"
+
+[[task]]
+id = "PC-07"
+title = "Add makespan-aware method selection"
+state = "open"
+
+[[task]]
+id = "PC-08"
+title = "Introduce resource-constrained planning"
+state = "open"
+
+[[task]]
+id = "PC-09"
+title = "Add Pareto evaluation"
+state = "open"
+
+[[task]]
+id = "PC-10"
+title = "Separate execution and discovery frontiers"
+state = "open"
+
+[[task]]
+id = "PC-11"
+title = "Introduce value-of-information evaluation"
+state = "open"
+
+[[task]]
+id = "PC-12"
+title = "Implement capability inventory"
+state = "open"
+
+[[task]]
+id = "PC-13"
+title = "Integrate external capability discovery"
+state = "open"
+
+[[task]]
+id = "PC-14"
+title = "Expand read-only MCP capabilities"
+state = "open"
+
+[[task]]
+id = "PC-15"
+title = "Add controlled MCP write operations"
+state = "open"
+
+[[task]]
+id = "PC-16"
+title = "Create representative benchmark suite"
+state = "open"
+
+[[task]]
+id = "PC-17"
+title = "Implement measured performance optimizations"
+state = "open"
+
+[[task]]
+id = "PC-18"
+title = "Prepare internal release and documentation"
+state = "open"
+
+[[task]]
 id = "run-check"
 title = "Run pc check on the self-plan"
 state = "done"
@@ -187,7 +272,7 @@ state = "dropped"
 id = "plan-steps"
 task = "ship-compiler"
 kind = "decompose"
-subtasks = ["step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "step-6", "step-7", "step-8", "post-mvp"]
+subtasks = ["step-0", "step-1", "step-2", "step-3", "step-4", "step-5", "step-6", "step-7", "step-8", "post-mvp", "PC-01", "PC-02", "PC-03", "PC-04", "PC-05", "PC-06", "PC-07", "PC-08", "PC-09", "PC-10", "PC-11", "PC-12", "PC-13", "PC-14", "PC-15", "PC-16", "PC-17", "PC-18"]
 order_edges = [
   { from = "step-0", to = "step-1" },
   { from = "step-1", to = "step-2" },
@@ -197,12 +282,31 @@ order_edges = [
   { from = "step-5", to = "step-6" },
   { from = "step-6", to = "step-7" },
   { from = "step-7", to = "step-8" },
-  { from = "step-8", to = "post-mvp" },
+  { from = "PC-02", to = "PC-03" },
+  { from = "PC-03", to = "PC-04" },
+  { from = "PC-01", to = "PC-06" },
+  { from = "PC-02", to = "PC-06" },
+  { from = "PC-07", to = "PC-08" },
+  { from = "PC-07", to = "PC-09" },
+  { from = "PC-10", to = "PC-11" },
+  { from = "PC-12", to = "PC-13" },
+  { from = "PC-14", to = "PC-15" },
+  { from = "PC-03", to = "PC-16" },
+  { from = "PC-16", to = "PC-17" },
+  { from = "PC-04", to = "PC-18" },
+  { from = "PC-05", to = "PC-18" },
+  { from = "PC-06", to = "PC-18" },
+  { from = "PC-08", to = "PC-18" },
+  { from = "PC-09", to = "PC-18" },
+  { from = "PC-11", to = "PC-18" },
+  { from = "PC-13", to = "PC-18" },
+  { from = "PC-15", to = "PC-18" },
+  { from = "PC-17", to = "PC-18" },
 ]
 status = "accepted"
 provenance = "agent:firstmate-scout"
 assumptions = [
-  "Steps stay independently shippable in report section 4.2 order.",
+  "Steps stay independently shippable in report section 4.2 order; PC backlog hard dependencies follow section 11; lane ordering is guidance where no dependency is specified.",
   "Captain's 2026-10-10 rulings bind: no LLM calls in the core, text-file state, typed matching only, people left out, task tracking out of scope, license deferred.",
 ]
 
@@ -247,16 +351,12 @@ assumptions = [
 id = "step-8-plan"
 task = "step-8"
 kind = "decompose"
-subtasks = ["retro-ren", "dogfood-2wk", "live-ren-cycle"]
-order_edges = [
-  { from = "retro-ren", to = "dogfood-2wk" },
-  { from = "dogfood-2wk", to = "live-ren-cycle" },
-]
+subtasks = ["retro-ren"]
 status = "accepted"
 provenance = "agent:crewmate"
 assumptions = [
   "Retrospective accepted as step 8's first proof point (3/3 pass with documented nuances).",
-  "Dogfood, then one live Ren cycle, per report Q3(a).",
+  "The original two-week criteria remain historical and unmet (docs/evidence/dogfood.md, 2026-10-13 policy); continuous validation is an ongoing process outside any decomposition, and the live Ren cycle moved to PC-06.",
 ]
 
 [[method]]
@@ -275,7 +375,7 @@ kind = "decompose"
 subtasks = ["post-mvp-01-tasks-axi", "post-mvp-02-beads", "post-mvp-03-taskmaster", "post-mvp-04-skill-scan", "post-mvp-05-mcp", "post-mvp-06-proposer", "post-mvp-07-pareto", "post-mvp-08-scheduling", "post-mvp-09-sqlite", "post-mvp-10-rewrite", "post-mvp-11-mining"]
 status = "accepted"
 provenance = "agent:crewmate"
-assumptions = ["Post-MVP order is by value, report section 4.2; import/export adapters first (Firstmate integration)."]
+assumptions = ["Post-MVP order is by value, report section 4.2; import/export adapters first (Firstmate integration).", "post-mvp-01-tasks-axi is done via merged https://github.com/prajwal-395/planning-compiler/pull/21 (tasks-axi import/export).", "post-mvp-02-beads is done via merged https://github.com/prajwal-395/planning-compiler/pull/22 (Beads JSONL import/export).", "post-mvp-05-mcp is done via merged https://github.com/prajwal-395/planning-compiler/pull/18 (read-only MCP check/compile/frontier server)."]
 
 [[method]]
 id = "sched-via-pumpkin"
