@@ -1,0 +1,224 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Measurements captured automatically while the compiler inspects a plan. Missing values mean the operation could not observe that measurement.",
+  "properties": {
+    "alternatives_considered": {
+      "description": "Number of accepted methods on tasks that offer more than one accepted method, so each counted method competes in selection.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "capabilities": {
+      "default": [],
+      "description": "Referenced capability identifiers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "constraint_count": {
+      "description": "Number of objective constraints (budget, deadline, quality floor, acceptance criteria) plus order edges of non-rejected methods.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "context_size_chars": {
+      "description": "Rendered context size in characters for `context` operations.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "contract_rejections": {
+      "description": "Number of candidate methods rejected by contract validation.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "critical_path_changes": {
+      "description": "Tasks that entered or left the critical path since the previous recorded run of the same plan file with the same selection objective and time budget. Null without a compiled operation or such a run.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "critical_path_tasks": {
+      "description": "Tasks on the critical path, for compiled operations.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "decisions_affected_by_evidence": {
+      "description": "Number of recorded decisions whose supporting tasks or capabilities gained evidence timestamped after the decision. Null when the decision log cannot be read.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "duration_ms": {
+      "description": "Wall-clock duration in milliseconds.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "estimate_uncertainty_minutes": {
+      "description": "Aggregate expected duration range width in minutes, when compiled.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "evidence_coverage": {
+      "description": "Fraction of plan capabilities with at least one evidence record; evidence on subjects not in the plan does not count.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "frontier_duration_ms": {
+      "description": "P8 frontier-ranking wall-clock duration in milliseconds, for `frontier` operations only.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Stable event identifier supplied by the recorder.",
+      "type": "string"
+    },
+    "memory_bytes": {
+      "description": "Process resident memory in bytes, when available.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "method_count": {
+      "description": "Number of methods in the checked plan.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "operation": {
+      "description": "Operation which produced the observation: `check`, `compile`, `frontier`, or `context`.",
+      "type": "string"
+    },
+    "optimality_gap_percent": {
+      "description": "Solver optimality gap in percent, when exposed by the solver.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "optimality_status": {
+      "description": "Selection optimality status, when compiled.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "plan_file": {
+      "description": "File name of the plan the run read; plans sharing a directory share one log.",
+      "type": "string"
+    },
+    "plan_revision": {
+      "description": "Revision of the plan used for the event.",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Event schema version. PC-02 defines version 1.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "selection_duration_ms": {
+      "description": "Selection solver wall-clock duration in milliseconds.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "selection_objective": {
+      "description": "P6 selection objective (`effort` or `makespan`), when compiled.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selection_time_budget_ms": {
+      "description": "P6 selection time budget in milliseconds, when compiled.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source": {
+      "description": "Event producer, such as `pc-cli` or an agent identifier.",
+      "type": "string"
+    },
+    "task_count": {
+      "description": "Number of tasks in the checked plan.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "tasks": {
+      "default": [],
+      "description": "Referenced task identifiers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "timestamp": {
+      "description": "RFC 3339 event timestamp.",
+      "type": "string"
+    },
+    "validation_duration_ms": {
+      "description": "P1-P5 validation duration in milliseconds.",
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "alternatives_considered",
+    "constraint_count",
+    "contract_rejections",
+    "duration_ms",
+    "id",
+    "method_count",
+    "operation",
+    "plan_file",
+    "plan_revision",
+    "schema_version",
+    "source",
+    "task_count",
+    "timestamp",
+    "validation_duration_ms"
+  ],
+  "title": "CompilerRunEvent",
+  "type": "object"
+}

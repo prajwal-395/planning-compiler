@@ -14,10 +14,18 @@ fn workspace_root() -> PathBuf {
         .join("..")
 }
 
+/// `pc` with automatic metrics off, so runs against committed fixture and
+/// example directories never append a `metrics.jsonl` beside them.
+fn pc_command() -> Command {
+    let mut cmd = Command::cargo_bin("pc").unwrap();
+    cmd.env("PC_METRICS", "off");
+    cmd
+}
+
 /// Run `pc check <name>` with the fixture directory as cwd so diagnostics
 /// print the bare file name instead of an absolute path.
 fn check(name: &str) -> assert_cmd::assert::Assert {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root().join("tests").join("fixtures"));
     cmd.arg("check").arg(name);
     cmd.assert()
@@ -64,29 +72,25 @@ fn decision_and_outcome_commands_append_and_read_distinct_records() {
     let outcome_path = event_dir.join("outcome.json");
     std::fs::write(&decision_path, serde_json::to_vec(&decision).unwrap()).unwrap();
     std::fs::write(&outcome_path, serde_json::to_vec(&outcome).unwrap()).unwrap();
-    Command::cargo_bin("pc")
-        .unwrap()
+    pc_command()
         .arg("decision")
         .arg(&decision_path)
         .arg(&root)
         .assert()
         .success();
-    Command::cargo_bin("pc")
-        .unwrap()
+    pc_command()
         .arg("decisions")
         .arg(&root)
         .assert()
         .success()
         .stdout(predicates::str::contains("predicted_outcome"));
-    Command::cargo_bin("pc")
-        .unwrap()
+    pc_command()
         .arg("outcome")
         .arg(&outcome_path)
         .arg(&root)
         .assert()
         .success();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("outcomes")
         .arg(&root)
         .assert()
@@ -293,7 +297,7 @@ fn decision_and_outcome_commands_append_and_read_distinct_records() {
 /// Human output for the passing contracts fixture, pinned by snapshot.
 #[test]
 fn valid_contracts_golden() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root().join("tests").join("fixtures"));
     cmd.arg("check").arg("valid-contracts.toml");
     let output = cmd.output().unwrap();
@@ -342,7 +346,7 @@ fn capabilities_lists_versions_and_evidence_coverage() {
 /// proposed as derived methods, pinned by snapshot.
 #[test]
 fn match_share_golden() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root().join("tests").join("fixtures"));
     cmd.arg("check").arg("valid-match-share.toml");
     let output = cmd.output().unwrap();
@@ -351,7 +355,7 @@ fn match_share_golden() {
 
     // The trace names the Substitute (derived proposal) and Share (merge)
     // decisions; the same-title, different-contract task is never merged.
-    let mut json = Command::cargo_bin("pc").unwrap();
+    let mut json = pc_command();
     json.current_dir(workspace_root().join("tests").join("fixtures"));
     let output = json
         .arg("check")
@@ -375,7 +379,7 @@ fn match_share_golden() {
 
     // Compile runs over the shared document: the merged task is gone from
     // the unresolved list, so P6 counts its work once.
-    let mut compile = Command::cargo_bin("pc").unwrap();
+    let mut compile = pc_command();
     compile.current_dir(workspace_root().join("tests").join("fixtures"));
     let output = compile
         .arg("compile")
@@ -395,7 +399,7 @@ fn match_share_golden() {
 /// The Ren dropped-output case names the lost field and the code.
 #[test]
 fn dropped_output_golden() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root().join("tests").join("fixtures"));
     cmd.arg("check").arg("invalid-E008.toml");
     let output = cmd.output().unwrap();
@@ -412,7 +416,7 @@ fn negative_fixtures_fail_with_their_code() {
     ];
     for code in codes {
         let name = format!("invalid-{code}.toml");
-        let mut cmd = Command::cargo_bin("pc").unwrap();
+        let mut cmd = pc_command();
         cmd.current_dir(workspace_root().join("tests").join("fixtures"));
         let output = cmd.arg("check").arg(&name).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{name}");
@@ -426,7 +430,7 @@ fn negative_fixtures_fail_with_their_code() {
 /// done, step 8 in progress, post-MVP open.
 #[test]
 fn self_plan_fixture_passes() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root());
     cmd.arg("check").arg("examples/self-plan/plan.toml");
     let output = cmd.output().unwrap();
@@ -436,7 +440,7 @@ fn self_plan_fixture_passes() {
 
 #[test]
 fn self_plan_compiles_and_explains_accepted_work() {
-    let mut compile = Command::cargo_bin("pc").unwrap();
+    let mut compile = pc_command();
     compile.current_dir(workspace_root());
     compile.arg("compile").arg("examples/self-plan");
     let output = compile.output().unwrap();
@@ -464,7 +468,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     assert!(!text.contains("continuous-validation"), "{text}");
     assert!(!text.contains("post-mvp-01-tasks-axi"), "{text}");
 
-    let mut explain = Command::cargo_bin("pc").unwrap();
+    let mut explain = pc_command();
     explain.current_dir(workspace_root());
     let output = explain
         .arg("explain")
@@ -484,8 +488,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     );
 
     let explain = |target: &str| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .current_dir(workspace_root())
             .arg("explain")
             .arg(target)
@@ -538,7 +541,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     // No waiting period gates anything: post-MVP work is ready alongside the
     // PC lane heads, and only the PC backlog's explicit dependencies block.
     let frontier = |json: bool| {
-        let mut cmd = Command::cargo_bin("pc").unwrap();
+        let mut cmd = pc_command();
         cmd.current_dir(workspace_root())
             .arg("frontier")
             .arg("examples/self-plan");
@@ -681,7 +684,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
 /// `--json`, without changing the makespan or its meaning.
 #[test]
 fn self_plan_compile_reports_open_work() {
-    let mut compile = Command::cargo_bin("pc").unwrap();
+    let mut compile = pc_command();
     compile.current_dir(workspace_root());
     compile.arg("compile").arg("examples/self-plan");
     let output = compile.output().unwrap();
@@ -707,7 +710,7 @@ fn self_plan_compile_reports_open_work() {
         "{text}"
     );
 
-    let mut json = Command::cargo_bin("pc").unwrap();
+    let mut json = pc_command();
     json.current_dir(workspace_root());
     let output = json
         .arg("compile")
@@ -796,8 +799,7 @@ fn self_plan_stays_feasible_after_accepting_each_proposal() {
 /// Parallel critical tasks are listed as a set, never as an invented chain.
 #[test]
 fn parallel_critical_tasks_are_not_chained() {
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root().join("tests").join("fixtures"))
         .arg("compile")
         .arg("valid-parallel-critical.toml")
@@ -824,8 +826,7 @@ fn parallel_critical_tasks_are_not_chained() {
 /// Fails on the old single-value `makespan <expected> minutes` output.
 #[test]
 fn compile_reports_makespan_range() {
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root().join("tests").join("fixtures"))
         .arg("compile")
         .arg("evidence-flip")
@@ -844,8 +845,7 @@ fn compile_reports_makespan_range() {
         "{text}"
     );
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root().join("tests").join("fixtures"))
         .arg("compile")
         .arg("evidence-flip")
@@ -873,7 +873,7 @@ fn compile_reports_makespan_range() {
 /// Diagnostics for `evidence.jsonl` records point at the log line.
 #[test]
 fn evidence_log_diagnostics_name_the_log() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root().join("tests").join("fixtures"));
     let output = cmd.arg("check").arg("evidence-log").output().unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -883,7 +883,7 @@ fn evidence_log_diagnostics_name_the_log() {
 /// `--json` reports carry the code, the subject and the counts.
 #[test]
 fn json_report_carries_codes_and_counts() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root().join("tests").join("fixtures"));
     cmd.arg("check").arg("invalid-E008.toml").arg("--json");
     let output = cmd.output().unwrap();
@@ -922,12 +922,7 @@ fn patch_schema_is_fresh() {
         "run `pc schema --patch --out schema/patch.schema.json`"
     );
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("schema")
-        .arg("--patch")
-        .output()
-        .unwrap();
+    let output = pc_command().arg("schema").arg("--patch").output().unwrap();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("add_task"), "{text}");
@@ -936,10 +931,11 @@ fn patch_schema_is_fresh() {
 }
 
 #[test]
-fn decision_and_outcome_schemas_are_fresh() {
+fn event_schemas_are_fresh() {
     for (name, emitted) in [
         ("decision.schema.json", pc_ir::decision_schema()),
         ("outcome.schema.json", pc_ir::outcome_schema()),
+        ("metrics.schema.json", pc_ir::metrics_schema()),
     ] {
         let committed =
             std::fs::read_to_string(workspace_root().join("schema").join(name)).unwrap();
@@ -958,8 +954,7 @@ fn decision_and_outcome_schemas_are_fresh() {
 #[test]
 fn evidence_flips_selection() {
     let explain = |dir: &std::path::Path| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("explain")
             .arg("task:job")
             .arg(dir)
@@ -1000,7 +995,7 @@ fn evidence_flips_selection() {
 /// evidence, pinned by snapshot for both compile and explain.
 #[test]
 fn evidence_provenance_golden() {
-    let mut compile = Command::cargo_bin("pc").unwrap();
+    let mut compile = pc_command();
     compile.current_dir(workspace_root().join("tests").join("fixtures"));
     let output = compile
         .arg("compile")
@@ -1017,7 +1012,7 @@ fn evidence_provenance_golden() {
         String::from_utf8(output.stdout).unwrap()
     );
 
-    let mut explain = Command::cargo_bin("pc").unwrap();
+    let mut explain = pc_command();
     explain.current_dir(workspace_root().join("tests").join("fixtures"));
     let output = explain
         .arg("explain")
@@ -1035,7 +1030,7 @@ fn evidence_provenance_golden() {
         String::from_utf8(output.stdout).unwrap()
     );
 
-    let mut explain = Command::cargo_bin("pc").unwrap();
+    let mut explain = pc_command();
     explain.current_dir(workspace_root().join("tests").join("fixtures"));
     let output = explain
         .arg("explain")
@@ -1066,7 +1061,7 @@ fn evidence_provenance_golden() {
 /// alternatives on the transcription fixture, pinned by snapshot.
 #[test]
 fn frontier_golden() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root());
     let output = cmd
         .arg("frontier")
@@ -1081,8 +1076,7 @@ fn frontier_golden() {
     insta::assert_snapshot!("frontier", String::from_utf8(output.stdout).unwrap());
 
     // `--json` carries scores and kinds.
-    let json = Command::cargo_bin("pc")
-        .unwrap()
+    let json = pc_command()
         .current_dir(workspace_root())
         .arg("frontier")
         .arg("examples/transcription-substitution/plan.toml")
@@ -1105,8 +1099,7 @@ fn frontier_golden() {
     assert!(blocked[0]["share"].is_null() && blocked[0]["score"].is_null());
 
     // The frontier is deterministic: two runs give byte-identical JSON.
-    let again = Command::cargo_bin("pc")
-        .unwrap()
+    let again = pc_command()
         .current_dir(workspace_root())
         .arg("frontier")
         .arg("examples/transcription-substitution/plan.toml")
@@ -1178,8 +1171,7 @@ provenance = "agent:test"
 /// `segment_confidence` output and names its consumer, without editing files.
 #[test]
 fn impact_flags_dropped_output_with_consumers() {
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("impact")
         .arg("examples/transcription-substitution/changes/accept-hybrid.json")
@@ -1211,8 +1203,7 @@ fn impact_flags_dropped_output_with_consumers() {
     assert!(stderr.contains("transcript.segment_confidence"), "{stderr}");
 
     // The JSON report carries the same contract note structurally.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("impact")
         .arg("examples/transcription-substitution/changes/accept-hybrid.json")
@@ -1247,8 +1238,7 @@ fn impact_flags_dropped_output_with_consumers() {
 /// impact contract note name.
 #[test]
 fn check_flags_proposed_contract_violation_without_failing() {
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("check")
         .arg("examples/transcription-substitution/plan.toml")
@@ -1274,8 +1264,7 @@ fn check_flags_proposed_contract_violation_without_failing() {
 
     // `--json` carries the same note structurally, beside an empty
     // diagnostics list so `ok` stays true.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("check")
         .arg("examples/transcription-substitution/plan.toml")
@@ -1311,8 +1300,7 @@ fn impact_rejects_bad_changes() {
     let change = dir.join("change.json");
     let run = |body: &str| {
         std::fs::write(&change, body).unwrap();
-        Command::cargo_bin("pc")
-            .unwrap()
+        pc_command()
             .current_dir(workspace_root())
             .arg("impact")
             .arg(&change)
@@ -1374,8 +1362,7 @@ fn impact_labels_accuracy_distance() {
         format!(r#"{{"add_evidence": [{}]}}"#, evidence.join(",")),
     )
     .unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("impact")
         .arg(&change)
         .arg(dir.join("plan.toml"))
@@ -1405,7 +1392,7 @@ fn impact_labels_accuracy_distance() {
 /// flip, the selection flip and the makespan movement, pinned by snapshot.
 #[test]
 fn diff_before_after_decision() {
-    let mut cmd = Command::cargo_bin("pc").unwrap();
+    let mut cmd = pc_command();
     cmd.current_dir(workspace_root());
     let output = cmd
         .arg("diff")
@@ -1440,8 +1427,7 @@ fn diff_before_after_decision() {
     assert!(!text.contains("failure_risk"), "{text}");
     insta::assert_snapshot!("transcription-diff", text);
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("diff")
         .arg("examples/transcription-substitution/plan.toml")
@@ -1460,8 +1446,7 @@ fn diff_before_after_decision() {
     assert_eq!(report["makespan_delta"], serde_json::json!(-8.0));
 
     // Identical plans report no differences.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("diff")
         .arg("examples/transcription-substitution/plan.toml")
@@ -1484,8 +1469,7 @@ fn transcription_substitution_criteria() {
     // plan compiles to via-hybrid with evidence, and falls back to
     // via-whisperx on declared guesses alone.
     let explain = |target: &str, plan: &std::path::Path| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("explain")
             .arg(target)
             .arg(plan)
@@ -1512,8 +1496,7 @@ fn transcription_substitution_criteria() {
 
     // (b) continued: hybrid accuracy is labelled as distance from the
     // incumbent, never as absolute accuracy.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("explain")
         .arg("capability:voz-hybrid@1")
         .arg(&decided)
@@ -1564,7 +1547,7 @@ fn transcription_substitution_criteria() {
 #[test]
 fn explain_method_joins_provenance_and_contract() {
     let explain = |target: &str, plan: &std::path::Path, json: bool| {
-        let mut cmd = Command::cargo_bin("pc").unwrap();
+        let mut cmd = pc_command();
         cmd.arg("explain").arg(target).arg(plan);
         if json {
             cmd.arg("--json");
@@ -1676,7 +1659,7 @@ fn explain_method_joins_provenance_and_contract() {
 #[test]
 fn explain_task_shows_selection_timing_and_frontier() {
     let explain = |target: &str, plan: &std::path::Path, json: bool| {
-        let mut cmd = Command::cargo_bin("pc").unwrap();
+        let mut cmd = pc_command();
         cmd.arg("explain").arg(target).arg(plan);
         if json {
             cmd.arg("--json");
@@ -1690,8 +1673,7 @@ fn explain_task_shows_selection_timing_and_frontier() {
         String::from_utf8(output.stdout).unwrap()
     };
     let context = |task: &str, plan: &std::path::Path| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("context")
             .arg(task)
             .arg(plan)
@@ -1814,8 +1796,7 @@ fn explain_task_shows_selection_timing_and_frontier() {
     }
 
     // Unknown tasks still fail like before.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("explain")
         .arg("task:nope")
         .arg(&decided)
@@ -1863,12 +1844,7 @@ fn loop_scratch(name: &str) -> PathBuf {
 
 /// Run `pc` with `dir` as the plan path and return stdout, asserting success.
 fn pc_ok(dir: &std::path::Path, args: &[&str]) -> String {
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .args(args)
-        .arg(dir)
-        .output()
-        .unwrap();
+    let output = pc_command().args(args).arg(dir).output().unwrap();
     assert!(
         output.status.success(),
         "pc {args:?}: {}",
@@ -1879,12 +1855,7 @@ fn pc_ok(dir: &std::path::Path, args: &[&str]) -> String {
 
 /// Run `pc` with `dir` as the plan path and return stderr, asserting failure.
 fn pc_fails(dir: &std::path::Path, args: &[&str]) -> String {
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .args(args)
-        .arg(dir)
-        .output()
-        .unwrap();
+    let output = pc_command().args(args).arg(dir).output().unwrap();
     assert_eq!(output.status.code(), Some(1), "pc {args:?}");
     String::from_utf8(output.stderr).unwrap()
 }
@@ -2034,8 +2005,7 @@ fn propose_refuses_invalid_patches() {
     let before = std::fs::read_to_string(&plan).unwrap();
     let propose = |name: &str, body: &str| {
         let patch = write_patch(&dir, name, body);
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("propose")
             .arg(&patch)
             .arg(&dir)
@@ -2090,16 +2060,14 @@ fn propose_refuses_invalid_patches() {
         "once.json",
         r#"{"add_task": [{"id": "solo", "title": "Solo", "state": "open"}]}"#,
     );
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("propose")
         .arg(&patch)
         .arg(&dir)
         .output()
         .unwrap();
     assert!(output.status.success());
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("propose")
         .arg(&patch)
         .arg(&dir)
@@ -2234,8 +2202,7 @@ fn json_plan_round_trips_propose_and_accept() {
              "subtasks": ["solo"], "status": "proposed", "provenance": "agent:e2e"}
         ]}"#,
     );
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("propose")
         .arg(&patch)
         .arg(&dir)
@@ -2271,8 +2238,7 @@ fn json_plan_round_trips_propose_and_accept() {
 fn context_budget_fits_and_truncates() {
     let plan = "examples/transcription-substitution/plan.toml";
     let run = |args: &[&str]| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .current_dir(workspace_root())
             .args(args)
             .output()
@@ -2363,8 +2329,7 @@ fn context_budget_fits_and_truncates() {
     assert_eq!(mid, again);
 
     // Unknown tasks fail like `pc explain` on missing targets.
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("context")
         .arg("ghost")
@@ -2401,8 +2366,7 @@ fn record_appends_evidence_and_moves_compilation() {
     .unwrap();
 
     let selected = |dir: &std::path::Path| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("explain")
             .arg("task:job")
             .arg(dir)
@@ -2420,8 +2384,7 @@ fn record_appends_evidence_and_moves_compilation() {
         "declared guesses prefer fast"
     );
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("record")
         .arg(&observation)
         .arg(&dir)
@@ -2464,12 +2427,7 @@ fn ambiguous_task_evidence_warns_and_surfaces_as_unattributed() {
     )
     .unwrap();
     let pc = |args: &[&str]| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
-            .args(args)
-            .arg(&dir)
-            .output()
-            .unwrap();
+        let output = pc_command().args(args).arg(&dir).output().unwrap();
         assert!(
             output.status.success(),
             "{}",
@@ -2547,8 +2505,7 @@ fn record_appends_after_a_log_without_trailing_newline() {
         r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":31.0,"unit":"minutes","time":"2026-10-08T03:00:00Z","source":"ci","artifact_hash":null}"#,
     )
     .unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("record")
         .arg(&observation)
         .arg(&dir)
@@ -2562,12 +2519,7 @@ fn record_appends_after_a_log_without_trailing_newline() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.trim_end().ends_with("evidence.jsonl:7"), "{stdout}");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("check")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("check").arg(&dir).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -2681,8 +2633,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         r#"{"subject":"task:b","metric":"duration_minutes","value":30.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
     )
     .unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("record")
         .arg(&observation)
         .arg(&dir)
@@ -2699,12 +2650,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         "{stderr}"
     );
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("compile")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("compile").arg(&dir).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -2737,8 +2683,7 @@ fn record_rejects_invalid_evidence() {
     let record = |name: &str, body: &str| {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("record")
             .arg(&path)
             .arg(&dir)
@@ -2811,8 +2756,7 @@ fn record_accepts_unknown_subjects_as_pending() {
         r#"{"subject":"capability:ghost@9","metric":"duration_minutes","value":1.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
     )
     .unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("record")
         .arg(&observation)
         .arg(&dir)
@@ -2958,8 +2902,7 @@ fn proposal_evidence_lifecycle() {
     let proposed = pc_ok(&dir, &["propose", patch.to_str().unwrap()]);
     assert!(proposed.contains("proposed method:via-new"), "{proposed}");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("record")
         .arg(&observation)
         .arg(&dir)
@@ -3060,8 +3003,7 @@ fn proposal_evidence_lifecycle() {
         HYPOTHESIS_OBSERVATION.replace("capability:new@1", "capability:old@1"),
     )
     .unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("record")
         .arg(&live)
         .arg(&dir)
@@ -3245,12 +3187,7 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 12.0, high = 16
 fn init_scaffolds_minimal_valid_plan() {
     let parent = scratch_dir("init-scaffold");
     let dir = parent.join("new-plan");
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("init")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("init").arg(&dir).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -3270,8 +3207,7 @@ fn init_scaffolds_minimal_valid_plan() {
 
     // `--json` emits the created plan path.
     let other = parent.join("json-plan");
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("init")
         .arg(&other)
         .arg("--json")
@@ -3296,12 +3232,7 @@ fn init_scaffolds_minimal_valid_plan() {
 #[test]
 fn bare_init_then_bare_check_uses_dot_plan() {
     let dir = scratch_dir("init-bare");
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .current_dir(&dir)
-        .arg("init")
-        .output()
-        .unwrap();
+    let output = pc_command().current_dir(&dir).arg("init").output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -3310,8 +3241,7 @@ fn bare_init_then_bare_check_uses_dot_plan() {
     assert!(dir.join(".plan").join("plan.toml").is_file());
     assert!(!dir.join("plan.toml").exists());
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(&dir)
         .arg("check")
         .output()
@@ -3331,19 +3261,9 @@ fn bare_init_then_bare_check_uses_dot_plan() {
 #[test]
 fn bare_init_refuses_beside_root_plan() {
     let dir = scratch_dir("init-bare-root");
-    let first = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("init")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let first = pc_command().arg("init").arg(&dir).output().unwrap();
     assert!(first.status.success());
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .current_dir(&dir)
-        .arg("init")
-        .output()
-        .unwrap();
+    let output = pc_command().current_dir(&dir).arg("init").output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("plan.toml"), "{stderr}");
@@ -3356,16 +3276,10 @@ fn bare_init_refuses_beside_root_plan() {
 #[test]
 fn bare_check_ignores_empty_dot_plan() {
     let dir = scratch_dir("check-empty-dot-plan");
-    let first = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("init")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let first = pc_command().arg("init").arg(&dir).output().unwrap();
     assert!(first.status.success());
     std::fs::create_dir(dir.join(".plan")).unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(&dir)
         .arg("check")
         .output()
@@ -3384,12 +3298,7 @@ fn bare_check_ignores_empty_dot_plan() {
 #[test]
 fn init_refuses_to_overwrite_existing_plan() {
     let dir = scratch_dir("init-refusal");
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("init")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("init").arg(&dir).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -3397,12 +3306,7 @@ fn init_refuses_to_overwrite_existing_plan() {
     );
     let before = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("init")
-        .arg(&dir)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("init").arg(&dir).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("already exists"), "{stderr}");
@@ -3416,12 +3320,7 @@ fn init_refuses_to_overwrite_existing_plan() {
     // A sibling `plan.json` counts as an existing plan too.
     let other = scratch_dir("init-refusal-json");
     std::fs::write(other.join("plan.json"), "{\"ir_version\": 0}").unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("init")
-        .arg(&other)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("init").arg(&other).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("already exists"), "{stderr}");
@@ -3511,8 +3410,7 @@ estimates = [{ metric = "duration_minutes", low = 4.0, likely = 5.0, high = 6.0,
         "{\"subject\":\"capability:c@1\",\"metric\":\"duration_minutes\",\"value\":30.0,\"unit\":\"minutes\",\"time\":\"2026-10-08T00:00:00Z\",\"source\":\"ci\",\"artifact_hash\":null}\n",
     )
     .unwrap();
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("diff")
         .arg(&dir)
         .arg(&other)
@@ -3564,8 +3462,7 @@ fn json_floats_round_to_text_precision() {
         }
     }
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("compile")
         .arg("examples/transcription-substitution")
@@ -3592,8 +3489,7 @@ fn json_floats_round_to_text_precision() {
     );
     assert_rounded(&value, "compile");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("frontier")
         .arg("examples/transcription-substitution")
@@ -3616,8 +3512,7 @@ fn json_floats_round_to_text_precision() {
     assert_eq!(entry["share"], 0.667, "{value}");
     assert_rounded(&value, "frontier");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("diff")
         .arg("examples/transcription-substitution/decided.toml")
@@ -3646,8 +3541,7 @@ fn json_floats_round_to_text_precision() {
     assert_eq!(delta("failure_risk")["before"], 0.108, "{value}");
     assert_rounded(&value, "diff");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(workspace_root())
         .arg("impact")
         .arg("examples/transcription-substitution/changes/accept-hybrid.json")
@@ -3952,8 +3846,7 @@ fn tasks_axi_round_trip_is_byte_identical() {
     let backlog = dir.join("backlog.md");
     let plan = dir.join("plan");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("import-tasks-axi")
         .arg(&backlog)
         .arg(&plan)
@@ -3968,12 +3861,7 @@ fn tasks_axi_round_trip_is_byte_identical() {
     assert!(stdout.contains("imported 10 tasks"), "{stdout}");
     assert!(plan.join("plan.toml").is_file());
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
-        .arg("check")
-        .arg(&plan)
-        .output()
-        .unwrap();
+    let output = pc_command().arg("check").arg(&plan).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -3983,8 +3871,7 @@ fn tasks_axi_round_trip_is_byte_identical() {
     assert!(stdout.contains("ok: 11 tasks"), "{stdout}");
 
     let exported = dir.join("roundtrip.md");
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("export-tasks-axi")
         .arg(&exported)
         .arg(&plan)
@@ -4013,8 +3900,7 @@ fn tasks_axi_import_refuses_overwrite() {
     let backlog = dir.join("backlog.md");
     let plan = dir.join("plan");
 
-    let first = Command::cargo_bin("pc")
-        .unwrap()
+    let first = pc_command()
         .arg("import-tasks-axi")
         .arg(&backlog)
         .arg(&plan)
@@ -4023,8 +3909,7 @@ fn tasks_axi_import_refuses_overwrite() {
     assert!(first.status.success());
     let before = std::fs::read(plan.join("plan.toml")).unwrap();
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("import-tasks-axi")
         .arg(&backlog)
         .arg(&plan)
@@ -4053,8 +3938,7 @@ fn tasks_axi_import_refuses_garbage() {
     .unwrap();
     let plan = dir.join("plan");
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("import-tasks-axi")
         .arg(&backlog)
         .arg(&plan)
@@ -4080,8 +3964,7 @@ fn tasks_axi_export_refuses_dropped() {
     )
     .unwrap();
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("export-tasks-axi")
         .arg(dir.join("backlog.md"))
         .arg(&plan)
@@ -4108,8 +3991,7 @@ fn tasks_axi_same_title_rows_stay_distinct() {
     )
     .unwrap();
     let plan = dir.join("plan");
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("import-tasks-axi")
         .arg(&backlog)
         .arg(&plan)
@@ -4122,8 +4004,7 @@ fn tasks_axi_same_title_rows_stay_distinct() {
     );
 
     let json = |verb: &str| -> serde_json::Value {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg(verb)
             .arg(&plan)
             .arg("--json")
@@ -4163,8 +4044,7 @@ fn tasks_axi_import_refuses_existing_json_plan() {
     std::fs::create_dir_all(&plan).unwrap();
     std::fs::write(plan.join("plan.json"), "{}").unwrap();
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .arg("import-tasks-axi")
         .arg(dir.join("backlog.md"))
         .arg(&plan)
@@ -4185,8 +4065,7 @@ fn tasks_axi_import_default_refuses_cwd_plan() {
     let dir = tasks_axi_scratch("tasks-axi-cwd-plan");
     std::fs::write(dir.join("plan.toml"), "ir_version = 0\n").unwrap();
 
-    let output = Command::cargo_bin("pc")
-        .unwrap()
+    let output = pc_command()
         .current_dir(&dir)
         .arg("import-tasks-axi")
         .arg("backlog.md")
@@ -4206,8 +4085,7 @@ fn beads_jsonl_round_trip_is_byte_identical() {
     let input = workspace_root().join("tests/fixtures/beads/issues.jsonl");
     let output = dir.join("roundtrip.jsonl");
     let plan = dir.join("plan");
-    Command::cargo_bin("pc")
-        .unwrap()
+    pc_command()
         .arg("import-beads")
         .arg(&input)
         .arg(&plan)
@@ -4220,14 +4098,8 @@ fn beads_jsonl_round_trip_is_byte_identical() {
             "unlinked dependency: `bd-e5f6` blocks on `bd-gone`, which is not in the file; kept in passthrough with no order edge\n",
         ))
         .stdout(predicates::str::contains("imported 3 Beads issues"));
-    Command::cargo_bin("pc")
-        .unwrap()
-        .arg("check")
-        .arg(&plan)
-        .assert()
-        .success();
-    Command::cargo_bin("pc")
-        .unwrap()
+    pc_command().arg("check").arg(&plan).assert().success();
+    pc_command()
         .arg("export-beads")
         .arg(&output)
         .arg(&plan)
@@ -4244,8 +4116,7 @@ fn beads_jsonl_round_trip_is_byte_identical() {
 #[test]
 fn compile_objective_flag_switches_between_effort_and_makespan() {
     let compile = |objective: &[&str]| {
-        let output = Command::cargo_bin("pc")
-            .unwrap()
+        let output = pc_command()
             .arg("compile")
             .arg(
                 workspace_root()
@@ -4326,4 +4197,307 @@ fn capabilities_report_flags_unmeasured_inventory() {
     assert_eq!(rows[1]["unmeasured"], false);
     assert_eq!(rows[2]["staged_observations"], 1);
     assert_eq!(rows[2]["unmeasured"], false);
+}
+
+/// PC-03: copy a fixture plan (a `.toml` file or a fixture directory) to
+/// a scratch dir so the automatic metrics write lands beside the copy,
+/// never in `tests/fixtures`.
+fn metrics_scratch(name: &str, fixture: &str) -> PathBuf {
+    let dir = scratch_dir(name);
+    let source = workspace_root().join("tests/fixtures").join(fixture);
+    if source.is_dir() {
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
+        }
+    } else {
+        std::fs::copy(source, dir.join("plan.toml")).unwrap();
+    }
+    dir
+}
+
+/// Run `pc` with metrics recording on and `dir` as the plan path,
+/// asserting success without a recording warning.
+fn pc_recording(dir: &std::path::Path, args: &[&str]) {
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .env_remove("PC_METRICS")
+        .args(args)
+        .arg(dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && output.stderr.is_empty(),
+        "pc {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Read the `metrics.jsonl` sibling the last `pc` run appended.
+fn read_metrics(dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(dir.join("metrics.jsonl")).unwrap();
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// PC-03: `pc compile` must record compiler measurements (validation and
+/// solver durations, optimality, counts) and planning measurements
+/// (alternatives, contract rejections, coverage, uncertainty, critical
+/// path). Coverage counts plan capabilities only: evidence held for a
+/// capability not in the plan must not inflate it (1 of 2 here, not 1.0).
+#[test]
+fn compile_records_compiler_and_planning_measurements() {
+    let dir = metrics_scratch("compile-metrics", "evidence-flip");
+    let evidence = std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap();
+    let mut evidence: String = evidence
+        .lines()
+        .filter(|line| !line.contains("capability:slow@1"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    evidence.push_str(
+        r#"{"subject":"capability:future@1","metric":"duration_minutes","value":5.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
+    );
+    evidence.push('\n');
+    std::fs::write(dir.join("evidence.jsonl"), evidence).unwrap();
+    pc_recording(&dir, &["compile"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    let run = &rows[0];
+    assert_eq!(run["operation"], "compile");
+    assert_eq!(run["source"], "pc-cli");
+    assert_eq!(run["schema_version"], 1);
+    assert!(run["duration_ms"].as_u64().is_some());
+    assert!(run["validation_duration_ms"].as_u64().is_some());
+    assert!(run["selection_duration_ms"].as_u64().is_some());
+    assert_eq!(run["optimality_status"], "optimal");
+    assert_eq!(run["task_count"], 1);
+    assert_eq!(run["method_count"], 2);
+    assert_eq!(run["constraint_count"], 0);
+    assert_eq!(run["alternatives_considered"], 2);
+    assert_eq!(run["contract_rejections"], 0);
+    assert_eq!(run["evidence_coverage"], 0.5);
+    assert!(run["estimate_uncertainty_minutes"].as_f64().unwrap() >= 0.0);
+    assert_eq!(run["critical_path_tasks"], serde_json::json!(["job"]));
+    assert!(run["critical_path_changes"].is_null());
+    assert_eq!(run["decisions_affected_by_evidence"], 0);
+    assert!(run["frontier_duration_ms"].is_null());
+    assert!(run["context_size_chars"].is_null());
+    assert!(!run["id"].as_str().unwrap_or_default().is_empty());
+    assert!(!run["plan_revision"].as_str().unwrap_or_default().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: a dependency order edge is a constraint while objective weights
+/// are not, and only methods competing for one task count as alternatives:
+/// `deliver` offers `fan-out` and `chain` (with one order edge), while each
+/// leaf task has a single method.
+#[test]
+fn check_counts_dependency_constraints_and_competing_methods() {
+    let dir = metrics_scratch("constraint-metrics", "makespan-tradeoff");
+    pc_recording(&dir, &["check"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["method_count"], 7);
+    assert_eq!(rows[0]["constraint_count"], 1);
+    assert_eq!(rows[0]["alternatives_considered"], 2);
+    assert_eq!(rows[0]["evidence_coverage"], 0.0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: `check` and `compile` rows for one plan revision must count the
+/// same post-pass document. P3 derives match methods and P4 merges shared
+/// tasks, so recording the pristine plan on `check` alone would mix two
+/// definitions of the task and method counts in one log.
+#[test]
+fn check_and_compile_record_the_same_checked_plan() {
+    let dir = metrics_scratch("same-doc-metrics", "valid-match-share.toml");
+    pc_recording(&dir, &["check"]);
+    pc_recording(&dir, &["compile"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 2);
+    for field in [
+        "plan_revision",
+        "tasks",
+        "capabilities",
+        "task_count",
+        "method_count",
+        "constraint_count",
+        "alternatives_considered",
+        "evidence_coverage",
+    ] {
+        assert_eq!(rows[0][field], rows[1][field], "{field}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: a critical-path change is measured only against the previous
+/// run of the same plan selected under the same objective and budget.
+/// Alternating `compile --objective makespan` with `frontier` (effort) on
+/// an unchanged plan swaps `fan-out` for `chain` each run, yet must report
+/// no change; rejecting `fan-out` afterwards is a real, plan-driven change.
+#[test]
+fn critical_path_changes_compare_runs_with_the_same_selection() {
+    let dir = metrics_scratch("critical-path-metrics", "makespan-tradeoff");
+    pc_recording(&dir, &["compile", "--objective", "makespan"]);
+    pc_recording(&dir, &["frontier"]);
+    pc_recording(&dir, &["compile", "--objective", "makespan"]);
+    let plan = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
+    let fan_out = plan.find("id = \"fan-out\"").unwrap();
+    let status = fan_out + plan[fan_out..].find("status = \"accepted\"").unwrap();
+    let plan = format!(
+        "{}status = \"rejected\"{}",
+        &plan[..status],
+        &plan[status + "status = \"accepted\"".len()..]
+    );
+    std::fs::write(dir.join("plan.toml"), plan).unwrap();
+    pc_recording(&dir, &["compile", "--objective", "makespan"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 4);
+    assert!(rows[0]["critical_path_changes"].is_null());
+    assert!(rows[1]["critical_path_changes"].is_null());
+    assert_ne!(
+        rows[1]["critical_path_tasks"],
+        rows[2]["critical_path_tasks"]
+    );
+    assert_eq!(rows[2]["critical_path_changes"], 0);
+    let before: Vec<String> =
+        serde_json::from_value(rows[2]["critical_path_tasks"].clone()).unwrap();
+    let after: Vec<String> =
+        serde_json::from_value(rows[3]["critical_path_tasks"].clone()).unwrap();
+    assert_ne!(before, after);
+    let moved = before.iter().filter(|task| !after.contains(task)).count()
+        + after.iter().filter(|task| !before.contains(task)).count();
+    assert_eq!(rows[3]["critical_path_changes"], moved);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: a recorded decision counts as affected only when its supporting
+/// task or the capabilities its methods invoke gained evidence after the
+/// decision. `evidence-flip` holds evidence up to 2026-10-08T02:00, so the
+/// 01:30 decision on `job` is affected and the 2026-10-09 one is not.
+#[test]
+fn runs_count_decisions_affected_by_later_evidence() {
+    let dir = metrics_scratch("decision-metrics", "evidence-flip");
+    for (id, timestamp) in [
+        ("d-early", "2026-10-08T01:30:00Z"),
+        ("d-late", "2026-10-09T00:00:00Z"),
+    ] {
+        let decision = serde_json::json!({
+            "id": id, "timestamp": timestamp, "plan_revision": "r1", "source": "test", "schema_version": 1,
+            "tasks": ["job"], "capabilities": [], "objective": "Run the job", "project_revision": "abc",
+            "alternatives": [{"id": "fast", "description": "Fast"}, {"id": "slow", "description": "Slow"}],
+            "selected_alternative": "slow", "compiler_recommendation": "slow",
+            "decision_provenance": "accepted recommendation", "supporting_evidence": [], "constraints": [],
+            "predicted_outcome": {"description": "10 min", "metrics": {"duration_minutes": 10.0}},
+            "baseline_alternative": "fast"
+        });
+        let path = dir.join(format!("{id}.json"));
+        std::fs::write(&path, serde_json::to_vec(&decision).unwrap()).unwrap();
+        pc_command()
+            .arg("decision")
+            .arg(&path)
+            .arg(&dir)
+            .assert()
+            .success();
+    }
+    pc_recording(&dir, &["check"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["decisions_affected_by_evidence"], 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: a decision on a task P4 merged away still counts as affected
+/// when that task gains later evidence. `ingest-b` merges into `ingest-a`,
+/// which rewrites `task:ingest-b` evidence to `task:ingest-a`.
+#[test]
+fn decisions_on_share_merged_tasks_count_later_evidence() {
+    let dir = metrics_scratch("merged-decision-metrics", "valid-match-share.toml");
+    std::fs::write(
+        dir.join("evidence.jsonl"),
+        r#"{"subject":"task:ingest-b","metric":"duration_minutes","value":4.0,"unit":"minutes","time":"2026-10-09T00:00:00Z","source":"ci","artifact_hash":null}
+"#,
+    )
+    .unwrap();
+    let decision = serde_json::json!({
+        "id": "d-merged", "timestamp": "2026-10-08T00:00:00Z", "plan_revision": "r1", "source": "test", "schema_version": 1,
+        "tasks": ["ingest-b"], "capabilities": [], "objective": "Ingest footage", "project_revision": "abc",
+        "alternatives": [{"id": "ingester", "description": "Ingester"}],
+        "selected_alternative": "ingester", "compiler_recommendation": "ingester",
+        "decision_provenance": "accepted recommendation", "supporting_evidence": [], "constraints": [],
+        "predicted_outcome": {"description": "3 min", "metrics": {"duration_minutes": 3.0}},
+        "baseline_alternative": null
+    });
+    let path = dir.join("d-merged.json");
+    std::fs::write(&path, serde_json::to_vec(&decision).unwrap()).unwrap();
+    pc_command()
+        .arg("decision")
+        .arg(&path)
+        .arg(&dir)
+        .assert()
+        .success();
+    pc_recording(&dir, &["check"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["decisions_affected_by_evidence"], 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: `PC_METRICS=off` must leave the plan directory untouched.
+#[test]
+fn metrics_off_records_nothing() {
+    let dir = metrics_scratch("metrics-off", "valid-contracts.toml");
+    pc_ok(&dir, &["compile"]);
+    assert!(!dir.join("metrics.jsonl").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: `pc frontier` must record how long P8 ranking itself took. The
+/// first implementation recorded the run before ranking, so the metrics
+/// log could never answer what frontier generation costs.
+#[test]
+fn frontier_records_frontier_generation_duration() {
+    let dir = metrics_scratch("frontier-metrics", "valid-contracts.toml");
+    pc_recording(&dir, &["frontier"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["operation"], "frontier");
+    assert!(rows[0]["frontier_duration_ms"].as_u64().is_some());
+    assert!(rows[0]["selection_duration_ms"].as_u64().is_some());
+    assert!(rows[0]["optimality_status"].is_string());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: `pc check` runs no solver, so it must leave solver fields empty
+/// rather than fabricate optimality or selection durations.
+#[test]
+fn check_records_validation_without_solver_measurements() {
+    let dir = metrics_scratch("check-metrics", "valid-contracts.toml");
+    pc_recording(&dir, &["check"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["operation"], "check");
+    assert!(rows[0]["validation_duration_ms"].as_u64().is_some());
+    assert!(rows[0]["selection_duration_ms"].is_null());
+    assert!(rows[0]["optimality_status"].is_null());
+    assert!(rows[0]["optimality_gap_percent"].is_null());
+    assert!(rows[0]["critical_path_tasks"].is_null());
+    assert!(rows[0]["critical_path_changes"].is_null());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// PC-03: `pc context` must record the rendered context size, the only
+/// direct observation of context-generation cost.
+#[test]
+fn context_records_context_size() {
+    let dir = metrics_scratch("context-metrics", "valid-contracts.toml");
+    pc_recording(&dir, &["context", "transcribe-footage"]);
+    let rows = read_metrics(&dir);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["operation"], "context");
+    assert!(rows[0]["context_size_chars"].as_u64().unwrap() > 0);
+    assert!(rows[0]["selection_duration_ms"].as_u64().is_some());
+    std::fs::remove_dir_all(dir).unwrap();
 }

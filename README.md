@@ -100,8 +100,12 @@ pc export-tasks-axi <backlog.md> [path]  # export a plan back into backlog.md (b
 pc import-beads <issues.jsonl> [dir]  # import Beads issues into <dir>/plan.toml (refuses to overwrite)
 pc export-beads <issues.jsonl> [path]  # export imported issue records to JSONL, preserving source fields
 pc sync (--source <github|tasks-axi|beads> [--input file] | --all) [--dry-run] [path]  # reconcile mapped external task state (docs/sync.md)
-pc schema [--patch|--decision|--outcome] [--out file]   # emit the canonical JSON Schema (plan, patch, or event)
+pc schema [--patch|--decision|--outcome|--metrics] [--out file]   # emit the canonical JSON Schema (plan, patch, event, or run metrics)
 ```
+
+`pc check`, `pc compile`, `pc frontier` and `pc context` also append one run
+observation to `metrics.jsonl` beside the plan (`PC_METRICS=off` skips it);
+see "Compiler runs" in `docs/ir.md`.
 
 Without a `[path]`, commands use `.plan/` when it holds a plan file and the
 current directory otherwise, so a bare `pc check` finds what a bare `pc init`

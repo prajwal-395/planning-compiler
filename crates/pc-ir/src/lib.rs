@@ -494,6 +494,69 @@ pub struct EventMetadata {
     pub capabilities: Vec<String>,
 }
 
+/// Measurements captured automatically while the compiler inspects a plan.
+/// Missing values mean the operation could not observe that measurement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerRunEvent {
+    /// Shared event provenance.
+    #[serde(flatten)]
+    pub event: EventMetadata,
+    /// Operation which produced the observation: `check`, `compile`, `frontier`, or `context`.
+    pub operation: String,
+    /// File name of the plan the run read; plans sharing a directory share
+    /// one log.
+    pub plan_file: String,
+    /// P6 selection objective (`effort` or `makespan`), when compiled.
+    pub selection_objective: Option<String>,
+    /// P6 selection time budget in milliseconds, when compiled.
+    pub selection_time_budget_ms: Option<u64>,
+    /// Wall-clock duration in milliseconds.
+    pub duration_ms: u64,
+    /// P1-P5 validation duration in milliseconds.
+    pub validation_duration_ms: u64,
+    /// Process resident memory in bytes, when available.
+    pub memory_bytes: Option<u64>,
+    /// Number of tasks in the checked plan.
+    pub task_count: usize,
+    /// Number of methods in the checked plan.
+    pub method_count: usize,
+    /// Number of objective constraints (budget, deadline, quality floor,
+    /// acceptance criteria) plus order edges of non-rejected methods.
+    pub constraint_count: usize,
+    /// Number of accepted methods on tasks that offer more than one
+    /// accepted method, so each counted method competes in selection.
+    pub alternatives_considered: usize,
+    /// Number of candidate methods rejected by contract validation.
+    pub contract_rejections: usize,
+    /// Fraction of plan capabilities with at least one evidence record;
+    /// evidence on subjects not in the plan does not count.
+    pub evidence_coverage: Option<f64>,
+    /// Aggregate expected duration range width in minutes, when compiled.
+    pub estimate_uncertainty_minutes: Option<f64>,
+    /// Number of recorded decisions whose supporting tasks or capabilities
+    /// gained evidence timestamped after the decision. Null when the
+    /// decision log cannot be read.
+    pub decisions_affected_by_evidence: Option<usize>,
+    /// Tasks on the critical path, for compiled operations.
+    pub critical_path_tasks: Option<Vec<String>>,
+    /// Tasks that entered or left the critical path since the previous
+    /// recorded run of the same plan file with the same selection objective
+    /// and time budget. Null without a compiled operation or such a run.
+    pub critical_path_changes: Option<usize>,
+    /// Rendered context size in characters for `context` operations.
+    pub context_size_chars: Option<usize>,
+    /// Selection solver wall-clock duration in milliseconds.
+    pub selection_duration_ms: Option<u64>,
+    /// Selection optimality status, when compiled.
+    pub optimality_status: Option<String>,
+    /// Solver optimality gap in percent, when exposed by the solver.
+    pub optimality_gap_percent: Option<f64>,
+    /// P8 frontier-ranking wall-clock duration in milliseconds, for
+    /// `frontier` operations only.
+    pub frontier_duration_ms: Option<u64>,
+}
+
 /// A planning decision and its prediction, recorded independently of outcomes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -691,6 +754,12 @@ pub fn decision_schema() -> serde_json::Value {
 #[must_use]
 pub fn outcome_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(OutcomeEvent)).unwrap_or(serde_json::Value::Null)
+}
+
+/// Canonical JSON Schema for [`CompilerRunEvent`].
+#[must_use]
+pub fn metrics_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(CompilerRunEvent)).unwrap_or(serde_json::Value::Null)
 }
 
 /// Parse a plan from TOML text.

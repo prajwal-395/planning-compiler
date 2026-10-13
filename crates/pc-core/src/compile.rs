@@ -406,6 +406,28 @@ pub fn compile_with_objective(
     selection_budget: std::time::Duration,
     objective: Objective,
 ) -> Result<CompiledPlan, CompileError> {
+    compile_with_objective_and_selection_duration(doc, selection_budget, objective)
+        .map(|(compiled, _)| compiled)
+}
+
+/// Observation of the P6 selection solver for one compile, kept outside
+/// `CompiledPlan` so deterministic outputs remain byte-for-byte stable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionObservation {
+    /// Wall-clock time spent inside the P6 selection solver.
+    pub duration: std::time::Duration,
+    /// Solver-reported optimality, including the gap when one is known.
+    pub optimality: Optimality,
+}
+
+/// Analyze a plan under the given P6 objective and also return the P6
+/// selection-solver observation. The measurement is kept outside
+/// `CompiledPlan` so deterministic outputs remain byte-for-byte stable.
+pub fn compile_with_objective_and_selection_duration(
+    doc: &PlanDoc,
+    selection_budget: std::time::Duration,
+    objective: Objective,
+) -> Result<(CompiledPlan, SelectionObservation), CompileError> {
     let accepted: Vec<_> = doc
         .method
         .iter()
@@ -522,6 +544,7 @@ pub fn compile_with_objective(
     constraints
         .forbidden_methods
         .extend(ineligible.keys().cloned());
+    let selection_started = std::time::Instant::now();
     let selection = pc_select::select_with_objective(
         &selection_tasks,
         &doc.objective.root_task,
@@ -535,6 +558,7 @@ pub fn compile_with_objective(
             message: other.to_string(),
         },
     })?;
+    let selection_duration = selection_started.elapsed();
     let methods: BTreeMap<&str, Vec<_>> = selection
         .methods
         .iter()
@@ -838,31 +862,38 @@ pub fn compile_with_objective(
     // done. It never changes the makespan or its meaning, and the ranking
     // itself is untouched.
     let open_work = crate::frontier::open_work(doc, &doc.objective.root_task, &unresolved_tasks);
-    Ok(CompiledPlan {
-        root_task: doc.objective.root_task.clone(),
-        totals,
-        basis,
-        provenance,
-        unattributed_tasks: estimated.unattributed_tasks,
-        staged_evidence: estimated.staged,
-        pending_evidence: estimated.pending,
-        makespan_minutes: makespan,
-        makespan_range,
-        parallel_width: width,
-        timings,
-        unresolved_tasks,
-        trace,
-        selection_status: selection_status(&selection.optimality),
-        selection_time_budget_ms: selection.time_budget.as_millis() as u64,
-        selection_objective: match objective {
-            Objective::TotalEffort => "effort",
-            Objective::Makespan => "makespan",
-        }
-        .into(),
-        selection_explanation: selection.explanation,
-        selection: selection.methods,
-        open_work,
-    })
+    let observation = SelectionObservation {
+        duration: selection_duration,
+        optimality: selection.optimality,
+    };
+    Ok((
+        CompiledPlan {
+            root_task: doc.objective.root_task.clone(),
+            totals,
+            basis,
+            provenance,
+            unattributed_tasks: estimated.unattributed_tasks,
+            staged_evidence: estimated.staged,
+            pending_evidence: estimated.pending,
+            makespan_minutes: makespan,
+            makespan_range,
+            parallel_width: width,
+            timings,
+            unresolved_tasks,
+            trace,
+            selection_status: selection_status(&selection.optimality),
+            selection_time_budget_ms: selection.time_budget.as_millis() as u64,
+            selection_objective: match objective {
+                Objective::TotalEffort => "effort",
+                Objective::Makespan => "makespan",
+            }
+            .into(),
+            selection_explanation: selection.explanation,
+            selection: selection.methods,
+            open_work,
+        },
+        observation,
+    ))
 }
 
 fn selection_status(status: &Optimality) -> String {

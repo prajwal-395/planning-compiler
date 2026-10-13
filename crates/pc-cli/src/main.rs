@@ -51,11 +51,14 @@ enum Commands {
         #[arg(long)]
         patch: bool,
         /// Emit the decision-event schema instead of the plan schema.
-        #[arg(long, conflicts_with_all = ["patch", "outcome"])]
+        #[arg(long, conflicts_with_all = ["patch", "outcome", "metrics"])]
         decision: bool,
         /// Emit the outcome-event schema instead of the plan schema.
-        #[arg(long, conflicts_with_all = ["patch", "decision"])]
+        #[arg(long, conflicts_with_all = ["patch", "decision", "metrics"])]
         outcome: bool,
+        /// Emit the compiler-run metrics schema instead of the plan schema.
+        #[arg(long, conflicts_with_all = ["patch", "decision", "outcome"])]
+        metrics: bool,
     },
     /// Roll up accepted methods and analyze the critical path.
     Compile {
@@ -309,7 +312,8 @@ fn main() {
             patch,
             decision,
             outcome,
-        } => run_schema(out.as_deref(), patch, decision, outcome),
+            metrics,
+        } => run_schema(out.as_deref(), patch, decision, outcome, metrics),
         Commands::Compile {
             path,
             json,
@@ -380,7 +384,15 @@ fn main() {
     }
 }
 
-fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passes::Report) {
+/// Load and check a plan, exiting on failure. The duration covers the
+/// P1-P5 check alone, so it compares with `pc check`'s validation timing.
+fn load_checked(
+    path: &std::path::Path,
+) -> (
+    pc_store::LoadedPlan,
+    pc_core::passes::Report,
+    std::time::Duration,
+) {
     let mut loaded = match pc_store::load(path) {
         Ok(loaded) => loaded,
         Err(e) => {
@@ -388,7 +400,9 @@ fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passe
             std::process::exit(1);
         }
     };
+    let validation_started = std::time::Instant::now();
     let (doc, report) = loaded.check();
+    let validation_duration = validation_started.elapsed();
     if !report.ok() {
         for diag in &report.diagnostics {
             eprintln!("{}", pc_core::render_human(diag));
@@ -399,7 +413,234 @@ fn load_checked(path: &std::path::Path) -> (pc_store::LoadedPlan, pc_core::passe
     // visible as derived methods and P4 shares identical subtasks, so P6
     // counts shared work once. P6 still selects among accepted methods only.
     loaded.doc = doc;
-    (loaded, report)
+    (loaded, report, validation_duration)
+}
+
+fn process_memory_bytes() -> Option<u64> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    let kib = String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    kib.checked_mul(1024)
+}
+
+/// Measurements one CLI operation observed, bundled so the recorder
+/// stays under the argument-count lint. Every field the operation could
+/// not observe stays `None`.
+struct RunObservation<'a> {
+    report: &'a pc_core::passes::Report,
+    compiled: Option<&'a pc_core::CompiledPlan>,
+    selection: Option<&'a pc_core::SelectionObservation>,
+    context_size_chars: Option<usize>,
+    frontier_duration: Option<std::time::Duration>,
+}
+
+fn record_compiler_run(
+    loaded: &pc_store::LoadedPlan,
+    operation: &str,
+    started: std::time::Instant,
+    validation_duration: std::time::Duration,
+    observation: RunObservation<'_>,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    if std::env::var_os("PC_METRICS").is_some_and(|value| value == "off") {
+        return;
+    }
+    static NEXT_EVENT: AtomicU64 = AtomicU64::new(0);
+    let doc = &loaded.doc;
+    let RunObservation {
+        report,
+        compiled,
+        selection,
+        context_size_chars,
+        frontier_duration,
+    } = observation;
+    let plan_file = std::path::Path::new(&loaded.display_path);
+    let critical_path_tasks: Option<Vec<String>> = compiled.map(|result| {
+        result
+            .timings
+            .iter()
+            .filter(|(_, timing)| timing.critical)
+            .map(|(task, _)| task.clone())
+            .collect()
+    });
+    let critical_path_changes =
+        compiled
+            .zip(critical_path_tasks.as_ref())
+            .and_then(|(result, current)| {
+                let previous = pc_store::previous_critical_path(
+                    plan_file,
+                    &result.selection_objective,
+                    result.selection_time_budget_ms,
+                )?;
+                Some(
+                    current
+                        .iter()
+                        .filter(|task| !previous.contains(task))
+                        .count()
+                        + previous
+                            .iter()
+                            .filter(|task| !current.contains(task))
+                            .count(),
+                )
+            });
+    let decisions_affected_by_evidence = pc_store::read_decisions(plan_file)
+        .ok()
+        .map(|decisions| decisions_affected_by_evidence(doc, report, &decisions));
+    let uncertainty = compiled.and_then(|result| {
+        result
+            .totals
+            .get("duration_minutes")
+            .map(|range| range.high - range.low)
+    });
+    let coverage = if doc.capability.is_empty() {
+        None
+    } else {
+        let evidenced = doc
+            .evidence
+            .iter()
+            .filter_map(|evidence| evidence.subject.strip_prefix("capability:"))
+            .collect::<std::collections::BTreeSet<_>>();
+        let covered = doc
+            .capability
+            .iter()
+            .filter(|capability| evidenced.contains(capability.id.as_str()))
+            .count();
+        Some(covered as f64 / doc.capability.len() as f64)
+    };
+    let mut accepted_per_task = std::collections::BTreeMap::<&str, usize>::new();
+    for method in &doc.method {
+        if method.status == pc_ir::MethodStatus::Accepted {
+            *accepted_per_task.entry(method.task.as_str()).or_default() += 1;
+        }
+    }
+    let alternatives_considered = accepted_per_task.values().filter(|&&count| count > 1).sum();
+    let order_edges: usize = doc
+        .method
+        .iter()
+        .filter(|method| method.status != pc_ir::MethodStatus::Rejected)
+        .map(|method| method.order_edges.len())
+        .sum();
+    let optimality_status = compiled.map(|result| result.selection_status.clone());
+    let optimality_gap_percent = selection.and_then(|observation| match observation.optimality {
+        pc_core::Optimality::BestFound { gap_percent } => gap_percent,
+        pc_core::Optimality::Optimal | pc_core::Optimality::GreedyOnly => None,
+    });
+    let now = chrono::Utc::now();
+    let event = pc_ir::CompilerRunEvent {
+        event: pc_ir::EventMetadata {
+            id: format!(
+                "run-{}-{}-{}",
+                now.timestamp_millis(),
+                std::process::id(),
+                NEXT_EVENT.fetch_add(1, Ordering::Relaxed)
+            ),
+            timestamp: now.to_rfc3339(),
+            plan_revision: blake3::hash(loaded.text.as_bytes()).to_hex().to_string(),
+            source: "pc-cli".into(),
+            schema_version: 1,
+            tasks: doc.task.iter().map(|task| task.id.clone()).collect(),
+            capabilities: doc
+                .capability
+                .iter()
+                .map(|capability| capability.id.clone())
+                .collect(),
+        },
+        operation: operation.into(),
+        plan_file: plan_file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        selection_objective: compiled.map(|result| result.selection_objective.clone()),
+        selection_time_budget_ms: compiled.map(|result| result.selection_time_budget_ms),
+        duration_ms: started.elapsed().as_millis() as u64,
+        validation_duration_ms: validation_duration.as_millis() as u64,
+        memory_bytes: process_memory_bytes(),
+        task_count: doc.task.len(),
+        method_count: doc.method.len(),
+        constraint_count: order_edges
+            + doc.objective.acceptance.len()
+            + usize::from(doc.objective.budget_usd.is_some())
+            + usize::from(doc.objective.deadline.is_some())
+            + usize::from(doc.objective.quality_floor.is_some()),
+        alternatives_considered,
+        contract_rejections: report.contract_notes.len(),
+        evidence_coverage: coverage,
+        estimate_uncertainty_minutes: uncertainty,
+        decisions_affected_by_evidence,
+        critical_path_tasks,
+        critical_path_changes,
+        context_size_chars,
+        selection_duration_ms: selection.map(|observation| observation.duration.as_millis() as u64),
+        optimality_status,
+        optimality_gap_percent,
+        frontier_duration_ms: frontier_duration.map(|duration| duration.as_millis() as u64),
+    };
+    if let Err(error) = pc_store::append_compiler_run(plan_file, &event) {
+        eprintln!("warning: could not record compiler metrics: {error}");
+    }
+}
+
+/// Count recorded decisions whose supporting tasks or capabilities gained
+/// evidence after the decision: evidence on one of its tasks, on a
+/// non-rejected method of those tasks, or on a capability those methods
+/// invoke or the decision names, timestamped after the decision. `doc` is
+/// the post-pass plan, so a task P4 merged away is read as its surviving
+/// task, whose id the merged task's evidence now names.
+fn decisions_affected_by_evidence(
+    doc: &pc_ir::PlanDoc,
+    report: &pc_core::passes::Report,
+    decisions: &[pc_ir::DecisionEvent],
+) -> usize {
+    let time = |text: &str| chrono::DateTime::parse_from_rfc3339(text).ok();
+    let merged: std::collections::BTreeMap<&str, &str> = report
+        .trace
+        .iter()
+        .filter(|event| event.pass == "P4-share" && event.decision == "merged")
+        .filter_map(|event| {
+            Some((
+                event.subject.strip_prefix("task:")?,
+                event
+                    .reason
+                    .strip_prefix("structurally identical to task:")?,
+            ))
+        })
+        .collect();
+    decisions
+        .iter()
+        .filter(|decision| {
+            let Some(decided) = time(&decision.event.timestamp) else {
+                return false;
+            };
+            let mut subjects: std::collections::BTreeSet<String> = decision
+                .event
+                .capabilities
+                .iter()
+                .map(|capability| format!("capability:{capability}"))
+                .collect();
+            for task in &decision.event.tasks {
+                let task = merged.get(task.as_str()).copied().unwrap_or(task);
+                subjects.insert(format!("task:{task}"));
+                for method in doc.method.iter().filter(|method| {
+                    method.task == task && method.status != pc_ir::MethodStatus::Rejected
+                }) {
+                    subjects.insert(format!("method:{}", method.id));
+                    if let Some(capability) = &method.capability {
+                        subjects.insert(format!("capability:{capability}"));
+                    }
+                }
+            }
+            doc.evidence.iter().any(|evidence| {
+                subjects.contains(&evidence.subject)
+                    && time(&evidence.time).is_some_and(|observed| observed > decided)
+            })
+        })
+        .count()
 }
 
 /// Why P5 ignored `task:<id>` evidence, and which subjects to use instead.
@@ -480,8 +721,9 @@ fn run_compile(
     selection_time_budget_ms: u64,
     objective: SelectionObjective,
 ) {
-    let (loaded, _) = load_checked(path);
-    let result = match pc_core::compile_with_objective(
+    let started = std::time::Instant::now();
+    let (loaded, report, validation_duration) = load_checked(path);
+    let (result, selection) = match pc_core::compile_with_objective_and_selection_duration(
         &loaded.doc,
         std::time::Duration::from_millis(selection_time_budget_ms),
         match objective {
@@ -495,6 +737,19 @@ fn run_compile(
             std::process::exit(1);
         }
     };
+    record_compiler_run(
+        &loaded,
+        "compile",
+        started,
+        validation_duration,
+        RunObservation {
+            report: &report,
+            compiled: Some(&result),
+            selection: Some(&selection),
+            context_size_chars: None,
+            frontier_duration: None,
+        },
+    );
     if json {
         println!(
             "{}",
@@ -595,7 +850,7 @@ fn run_compile(
 }
 
 fn run_explain(path: &std::path::Path, target: &str, json: bool, selection_time_budget_ms: u64) {
-    let (loaded, _) = load_checked(path);
+    let (loaded, _, _) = load_checked(path);
     let result = match pc_core::compile_with_budget(
         &loaded.doc,
         std::time::Duration::from_millis(selection_time_budget_ms),
@@ -1328,14 +1583,31 @@ fn run_init(path: Option<PathBuf>, json: bool) {
 
 /// Handler for `pc check`.
 fn run_check(path: &std::path::Path, json: bool) {
-    let loaded = match pc_store::load(path) {
+    let started = std::time::Instant::now();
+    let mut loaded = match pc_store::load(path) {
         Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("error[E000]: {e}");
             std::process::exit(1);
         }
     };
-    let (_, report) = loaded.check();
+    let validation_started = std::time::Instant::now();
+    let (doc, report) = loaded.check();
+    let validation_duration = validation_started.elapsed();
+    loaded.doc = doc;
+    record_compiler_run(
+        &loaded,
+        "check",
+        started,
+        validation_duration,
+        RunObservation {
+            report: &report,
+            compiled: None,
+            selection: None,
+            context_size_chars: None,
+            frontier_duration: None,
+        },
+    );
     if json {
         println!(
             "{}",
@@ -1373,11 +1645,19 @@ fn run_check(path: &std::path::Path, json: bool) {
 }
 
 /// Handler for `pc schema`.
-fn run_schema(out: Option<&std::path::Path>, patch: bool, decision: bool, outcome: bool) {
+fn run_schema(
+    out: Option<&std::path::Path>,
+    patch: bool,
+    decision: bool,
+    outcome: bool,
+    metrics: bool,
+) {
     let schema = if decision {
         pc_ir::decision_schema()
     } else if outcome {
         pc_ir::outcome_schema()
+    } else if metrics {
+        pc_ir::metrics_schema()
     } else if patch {
         pc_ir::patch_schema()
     } else {
@@ -1414,7 +1694,7 @@ fn metric_label(metric: &str) -> String {
 
 /// Handler for `pc capabilities`.
 fn run_capabilities(path: &std::path::Path, json: bool) {
-    let (loaded, _) = load_checked(path);
+    let (loaded, _, _) = load_checked(path);
     let report = pc_core::inventory(&loaded.doc);
     if json {
         println!(
@@ -1431,10 +1711,12 @@ fn run_capabilities(path: &std::path::Path, json: bool) {
 
 /// Handler for `pc frontier`.
 fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u64) {
-    let (loaded, _) = load_checked(path);
-    let compiled = match pc_core::compile_with_budget(
+    let started = std::time::Instant::now();
+    let (loaded, report, validation_duration) = load_checked(path);
+    let (compiled, selection) = match pc_core::compile_with_objective_and_selection_duration(
         &loaded.doc,
         std::time::Duration::from_millis(selection_time_budget_ms),
+        pc_core::Objective::TotalEffort,
     ) {
         Ok(compiled) => compiled,
         Err(e) => {
@@ -1442,7 +1724,23 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
             std::process::exit(1);
         }
     };
-    let report = pc_core::frontier(&loaded.doc, &compiled);
+    let frontier_started = std::time::Instant::now();
+    let frontier_report = pc_core::frontier(&loaded.doc, &compiled);
+    let frontier_duration = frontier_started.elapsed();
+    record_compiler_run(
+        &loaded,
+        "frontier",
+        started,
+        validation_duration,
+        RunObservation {
+            report: &report,
+            compiled: Some(&compiled),
+            selection: Some(&selection),
+            context_size_chars: None,
+            frontier_duration: Some(frontier_duration),
+        },
+    );
+    let report = frontier_report;
     if json {
         println!(
             "{}",
@@ -1518,7 +1816,7 @@ fn run_impact(
     json: bool,
     selection_time_budget_ms: u64,
 ) {
-    let (loaded, _) = load_checked(path);
+    let (loaded, _, _) = load_checked(path);
     let text = match std::fs::read_to_string(change_path) {
         Ok(text) => text,
         Err(e) => {
@@ -1920,15 +2218,19 @@ fn run_decide(id: &str, path: &std::path::Path, json: bool, accept: bool) {
 
 /// Handler for `pc context`.
 fn run_context(task: &str, path: &std::path::Path, json: bool, budget: u64) {
-    let (loaded, _) = load_checked(path);
-    let compiled =
-        match pc_core::compile_with_budget(&loaded.doc, std::time::Duration::from_millis(2000)) {
-            Ok(compiled) => compiled,
-            Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
-        };
+    let started = std::time::Instant::now();
+    let (loaded, report, validation_duration) = load_checked(path);
+    let (compiled, selection) = match pc_core::compile_with_objective_and_selection_duration(
+        &loaded.doc,
+        std::time::Duration::from_millis(2000),
+        pc_core::Objective::TotalEffort,
+    ) {
+        Ok(compiled) => compiled,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
     let frontier_report = pc_core::frontier(&loaded.doc, &compiled);
     let task = task.strip_prefix("task:").unwrap_or(task);
     let full = match pc_core::context(&loaded.doc, &compiled, &frontier_report, task) {
@@ -1939,6 +2241,20 @@ fn run_context(task: &str, path: &std::path::Path, json: bool, budget: u64) {
         }
     };
     let fitted = pc_core::fit_context(full, budget);
+    let rendered = pc_core::render_context_text(&fitted);
+    record_compiler_run(
+        &loaded,
+        "context",
+        started,
+        validation_duration,
+        RunObservation {
+            report: &report,
+            compiled: Some(&compiled),
+            selection: Some(&selection),
+            context_size_chars: Some(rendered.chars().count()),
+            frontier_duration: None,
+        },
+    );
     if json {
         println!(
             "{}",
@@ -1946,7 +2262,7 @@ fn run_context(task: &str, path: &std::path::Path, json: bool, budget: u64) {
         );
         return;
     }
-    print!("{}", pc_core::render_context_text(&fitted));
+    print!("{rendered}");
 }
 
 /// Handler for `pc import-tasks-axi`.

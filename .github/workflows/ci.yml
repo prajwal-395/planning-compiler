@@ -53,3 +53,5 @@ jobs:
       - run: diff -u schema/decision.schema.json /tmp/decision.schema.json
       - run: cargo run -q -p pc-cli -- schema --outcome > /tmp/outcome.schema.json
       - run: diff -u schema/outcome.schema.json /tmp/outcome.schema.json
+      - run: cargo run -q -p pc-cli -- schema --metrics > /tmp/metrics.schema.json
+      - run: diff -u schema/metrics.schema.json /tmp/metrics.schema.json

@@ -1,10 +1,11 @@
 //! Plan loading.
 //!
 //! State is text files: a `plan.toml` (or `plan.json`) plus optional
-//! sibling `evidence.jsonl`, `decisions.jsonl`, and `outcomes.jsonl` logs. This crate owns the filesystem layout; passes
+//! sibling `evidence.jsonl`, `decisions.jsonl`, `outcomes.jsonl`, and
+//! `metrics.jsonl` logs. This crate owns the filesystem layout; passes
 //! P1-P5 in `pc-core` own validation; [`LoadedPlan::check`] runs them. There is no database in v0.
 
-use pc_ir::{DecisionEvent, Evidence, OutcomeEvent, PlanDoc, canonical_unit};
+use pc_ir::{CompilerRunEvent, DecisionEvent, Evidence, OutcomeEvent, PlanDoc, canonical_unit};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -388,6 +389,109 @@ pub fn read_decisions(plan_file: &Path) -> Result<Vec<DecisionEvent>, LoadError>
 /// Read outcome records from the log adjacent to a plan.
 pub fn read_outcomes(plan_file: &Path) -> Result<Vec<OutcomeEvent>, LoadError> {
     read_events(&event_log_path(plan_file, "outcomes.jsonl"))
+}
+
+/// Append one automatic compiler run measurement beside the decision/outcome logs.
+///
+/// Unlike decisions and outcomes, this log grows on every read command, so
+/// the row is appended in one write without parsing earlier rows: append
+/// cost stays constant and an unparsable earlier row never blocks recording.
+pub fn append_compiler_run(
+    plan_file: &Path,
+    event: &CompilerRunEvent,
+) -> Result<PathBuf, LoadError> {
+    validate_event(&event.event, &event.operation)?;
+    if !matches!(
+        event.operation.as_str(),
+        "check" | "compile" | "frontier" | "context"
+    ) {
+        return Err(event_error("unknown compiler run operation"));
+    }
+    let log = event_log_path(plan_file, "metrics.jsonl");
+    let mut line = serde_json::to_string(event).map_err(|e| LoadError::Unparsable {
+        path: log.display().to_string(),
+        message: e.to_string(),
+    })?;
+    line.push('\n');
+    std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(&log)
+        .and_then(|mut f| {
+            use std::io::{Read as _, Seek as _, Write as _};
+            // A crash mid-write leaves a partial last line; start a new one
+            // so this row is not glued onto it. Only the last byte is read,
+            // keeping the append constant-cost.
+            if f.seek(std::io::SeekFrom::End(0))? > 0 {
+                let mut last = [0];
+                f.seek(std::io::SeekFrom::End(-1))?;
+                f.read_exact(&mut last)?;
+                if last[0] != b'\n' {
+                    line.insert(0, '\n');
+                }
+            }
+            f.write_all(line.as_bytes())
+        })
+        .map_err(|e| LoadError::Unreadable {
+            path: log.display().to_string(),
+            message: e.to_string(),
+        })?;
+    Ok(log)
+}
+
+/// Critical path of the most recent recorded run of `plan_file` selected
+/// under `objective` and `time_budget_ms`, skipping unparsable rows so one
+/// bad row never hides earlier history. The log is
+/// read backwards in chunks, so the cost follows the rows inspected rather
+/// than the size of the ever-growing log.
+pub fn previous_critical_path(
+    plan_file: &Path,
+    objective: &str,
+    time_budget_ms: u64,
+) -> Option<Vec<String>> {
+    use std::io::{Read as _, Seek as _};
+    let name = plan_file.file_name()?.to_string_lossy();
+    const CHUNK: u64 = 64 * 1024;
+    let mut file = std::fs::File::open(event_log_path(plan_file, "metrics.jsonl")).ok()?;
+    let mut end = file.metadata().ok()?.len();
+    let mut pending = Vec::new();
+    while end > 0 {
+        let start = end.saturating_sub(CHUNK);
+        let mut chunk = vec![0; usize::try_from(end - start).ok()?];
+        file.seek(std::io::SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        chunk.append(&mut pending);
+        end = start;
+        let complete = if start == 0 {
+            0
+        } else if let Some(newline) = chunk.iter().position(|&byte| byte == b'\n') {
+            newline + 1
+        } else {
+            pending = chunk;
+            continue;
+        };
+        let found = chunk[complete..]
+            .rsplit(|&byte| byte == b'\n')
+            .find_map(|line| {
+                let run = serde_json::from_slice::<CompilerRunEvent>(line).ok()?;
+                (run.plan_file == name
+                    && run.selection_objective.as_deref() == Some(objective)
+                    && run.selection_time_budget_ms == Some(time_budget_ms))
+                .then_some(run.critical_path_tasks)?
+            });
+        if found.is_some() {
+            return found;
+        }
+        chunk.truncate(complete);
+        pending = chunk;
+    }
+    None
+}
+
+/// Read automatically captured compiler runs.
+pub fn read_compiler_runs(plan_file: &Path) -> Result<Vec<CompilerRunEvent>, LoadError> {
+    read_events(&event_log_path(plan_file, "metrics.jsonl"))
 }
 
 fn validate_event(event: &pc_ir::EventMetadata, reference: &str) -> Result<(), LoadError> {
