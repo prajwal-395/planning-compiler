@@ -103,7 +103,7 @@ pc import-tasks-axi <backlog.md> [dir]  # import a tasks-axi backlog into <dir>/
 pc export-tasks-axi <backlog.md> [path]  # export a plan back into backlog.md (byte-identical when unedited)
 pc import-beads <issues.jsonl> [dir]  # import Beads issues into <dir>/plan.toml (refuses to overwrite)
 pc export-beads <issues.jsonl> [path]  # export imported issue records to JSONL, preserving source fields
-pc sync (--source <github|tasks-axi|beads> [--input file] | --all) [--dry-run] [path]  # reconcile mapped external task state (docs/sync.md)
+pc sync (--source <github|tasks-axi|beads|ci|planning-compiler> [--input file] | --all) [--dry-run] [path]  # reconcile mapped external task state (docs/sync.md)
 pc bench [--all] [--include-large] [--scenario NAME] [--json]  # generated-plan benchmarks (docs/benchmarks.md; scenario-running tests are `#[ignore]`d, opt in with `cargo test -- --ignored`)
 pc schema [--patch|--decision|--outcome|--metrics] [--out file]   # emit the canonical JSON Schema (plan, patch, event, or run metrics)
 ```

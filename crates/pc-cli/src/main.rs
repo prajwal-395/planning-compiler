@@ -281,7 +281,7 @@ enum Commands {
         /// Show the reconciliation without changing plan or sync state.
         #[arg(long)]
         dry_run: bool,
-        /// Snapshot file for tasks-axi or Beads (GitHub uses gh when omitted).
+        /// Snapshot file override (tasks-axi and Beads require one; when omitted, GitHub and CI use gh and the Planning Compiler reads the plan).
         #[arg(long, conflicts_with = "all")]
         input: Option<PathBuf>,
         /// Plan file or directory.
@@ -2914,7 +2914,9 @@ fn run_sync(
     use pc_sync::{Mapping, Source, State};
     use std::process::Command;
     if !all && source.is_none() {
-        eprintln!("pc sync requires --source <github|tasks-axi|beads> or --all");
+        eprintln!(
+            "pc sync requires --source <github|tasks-axi|beads|ci|planning-compiler> or --all"
+        );
         std::process::exit(2);
     }
     let plan_file = pc_store::resolve_plan_file(path).unwrap_or_else(|e| {
@@ -2949,12 +2951,20 @@ fn run_sync(
         Vec::new()
     };
     let sources = if all {
-        vec![Source::TasksAxi, Source::Beads, Source::Github]
+        vec![
+            Source::TasksAxi,
+            Source::Beads,
+            Source::Ci,
+            Source::Github,
+            Source::PlanningCompiler,
+        ]
     } else {
         vec![match source.as_deref().unwrap_or("") {
             "github" => Source::Github,
             "tasks-axi" => Source::TasksAxi,
             "beads" => Source::Beads,
+            "ci" => Source::Ci,
+            "planning-compiler" => Source::PlanningCompiler,
             x => {
                 eprintln!("unknown sync source `{x}`");
                 std::process::exit(2)
@@ -2968,32 +2978,63 @@ fn run_sync(
     let mut had_conflict = false;
     let mut plan_changed = false;
     let mut reconciled = false;
+    let mut pending_evidence: Vec<pc_ir::Evidence> = Vec::new();
     for src in sources {
         let snapshot = match src {
             Source::TasksAxi => Some("tasks-axi.backlog.md"),
             Source::Beads => Some("beads.jsonl"),
+            Source::Ci => Some("ci.json"),
+            Source::PlanningCompiler => Some("planning-compiler.json"),
             Source::Github => None,
         }
         .map(|name| dir.join("sources").join(name));
+        let file = input.clone().or_else(|| {
+            snapshot.filter(|file| file.exists() || matches!(src, Source::TasksAxi | Source::Beads))
+        });
         if all {
-            let skip = if !mappings.iter().any(|m| m.source == src) {
-                Some("no mappings in sync-map.json".to_owned())
-            } else {
-                snapshot
-                    .as_ref()
-                    .filter(|file| !file.exists())
-                    .map(|file| format!("no snapshot at {}", file.display()))
-            };
+            let skip =
+                if src != Source::PlanningCompiler && !mappings.iter().any(|m| m.source == src) {
+                    Some("no mappings in sync-map.json".to_owned())
+                } else {
+                    file.as_ref()
+                        .filter(|file| !file.exists())
+                        .map(|file| format!("no snapshot at {}", file.display()))
+                };
             if let Some(reason) = skip {
                 println!("{src:?}: skipped, {reason}");
                 continue;
             }
         }
-        let raw = if let Some(file) = input.as_ref().or(snapshot.as_ref()) {
-            std::fs::read_to_string(file).unwrap_or_else(|e| {
+        let raw = if let Some(file) = &file {
+            Some(std::fs::read_to_string(file).unwrap_or_else(|e| {
                 eprintln!("cannot read {}: {e}", file.display());
                 std::process::exit(1)
-            })
+            }))
+        } else if src == Source::PlanningCompiler {
+            None
+        } else if src == Source::Ci {
+            let result = Command::new("gh")
+                .args([
+                    "run",
+                    "list",
+                    "--json",
+                    "databaseId,conclusion,updatedAt",
+                    "--limit",
+                    "100",
+                ])
+                .output()
+                .unwrap_or_else(|e| {
+                    eprintln!("cannot run gh: {e}");
+                    std::process::exit(1)
+                });
+            if !result.status.success() {
+                eprintln!(
+                    "gh run list failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                std::process::exit(1);
+            }
+            Some(String::from_utf8_lossy(&result.stdout).into_owned())
         } else {
             let repo = Command::new("gh")
                 .args([
@@ -3033,17 +3074,69 @@ fn run_sync(
                 eprintln!("gh api failed: {}", String::from_utf8_lossy(&result.stderr));
                 std::process::exit(1);
             }
-            String::from_utf8_lossy(&result.stdout).into_owned()
+            Some(String::from_utf8_lossy(&result.stdout).into_owned())
         };
-        let records = pc_sync::parse_snapshot(src, &raw).unwrap_or_else(|e| {
-            eprintln!("cannot parse {src:?} snapshot: {e}");
-            std::process::exit(1)
-        });
-        let preview = pc_sync::reconcile(&mut loaded.doc, &mappings, &mut sync, src, &records)
-            .unwrap_or_else(|e| {
-                eprintln!("sync failed: {e}");
-                std::process::exit(1)
-            });
+        let raw = raw.as_deref();
+        let (preview, ci_evidence) = match src {
+            Source::Ci => {
+                let records =
+                    pc_sync::parse_ci_snapshot(raw.unwrap_or_default()).unwrap_or_else(|e| {
+                        eprintln!("cannot parse {src:?} snapshot: {e}");
+                        std::process::exit(1)
+                    });
+                let (preview, evidence) =
+                    pc_sync::reconcile_ci(&loaded.doc, &mappings, &mut sync, &records)
+                        .unwrap_or_else(|e| {
+                            eprintln!("sync failed: {e}");
+                            std::process::exit(1)
+                        });
+                // Nothing is written on this exit path, so the rolled-back
+                // observations below simply never persist.
+                if let Err(e) = validate_ci_evidence(&loaded, &evidence) {
+                    eprintln!("cannot record {src:?} verification evidence: {e}");
+                    std::process::exit(1)
+                }
+                (preview, evidence)
+            }
+            Source::PlanningCompiler => {
+                let decisions = pc_store::read_decisions(&plan_file).unwrap_or_else(|e| {
+                    eprintln!("cannot read decisions: {e}");
+                    std::process::exit(1)
+                });
+                let records = raw.map(|raw| {
+                    pc_sync::parse_planner_snapshot(raw).unwrap_or_else(|e| {
+                        eprintln!("cannot parse {src:?} snapshot: {e}");
+                        std::process::exit(1)
+                    })
+                });
+                let preview = pc_sync::reconcile_planner(
+                    &loaded.doc,
+                    &decisions,
+                    &mappings,
+                    &mut sync,
+                    records.as_deref(),
+                )
+                .unwrap_or_else(|e| {
+                    eprintln!("sync failed: {e}");
+                    std::process::exit(1)
+                });
+                (preview, Vec::new())
+            }
+            _ => {
+                let records =
+                    pc_sync::parse_snapshot(src, raw.unwrap_or_default()).unwrap_or_else(|e| {
+                        eprintln!("cannot parse {src:?} snapshot: {e}");
+                        std::process::exit(1)
+                    });
+                let preview =
+                    pc_sync::reconcile(&mut loaded.doc, &mappings, &mut sync, src, &records)
+                        .unwrap_or_else(|e| {
+                            eprintln!("sync failed: {e}");
+                            std::process::exit(1)
+                        });
+                (preview, Vec::new())
+            }
+        };
         println!(
             "{src:?}: {} changed, {} unchanged, {} conflicts, {} unmapped",
             preview.changed.len(),
@@ -3051,8 +3144,21 @@ fn run_sync(
             preview.conflicts.len(),
             preview.unmapped.len()
         );
+        if !ci_evidence.is_empty() {
+            if dry_run {
+                println!(
+                    "Ci: would record {} verification evidence",
+                    ci_evidence.len()
+                );
+            } else {
+                println!("Ci: recorded {} verification evidence", ci_evidence.len());
+            }
+            loaded.doc.evidence.extend(ci_evidence.iter().cloned());
+            pending_evidence.extend(ci_evidence);
+        }
         reconciled = true;
-        plan_changed |= !preview.changed.is_empty();
+        plan_changed |=
+            !preview.changed.is_empty() && !matches!(src, Source::Ci | Source::PlanningCompiler);
         for conflict in preview.conflicts {
             had_conflict = true;
             println!(
@@ -3062,8 +3168,33 @@ fn run_sync(
         }
     }
     if !dry_run && reconciled {
+        // CI verification lives in evidence.jsonl, never inline in plan.toml:
+        // hold pending records out while write_edited truncates the document
+        // to its on-disk inline evidence count.
+        loaded.doc.evidence.truncate(
+            loaded
+                .doc
+                .evidence
+                .len()
+                .saturating_sub(pending_evidence.len()),
+        );
         if plan_changed {
             write_edited(&loaded, &loaded.doc);
+        }
+        // The plan write above acquires the write lock internally, so the
+        // evidence appends take a separately scoped lock afterwards: holding
+        // one lock across the other would deadlock on the lock file.
+        if !pending_evidence.is_empty() {
+            let lock = pc_store::PlanLock::acquire(path).unwrap_or_else(|e| {
+                eprintln!("error[E000]: {e}");
+                std::process::exit(1)
+            });
+            for record in &pending_evidence {
+                if let Err(e) = lock.append_evidence(record) {
+                    eprintln!("cannot record verification evidence: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
         std::fs::write(&state_file, serde_json::to_vec_pretty(&sync).unwrap()).unwrap_or_else(
             |e| {
@@ -3234,4 +3365,31 @@ fn run_bench(
     println!(
         "solver budget {selection_time_budget_ms} ms; plans generated in memory, nothing written"
     );
+}
+
+/// Refuse CI verification evidence that `pc check` would refuse, so sync
+/// never appends a record that breaks validation. Mirrors `pc record`:
+/// one JSON evidence object per record plus the P2 basis-agreement probe.
+fn validate_ci_evidence(
+    loaded: &pc_store::LoadedPlan,
+    records: &[pc_ir::Evidence],
+) -> Result<(), String> {
+    for record in records {
+        let text = serde_json::to_string(record).map_err(|e| e.to_string())?;
+        pc_store::parse_evidence_record(&text).map_err(|e| e.to_string())?;
+    }
+    let mut probe = loaded.doc.clone();
+    probe.evidence.extend(records.iter().cloned());
+    if let Some(conflict) = pc_core::estimate(&probe)
+        .basis_conflicts
+        .into_iter()
+        .find(|c| {
+            c.bases
+                .iter()
+                .any(|(_, subjects)| records.iter().any(|r| subjects.contains(&r.subject)))
+        })
+    {
+        return Err(conflict.message());
+    }
+    Ok(())
 }

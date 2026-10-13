@@ -4153,6 +4153,435 @@ fn sync_rejects_input_with_all() {
         .code(2);
 }
 
+/// Sync-recorded CI evidence must keep `pc check` green and never duplicate:
+/// a second run over the same check revision appends nothing.
+#[test]
+fn sync_ci_records_verification_evidence_idempotently() {
+    let dir = tasks_axi_scratch("sync-ci-evidence");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let map = serde_json::json!([
+        {"source": "ci", "external_id": "ci-pass-1", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let checks = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("ci")
+        .join("checks.json");
+    let sync = || {
+        Command::cargo_bin("pc")
+            .unwrap()
+            .arg("sync")
+            .arg("--source")
+            .arg("ci")
+            .arg("--input")
+            .arg(&checks)
+            .arg(&dir)
+            .assert()
+    };
+    sync()
+        .success()
+        .stdout(predicates::str::contains("1 changed, 0 unchanged"));
+    let log = std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap();
+    assert_eq!(log.lines().count(), 2);
+    assert!(log.contains("\"subject\":\"task:pc-import-axi-b4\""));
+    sync()
+        .success()
+        .stdout(predicates::str::contains("0 changed, 1 unchanged"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap(),
+        log
+    );
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("check")
+        .arg(&dir)
+        .assert()
+        .success();
+}
+
+/// A GitHub closure plus passing CI completes the mapped task end to end:
+/// without the CI run the same closure stays a conflict.
+#[test]
+fn sync_all_completes_github_closure_with_ci_verification() {
+    let dir = tasks_axi_scratch("sync-ci-github");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    std::fs::create_dir(dir.join("sources")).unwrap();
+    std::fs::copy(
+        dir.join("backlog.md"),
+        dir.join("sources").join("tasks-axi.backlog.md"),
+    )
+    .unwrap();
+    let map = serde_json::json!([
+        {"source": "ci", "external_id": "ci-pass-1", "task_id": "pc-import-axi-b4"},
+        {"source": "github", "external_id": "PR_kwDOExample2", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("ci")
+            .join("checks.json"),
+        dir.join("sources").join("ci.json"),
+    )
+    .unwrap();
+    let issue = |state: &str, updated: &str| {
+        serde_json::json!([[{
+            "node_id": "PR_kwDOExample2",
+            "state": state,
+            "updated_at": updated,
+        }]])
+    };
+    // Without any CI observation the closure is a verification conflict.
+    std::fs::write(
+        dir.join("sources").join("ci.json"),
+        serde_json::to_vec(&serde_json::json!([])).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("issues.json"),
+        serde_json::to_vec(&issue("closed", "2026-10-13T12:01:00Z")).unwrap(),
+    )
+    .unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("github")
+        .arg("--input")
+        .arg(dir.join("issues.json"))
+        .arg(&dir)
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains(
+            "not acceptance-criteria verification",
+        ));
+    // Observe the open PR, then the passing check, then the closure: done.
+    std::fs::write(
+        dir.join("issues.json"),
+        serde_json::to_vec(&issue("open", "2026-10-13T11:00:00Z")).unwrap(),
+    )
+    .unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("github")
+        .arg("--input")
+        .arg(dir.join("issues.json"))
+        .arg(&dir)
+        .assert()
+        .success();
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("ci")
+            .join("checks.json"),
+        dir.join("sources").join("ci.json"),
+    )
+    .unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("ci")
+        .arg("--input")
+        .arg(dir.join("sources").join("ci.json"))
+        .arg(&dir)
+        .assert()
+        .success();
+    std::fs::write(
+        dir.join("issues.json"),
+        serde_json::to_vec(&issue("closed", "2026-10-13T12:01:00Z")).unwrap(),
+    )
+    .unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("github")
+        .arg("--input")
+        .arg(dir.join("issues.json"))
+        .arg(&dir)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "1 changed, 0 unchanged, 0 conflicts",
+        ));
+    let plan = std::fs::read_to_string(dir.join("plan.toml")).unwrap();
+    let task_state = plan
+        .split("id = \"pc-import-axi-b4\"")
+        .nth(1)
+        .unwrap()
+        .split("state = ")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap();
+    assert!(task_state.contains("\"done\""), "{task_state}");
+}
+
+/// A stale planning snapshot conflicts without editing the plan, and a
+/// matching snapshot is clean: the drift check never overwrites.
+#[test]
+fn sync_planning_compiler_detects_drift_without_editing() {
+    let dir = tasks_axi_scratch("sync-planner");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let loaded = pc_store::load(&dir).unwrap();
+    let entity = loaded
+        .doc
+        .task
+        .iter()
+        .find(|t| t.id == "pc-import-axi-b4")
+        .unwrap()
+        .clone();
+    let snapshot = serde_json::json!([
+        {"id": "task:pc-import-axi-b4", "revision": pc_sync::content_revision(&entity)},
+    ]);
+    std::fs::write(
+        dir.join("snapshot.json"),
+        serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .unwrap();
+    let map = serde_json::json!([
+        {"source": "planning-compiler", "external_id": "task:pc-import-axi-b4", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let plan_before = std::fs::read(dir.join("plan.toml")).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("planning-compiler")
+        .arg("--input")
+        .arg(dir.join("snapshot.json"))
+        .arg(&dir)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "0 changed, 1 unchanged, 0 conflicts",
+        ));
+    assert_eq!(std::fs::read(dir.join("plan.toml")).unwrap(), plan_before);
+    let stale = serde_json::json!([
+        {"id": "task:pc-import-axi-b4", "revision": "deadbeef"},
+    ]);
+    std::fs::write(
+        dir.join("snapshot.json"),
+        serde_json::to_vec(&stale).unwrap(),
+    )
+    .unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("planning-compiler")
+        .arg("--input")
+        .arg(dir.join("snapshot.json"))
+        .arg(&dir)
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains("no longer matches"));
+    assert_eq!(std::fs::read(dir.join("plan.toml")).unwrap(), plan_before);
+    let live = |expected: &str| {
+        Command::cargo_bin("pc")
+            .unwrap()
+            .arg("sync")
+            .arg("--source")
+            .arg("planning-compiler")
+            .arg(&dir)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains(expected.to_owned()));
+    };
+    live("0 changed, 1 unchanged, 0 conflicts");
+    let text = String::from_utf8(plan_before.clone()).unwrap();
+    let (head, tail) = text.split_once("id = \"pc-import-axi-b4\"").unwrap();
+    let edited = format!(
+        "{head}id = \"pc-import-axi-b4\"{}",
+        tail.replacen("title = \"", "title = \"Renamed: ", 1)
+    );
+    std::fs::write(dir.join("plan.toml"), edited).unwrap();
+    let plan_edited = std::fs::read(dir.join("plan.toml")).unwrap();
+    live("1 changed, 0 unchanged, 0 conflicts");
+    live("0 changed, 1 unchanged, 0 conflicts");
+    assert_eq!(std::fs::read(dir.join("plan.toml")).unwrap(), plan_edited);
+}
+
+/// `--all` skips the new sources with reasons when unconfigured, and
+/// `--dry-run` over CI writes neither evidence nor state.
+#[test]
+fn sync_all_skips_unconfigured_ci_and_planner() {
+    let dir = tasks_axi_scratch("sync-all-skips-new");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    std::fs::create_dir(dir.join("sources")).unwrap();
+    std::fs::copy(
+        dir.join("backlog.md"),
+        dir.join("sources").join("tasks-axi.backlog.md"),
+    )
+    .unwrap();
+    let map = serde_json::json!([
+        {"source": "tasks-axi", "external_id": "pc-import-axi-b4", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let output = Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--all")
+        .arg(&dir)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("Ci: skipped, no mappings in sync-map.json"));
+    assert!(output.contains("PlanningCompiler: 0 changed, 0 unchanged, 0 conflicts, 0 unmapped"));
+}
+
+/// Without a CI snapshot, `--all` fetches checks live through `gh` like
+/// GitHub, so a mapped closure completes from CI verification in one run.
+#[cfg(unix)]
+#[test]
+fn sync_all_fetches_ci_live_and_completes_github_closure() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tasks_axi_scratch("sync-all-ci-live");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let issues = dir.join("issues.json");
+    let checks = dir.join("checks.json");
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in repo) echo example/project;; run) cat '{}';; *) cat '{}';; esac\n",
+            checks.display(),
+            issues.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let map = serde_json::json!([
+        {"source": "ci", "external_id": "ci-pass-1", "task_id": "pc-import-axi-b4"},
+        {"source": "github", "external_id": "PR_kwDOExample2", "task_id": "pc-import-axi-b4"},
+        {"source": "planning-compiler", "external_id": "task:pc-import-axi-b4", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let step = |state: &str, updated: &str, ci: serde_json::Value| {
+        std::fs::write(&checks, serde_json::to_vec(&ci).unwrap()).unwrap();
+        let issue = serde_json::json!([[{
+            "node_id": "PR_kwDOExample2",
+            "state": state,
+            "updated_at": updated,
+        }]]);
+        std::fs::write(&issues, serde_json::to_vec(&issue).unwrap()).unwrap();
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .env("PATH", &path)
+            .arg("sync")
+            .arg("--all")
+            .arg(&dir)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+    step("open", "2026-10-13T11:00:00Z", serde_json::json!([]));
+    let output = step(
+        "closed",
+        "2026-10-13T12:01:00Z",
+        serde_json::json!([{
+            "databaseId": "ci-pass-1",
+            "conclusion": "success",
+            "updatedAt": "2026-10-13T12:00:00Z",
+        }]),
+    );
+    assert!(output.contains("Ci: 1 changed"), "{output}");
+    assert!(output.contains("Github: 1 changed"), "{output}");
+    assert!(output.contains("PlanningCompiler: 1 changed"), "{output}");
+}
+
+/// A CI dry run reports the verification it would record without writing
+/// evidence, state, or plan changes.
+#[test]
+fn sync_ci_dry_run_writes_nothing() {
+    let dir = tasks_axi_scratch("sync-ci-dry-run");
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("import-tasks-axi")
+        .arg(dir.join("backlog.md"))
+        .arg(&dir)
+        .assert()
+        .success();
+    let map = serde_json::json!([
+        {"source": "ci", "external_id": "ci-pass-1", "task_id": "pc-import-axi-b4"},
+    ]);
+    std::fs::write(dir.join("sync-map.json"), serde_json::to_vec(&map).unwrap()).unwrap();
+    let checks = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("ci")
+        .join("checks.json");
+    let plan_before = std::fs::read(dir.join("plan.toml")).unwrap();
+    Command::cargo_bin("pc")
+        .unwrap()
+        .arg("sync")
+        .arg("--source")
+        .arg("ci")
+        .arg("--input")
+        .arg(&checks)
+        .arg("--dry-run")
+        .arg(&dir)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "would record 2 verification evidence",
+        ));
+    assert_eq!(std::fs::read(dir.join("plan.toml")).unwrap(), plan_before);
+    assert!(!dir.join("evidence.jsonl").exists());
+    assert!(!dir.join("sync-state.json").exists());
+}
+
 /// The 10-item backlog subset round-trips through the IR byte-identical:
 /// import, clean check, then export regenerates the exact input bytes.
 #[test]
