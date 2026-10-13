@@ -446,13 +446,13 @@ fn check_capability_refs(ctx: &mut Ctx) {
         if m.kind != pc_ir::MethodKind::Invoke || m.status == pc_ir::MethodStatus::Rejected {
             continue;
         }
-        if let Some(cap) = &m.capability {
-            if !ctx.capabilities.contains_key(cap) {
-                missing.push((
-                    format!("method:{}", m.id),
-                    format!("method `{}` invokes unknown capability `{cap}`", m.id),
-                ));
-            }
+        if let Some(cap) = &m.capability
+            && !ctx.capabilities.contains_key(cap)
+        {
+            missing.push((
+                format!("method:{}", m.id),
+                format!("method `{}` invokes unknown capability `{cap}`", m.id),
+            ));
         }
     }
     for (subject, message) in missing {

@@ -52,7 +52,7 @@ crates/pc-adapter-tasks-axi/  tasks-axi `backlog.md` import/export (Firstmate in
 crates/pc-adapter-beads/      Beads issue JSONL import/export (source records ride along as IR passthrough)
 crates/pc-sync/   explicit-mapping reconciliation of external task lifecycle state (`pc sync`)
 crates/pc-cli/    pc binary (init, check, compile, explain, record, frontier, capabilities, impact, diff, propose, accept, reject, context, import-tasks-axi, export-tasks-axi, import-beads, export-beads, sync, schema)
-crates/pc-mcp/    pc-mcp binary: read-only MCP stdio server (check, compile, frontier, context, impact, diff)
+crates/pc-mcp/    pc-mcp binary: MCP stdio server (check, compile, frontier, context, impact, diff, revision, propose, accept, reject, record)
 schema/           generated JSON Schemas (committed; CI fails if stale)
 examples/self-plan/  this project's own plan (dogfood fixture)
 examples/transcription-substitution/  synthetic substitution study (before plan, decided plan, evidence, changes)
@@ -111,14 +111,27 @@ Without a `[path]`, commands use `.plan/` when it holds a plan file and the
 current directory otherwise, so a bare `pc check` finds what a bare `pc init`
 made. A bare `pc init` refuses when the current directory already holds a plan.
 
-For tool-only agents, `pc-mcp` (`cargo run -q -p pc-mcp`) is a read-only
-MCP stdio server whose tools return the same JSON as the matching
+For tool-only agents, `pc-mcp` (`cargo run -q -p pc-mcp`) is an MCP stdio
+server whose read-only tools return the same JSON as the matching
 `pc <verb> --json`. `check` takes a plan `path`; `compile` and `frontier`
 take `path` plus optional `selection_time_budget_ms`; `context` takes `task`,
 `path` and optional `budget`; `impact` takes a `change` object (as in
 `change.json`), `path` and optional `selection_time_budget_ms`; `diff` takes
-plans `a` and `b` plus optional `selection_time_budget_ms`. Write verbs are
-not exposed yet; they will be added in a later change.
+plans `a` and `b` plus optional `selection_time_budget_ms`. The write tools
+`propose` (a `patch`), `accept` and `reject` (a `method`) and `record` (an
+`evidence` record) mirror `pc propose`/`accept`/`reject`/`record`; each takes
+`path` and the `expected_revision` from the `revision` tool, fails on a stale
+revision, writes atomically, and only touches plans under
+`PC_MCP_ALLOWED_ROOTS` (a path list, like `PATH`). When that variable is unset
+the write tools refuse every call; the read-only tools need no configuration.
+Human approval of `accept` and `reject` is enforced by the MCP host: both
+tools are annotated non-read-only (`accept` also destructive) so hosts confirm
+them with a human before running, and `accept` additionally requires
+`approved=true`. Write tools and the matching CLI commands serialize on an OS
+lock held on a hidden file beside the plan (`.plan.toml.lock` for
+`plan.toml`). It is created on the first write and left in place, since the
+lock is released by the kernel rather than by deleting the file; keep it out
+of version control (`pc init` writes a `.gitignore` entry for it).
 
 Every command is non-interactive with `--json` output in the style of the
 `axi` tools. Diagnostics look like a compiler:

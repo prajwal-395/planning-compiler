@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 pc-ir.workspace = true
+blake3.workspace = true
 pc-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

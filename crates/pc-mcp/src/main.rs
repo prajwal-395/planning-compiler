@@ -1,9 +1,13 @@
-//! `pc-mcp`: read-only MCP server over the planning compiler.
+//! `pc-mcp`: MCP server over the planning compiler.
 //!
 //! Stdio transport. Read-only tools `check`, `compile`, `frontier`, `context`,
-//! `impact` and `diff` return the same JSON `pc <verb> --json` prints; write
-//! verbs (`propose`, `accept`, `reject`, `record`) will be added in a later
-//! change (see crate docs).
+//! `impact` and `diff` return the same JSON `pc <verb> --json` prints. Write
+//! operations require the current revision token and are refused unless
+//! `PC_MCP_ALLOWED_ROOTS` lists the directories the server may mutate.
+//! Human approval of `accept` and `reject` is enforced by the MCP host's
+//! tool-call confirmation: both are annotated non-read-only, `accept` also
+//! destructive, and `accept` requires the agent's explicit `approved=true`.
+//! Writes leave a persistent `.plan.toml.lock` beside the plan; ignore it in git.
 
 use pc_mcp::{
     DEFAULT_SELECTION_TIME_BUDGET_MS, check_plan, compile_plan, context_plan, diff_plans,
@@ -90,6 +94,38 @@ struct DiffParams {
     selection_time_budget_ms: u64,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct RevisionParams {
+    path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ProposeParams {
+    path: String,
+    expected_revision: String,
+    patch: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct DecideParams {
+    path: String,
+    expected_revision: String,
+    method: String,
+    #[serde(default)]
+    approved: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct RecordParams {
+    path: String,
+    expected_revision: String,
+    evidence: serde_json::Value,
+}
+
 fn default_budget() -> u64 {
     DEFAULT_SELECTION_TIME_BUDGET_MS
 }
@@ -113,6 +149,98 @@ struct PcMcp;
 
 #[tool_router(server_handler)]
 impl PcMcp {
+    /// Get the opaque revision token required by all write operations.
+    #[tool(description = "Return the current revision token for guarded plan writes.")]
+    fn revision(&self, Parameters(params): Parameters<RevisionParams>) -> CallToolResult {
+        match pc_mcp::plan_revision(&PathBuf::from(params.path)) {
+            Ok(revision) => ok_json(&serde_json::json!({"revision": revision})),
+            Err(message) => tool_error(message),
+        }
+    }
+
+    /// Stage a proposed patch after validation.
+    #[tool(
+        description = "Stage tasks, methods and capabilities as proposed. Requires expected_revision from revision; writes only a clean merged plan."
+    )]
+    fn propose(&self, Parameters(params): Parameters<ProposeParams>) -> CallToolResult {
+        let patch = match serde_json::from_value::<pc_ir::Patch>(params.patch) {
+            Ok(patch) => patch,
+            Err(e) => return tool_error(format!("cannot parse patch: {e}")),
+        };
+        match pc_mcp::propose(
+            &PathBuf::from(params.path),
+            &params.expected_revision,
+            patch,
+        ) {
+            Ok((notes, revision)) => {
+                ok_json(&serde_json::json!({"notes": notes, "revision": revision}))
+            }
+            Err(message) => tool_error(message),
+        }
+    }
+
+    /// Accept a pending method with an explicit approval acknowledgement.
+    #[tool(
+        description = "Accept a proposed or derived method. Requires approved=true and the current expected_revision; refused if the merged plan fails check.",
+        annotations(read_only_hint = false, destructive_hint = true)
+    )]
+    fn accept(&self, Parameters(params): Parameters<DecideParams>) -> CallToolResult {
+        if !params.approved {
+            return tool_error("accept requires approved=true to confirm the decision");
+        }
+        match pc_mcp::decide(
+            &PathBuf::from(params.path),
+            &params.expected_revision,
+            &params.method,
+            true,
+        ) {
+            Ok((note, revision)) => {
+                ok_json(&serde_json::json!({"note": note, "revision": revision}))
+            }
+            Err(message) => tool_error(message),
+        }
+    }
+
+    /// Reject a pending method.
+    #[tool(
+        description = "Reject a proposed or derived method. Requires the current expected_revision.",
+        annotations(read_only_hint = false, destructive_hint = false)
+    )]
+    fn reject(&self, Parameters(params): Parameters<DecideParams>) -> CallToolResult {
+        match pc_mcp::decide(
+            &PathBuf::from(params.path),
+            &params.expected_revision,
+            &params.method,
+            false,
+        ) {
+            Ok((note, revision)) => {
+                ok_json(&serde_json::json!({"note": note, "revision": revision}))
+            }
+            Err(message) => tool_error(message),
+        }
+    }
+
+    /// Append validated evidence to the sibling evidence log.
+    #[tool(
+        description = "Record evidence using the CLI validation rules. Requires the current expected_revision."
+    )]
+    fn record(&self, Parameters(params): Parameters<RecordParams>) -> CallToolResult {
+        let evidence = match serde_json::from_value::<pc_ir::Evidence>(params.evidence) {
+            Ok(record) => record,
+            Err(e) => return tool_error(format!("cannot parse evidence: {e}")),
+        };
+        match pc_mcp::record(
+            &PathBuf::from(params.path),
+            &params.expected_revision,
+            evidence,
+        ) {
+            Ok((log, line, revision)) => {
+                ok_json(&serde_json::json!({"log": log, "line": line, "revision": revision}))
+            }
+            Err(message) => tool_error(message),
+        }
+    }
+
     /// Run passes P1-P5 over a plan; same JSON as `pc check --json`.
     #[tool(
         description = "Run pc check over a plan file or directory; returns the same JSON as `pc check --json`."

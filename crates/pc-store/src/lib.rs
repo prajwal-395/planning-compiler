@@ -7,6 +7,7 @@
 
 use pc_ir::{CompilerRunEvent, DecisionEvent, Evidence, OutcomeEvent, PlanDoc, canonical_unit};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 /// A plan read from disk, ready for [`pc_core::passes::check`].
@@ -21,6 +22,9 @@ pub struct LoadedPlan {
     pub evidence_file: Option<String>,
     /// 1-based `evidence.jsonl` line of each record appended to `doc.evidence`.
     pub evidence_lines: Vec<u32>,
+    /// Revision of the bytes this load read, as [`plan_revision`] reports it.
+    /// Writes pass it back so they never overwrite a change made since.
+    pub revision: String,
 }
 
 impl LoadedPlan {
@@ -103,8 +107,8 @@ pub fn resolve_plan_file(path: &Path) -> Result<PathBuf, LoadError> {
     Err(LoadError::NotFound(path.display().to_string()))
 }
 
-/// Load and parse a plan file, folding in a sibling `evidence.jsonl` when
-/// one sits next to the plan file. Format follows the file extension:
+/// Load and parse a plan file, folding in the `evidence.jsonl` beside the
+/// real (symlink-resolved) plan file when there is one. Format follows the file extension:
 /// `.toml` parses as TOML, anything else as JSON.
 pub fn load(path: &Path) -> Result<LoadedPlan, LoadError> {
     let file = resolve_plan_file(path)?;
@@ -125,61 +129,211 @@ pub fn load(path: &Path) -> Result<LoadedPlan, LoadError> {
             message: e.to_string(),
         })?
     };
+    let log = if file.is_symlink() {
+        evidence_log(&canonical_plan_file(&file)?)
+    } else {
+        evidence_log(&file)
+    };
     let mut evidence_file = None;
     let mut evidence_lines = Vec::new();
-    if let Some(parent) = file.parent() {
-        let path = parent.join("evidence.jsonl");
-        if path.is_file() {
-            for (line, record) in read_evidence_jsonl(&path)? {
-                evidence_lines.push(line);
-                doc.evidence.push(record);
-            }
-            evidence_file = Some(path.display().to_string());
+    let mut evidence_text = None;
+    if log.is_file() {
+        let log_text = std::fs::read_to_string(&log).map_err(|e| LoadError::Unreadable {
+            path: log.display().to_string(),
+            message: e.to_string(),
+        })?;
+        for (line, record) in parse_evidence_jsonl(&log, &log_text)? {
+            evidence_lines.push(line);
+            doc.evidence.push(record);
         }
+        evidence_file = Some(log.display().to_string());
+        evidence_text = Some(log_text);
     }
+    let revision = revision_of(text.as_bytes(), evidence_text.as_deref().map(str::as_bytes));
     Ok(LoadedPlan {
         display_path,
         text,
         doc,
         evidence_file,
         evidence_lines,
+        revision,
     })
 }
 
-/// Write a plan document back to its file, preserving the on-disk format:
-/// `.toml` serializes as TOML, anything else as pretty JSON.
-///
-/// Used by the step-7 decision commands (`propose`, `accept`, `reject`),
-/// which edit the pristine plan and only write when the merged copy passes
-/// `check`. Pass mutations (P3 proposals, P4 merges) are never written.
-pub fn write_plan(file: &Path, doc: &PlanDoc) -> Result<(), LoadError> {
-    let display = file.display().to_string();
+fn evidence_log(plan_file: &Path) -> PathBuf {
+    plan_file
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("evidence.jsonl")
+}
+
+fn serialize_plan(file: &Path, doc: &PlanDoc) -> Result<String, LoadError> {
     let is_toml = file.extension().is_some_and(|ext| ext == "toml");
-    let text = if is_toml {
-        pc_ir::to_toml(doc).map_err(|e| LoadError::Unwritable {
-            path: display.clone(),
-            message: e.to_string(),
-        })?
+    if is_toml {
+        pc_ir::to_toml(doc).map_err(|e| e.to_string())
     } else {
-        pc_ir::to_json_pretty(doc).map_err(|e| LoadError::Unwritable {
-            path: display.clone(),
-            message: e.to_string(),
-        })?
-    };
-    std::fs::write(file, text).map_err(|e| LoadError::Unwritable {
-        path: display,
+        pc_ir::to_json_pretty(doc).map_err(|e| e.to_string())
+    }
+    .map_err(|message| LoadError::Unwritable {
+        path: file.display().to_string(),
+        message,
+    })
+}
+
+fn replace_file(file: &Path, text: &str) -> Result<(), LoadError> {
+    atomic_replace(file, text.as_bytes()).map_err(|e| LoadError::Unwritable {
+        path: file.display().to_string(),
         message: e.to_string(),
     })
 }
 
-/// Read one JSON [`Evidence`] per non-blank line, paired with its 1-based
-/// line number.
-fn read_evidence_jsonl(path: &Path) -> Result<Vec<(u32, Evidence)>, LoadError> {
-    let display_path = path.display().to_string();
-    let text = std::fs::read_to_string(path).map_err(|e| LoadError::Unreadable {
-        path: display_path.clone(),
+/// Stable token for the current raw plan file, used by guarded MCP writes.
+pub fn plan_revision(file: &Path) -> Result<String, LoadError> {
+    revision_of_file(&canonical_plan_file(file)?)
+}
+
+/// Resolve a plan path to the real file it names, following symlinks, so
+/// writes land on (and sandbox checks see) the file that is actually read.
+pub fn canonical_plan_file(path: &Path) -> Result<PathBuf, LoadError> {
+    let file = resolve_plan_file(path)?;
+    file.canonicalize().map_err(|e| LoadError::Unreadable {
+        path: file.display().to_string(),
         message: e.to_string(),
-    })?;
+    })
+}
+
+/// Write a plan document back to its file only if its current revision
+/// matches `expected`, preserving the on-disk format: `.toml` serializes as
+/// TOML, anything else as pretty JSON. Returns the new revision.
+///
+/// Used by the step-7 decision commands (`propose`, `accept`, `reject`) in
+/// the CLI and over MCP, which edit the pristine plan and only write when
+/// the merged copy passes `check`. Pass mutations (P3 proposals, P4 merges)
+/// are never written.
+pub fn write_plan_if_revision(
+    file: &Path,
+    expected: &str,
+    doc: &PlanDoc,
+) -> Result<String, LoadError> {
+    let lock = PlanLock::acquire(file)?;
+    let file = &lock.file;
+    let actual = revision_of_file(file)?;
+    if actual != expected {
+        return Err(LoadError::Unwritable {
+            path: file.display().to_string(),
+            message: format!("revision conflict: expected {expected}, current {actual}"),
+        });
+    }
+    replace_file(file, &serialize_plan(file, doc)?)?;
+    revision_of_file(file)
+}
+
+fn revision_of_file(file: &Path) -> Result<String, LoadError> {
+    let read = |path: &Path| {
+        std::fs::read(path).map_err(|e| LoadError::Unreadable {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })
+    };
+    let plan = read(file)?;
+    let log = evidence_log(file);
+    let evidence = if log.is_file() {
+        Some(read(&log)?)
+    } else {
+        None
+    };
+    Ok(revision_of(&plan, evidence.as_deref()))
+}
+
+fn revision_of(plan: &[u8], evidence: Option<&[u8]>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(plan);
+    if let Some(evidence) = evidence {
+        hasher.update(b"\0evidence.jsonl\0");
+        hasher.update(evidence);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn atomic_replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let parent = file.parent().unwrap_or(Path::new("."));
+    let name = file.file_name().unwrap_or_default().to_string_lossy();
+    let (temp, mut handle) = loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), n));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => break (temp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    use std::io::Write as _;
+    let result = std::fs::metadata(file)
+        .map_or(Ok(()), |meta| handle.set_permissions(meta.permissions()))
+        .and_then(|()| handle.write_all(bytes))
+        .and_then(|()| handle.sync_all())
+        .and_then(|()| std::fs::rename(&temp, file));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+/// Exclusive write lock on a plan, held as an OS advisory lock on a
+/// persistent hidden sibling of the real plan file (`.plan.toml.lock`). The
+/// kernel releases it when the guard drops or the process dies, so a killed
+/// writer never leaves the plan locked.
+///
+/// Hold it across load, validation and write so the write is based on what
+/// was read.
+pub struct PlanLock {
+    file: PathBuf,
+    _handle: std::fs::File,
+}
+
+impl PlanLock {
+    /// Block until the write lock for the plan at `path` is held.
+    pub fn acquire(path: &Path) -> Result<Self, LoadError> {
+        let file = canonical_plan_file(path)?;
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        let lock = file
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(format!(".{name}.lock"));
+        let handle = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock)
+            .and_then(|handle| handle.lock().map(|()| handle))
+            .map_err(|e| LoadError::Unwritable {
+                path: lock.display().to_string(),
+                message: format!("cannot acquire write lock: {e}"),
+            })?;
+        Ok(Self {
+            file,
+            _handle: handle,
+        })
+    }
+
+    /// Append one record to the locked plan's `evidence.jsonl`, creating the
+    /// log when it is missing. Returns the log, the record's 1-based line
+    /// (counted as [`load`] counts) and the plan revision after the append.
+    pub fn append_evidence(&self, record: &Evidence) -> Result<(PathBuf, u32, String), LoadError> {
+        let (log, line) = append_evidence_line(&self.file, record)?;
+        Ok((log, line, revision_of_file(&self.file)?))
+    }
+}
+
+/// Parse one JSON [`Evidence`] per non-blank line, paired with its 1-based
+/// line number.
+fn parse_evidence_jsonl(path: &Path, text: &str) -> Result<Vec<(u32, Evidence)>, LoadError> {
+    let display_path = path.display().to_string();
     let mut out = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -271,16 +425,8 @@ pub fn parse_evidence_record(text: &str) -> Result<Evidence, EvidenceRecordError
     Ok(record)
 }
 
-/// Append one record to the `evidence.jsonl` sibling of a plan file,
-/// creating the log when it is missing.
-///
-/// Returns the log path and the record's 1-based line number, using the
-/// same line counting as [`load`]: every line counts, including blanks.
-pub fn append_evidence(plan_file: &Path, record: &Evidence) -> Result<(PathBuf, u32), LoadError> {
-    let log = plan_file
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("evidence.jsonl");
+fn append_evidence_line(plan_file: &Path, record: &Evidence) -> Result<(PathBuf, u32), LoadError> {
+    let log = evidence_log(plan_file);
     let display = log.display().to_string();
     let existing = if log.is_file() {
         std::fs::read_to_string(&log).map_err(|e| LoadError::Unreadable {

@@ -967,6 +967,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "pc-core",
+ "pc-ir",
  "pc-store",
  "predicates",
  "rmcp",
@@ -989,6 +990,7 @@ dependencies = [
 name = "pc-store"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "chrono",
  "pc-core",
  "pc-ir",

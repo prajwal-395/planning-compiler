@@ -378,10 +378,10 @@ pub fn estimate(doc: &PlanDoc) -> EstimateReport {
         doc.capability.iter().map(|c| (c.id.as_str(), c)).collect();
     let mut method_cap: BTreeMap<&str, &str> = BTreeMap::new();
     for m in &doc.method {
-        if m.kind == pc_ir::MethodKind::Invoke {
-            if let Some(cap) = m.capability.as_deref() {
-                method_cap.insert(m.id.as_str(), cap);
-            }
+        if m.kind == pc_ir::MethodKind::Invoke
+            && let Some(cap) = m.capability.as_deref()
+        {
+            method_cap.insert(m.id.as_str(), cap);
         }
     }
     let mut task_caps: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();

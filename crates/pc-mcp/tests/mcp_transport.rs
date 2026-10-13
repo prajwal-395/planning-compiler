@@ -100,7 +100,7 @@ async fn call_tool_json(
 async fn tools_match_cli_json() {
     let client = spawn_client().await;
 
-    // The server exposes exactly the read-only verbs.
+    // The server exposes the read-only and guarded write verbs.
     let tools: BTreeSet<String> = client
         .list_all_tools()
         .await
@@ -117,9 +117,28 @@ async fn tools_match_cli_json() {
             "frontier".to_string(),
             "impact".to_string(),
             "diff".to_string(),
+            "revision".to_string(),
+            "propose".to_string(),
+            "accept".to_string(),
+            "reject".to_string(),
+            "record".to_string(),
         ]),
-        "write verbs stay out of scope"
+        "all supported agent workflow verbs are exposed"
     );
+
+    // Hosts confirm accept and reject with a human: both are non-read-only
+    // and accept is destructive.
+    let listed = client.list_all_tools().await.unwrap();
+    let hints = |name: &str| {
+        let annotations = listed
+            .iter()
+            .find(|tool| tool.name == name)
+            .and_then(|tool| tool.annotations.clone())
+            .unwrap_or_else(|| panic!("{name} must carry annotations"));
+        (annotations.read_only_hint, annotations.destructive_hint)
+    };
+    assert_eq!(hints("accept"), (Some(false), Some(true)));
+    assert_eq!(hints("reject"), (Some(false), Some(false)));
 
     for plan in [
         workspace_root()
@@ -220,7 +239,7 @@ async fn dirty_plan_is_a_tool_error_not_a_crash() {
         assert_eq!(result.is_error, Some(true), "{tool} must fail cleanly");
         // The server still answers afterwards.
         let tools = client.list_all_tools().await.unwrap();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 11);
     }
 
     client.cancel().await.unwrap();

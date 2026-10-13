@@ -2487,6 +2487,137 @@ fn ambiguous_task_evidence_warns_and_surfaces_as_unattributed() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `pc record` waits for the plan's write lock, so it cannot interleave with
+/// a guarded MCP write that holds it.
+#[test]
+fn record_waits_for_the_plan_write_lock() {
+    let dir = scratch_dir("record-lock");
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("evidence-flip")
+            .join("plan.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let observation = dir.join("observation.json");
+    std::fs::write(
+        &observation,
+        r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":30.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
+    )
+    .unwrap();
+    let lock = std::fs::File::create(dir.join(".plan.toml.lock")).unwrap();
+    lock.lock().unwrap();
+
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("pc"))
+        .arg("record")
+        .arg(&observation)
+        .arg(&dir)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "record must block while the lock is held"
+    );
+    assert!(!dir.join("evidence.jsonl").exists());
+
+    drop(lock);
+    assert!(child.wait().unwrap().success());
+    let log = std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap();
+    assert_eq!(log.lines().count(), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc record` loads and validates under the plan's write lock, so a record
+/// appended while it waits is kept and its own record lands after it,
+/// whenever `pc` reaches its load.
+#[test]
+fn record_waiting_on_the_lock_keeps_a_concurrent_append() {
+    let dir = scratch_dir("record-concurrent");
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("evidence-flip")
+            .join("plan.toml"),
+        dir.join("plan.toml"),
+    )
+    .unwrap();
+    let record = r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":30.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#;
+    let observation = dir.join("observation.json");
+    std::fs::write(&observation, record).unwrap();
+    let lock = std::fs::File::create(dir.join(".plan.toml.lock")).unwrap();
+    lock.lock().unwrap();
+
+    let child = std::process::Command::new(assert_cmd::cargo::cargo_bin("pc"))
+        .arg("record")
+        .arg(&observation)
+        .arg(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::fs::write(dir.join("evidence.jsonl"), format!("{record}\n")).unwrap();
+    drop(lock);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("evidence.jsonl:2"), "{stdout}");
+    let log = std::fs::read_to_string(dir.join("evidence.jsonl")).unwrap();
+    assert_eq!(log.lines().count(), 2, "{log}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `pc record` through a symlinked plan file appends to the log beside the
+/// real plan, the same log MCP writes and `pc check` reads.
+#[cfg(unix)]
+#[test]
+fn record_through_symlinked_plan_uses_the_real_log() {
+    let root = scratch_dir("record-symlink");
+    let real = root.join("real");
+    let link = root.join("link");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&link).unwrap();
+    std::fs::copy(
+        workspace_root()
+            .join("tests")
+            .join("fixtures")
+            .join("evidence-flip")
+            .join("plan.toml"),
+        real.join("plan.toml"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(real.join("plan.toml"), link.join("plan.toml")).unwrap();
+    let observation = root.join("observation.json");
+    std::fs::write(
+        &observation,
+        r#"{"subject":"capability:fast@1","metric":"duration_minutes","value":30.0,"unit":"minutes","time":"2026-10-08T00:00:00Z","source":"ci","artifact_hash":null}"#,
+    )
+    .unwrap();
+
+    pc_ok(&link, &["record", observation.to_str().unwrap()]);
+    assert_eq!(
+        std::fs::read_to_string(real.join("evidence.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert!(!link.join("evidence.jsonl").exists());
+    let loaded = pc_store::load(&link).unwrap();
+    assert_eq!(loaded.evidence_lines, vec![1]);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// `pc record` starts a new line when the existing log lacks a trailing
 /// newline, so the log stays parseable and the reported line is right.
 #[test]
@@ -3226,6 +3357,49 @@ fn init_scaffolds_minimal_valid_plan() {
     let check = pc_ok(&other, &["check"]);
     assert!(check.contains("ok: 1 tasks"), "{check}");
     std::fs::remove_dir_all(&parent).unwrap();
+}
+
+/// `pc init` makes git ignore the lock file guarded MCP writes leave
+/// beside the plan, keeping any existing ignore rules in the directory.
+#[test]
+fn init_ignores_mcp_write_lock_in_git() {
+    let repo = scratch_dir("init-gitignore");
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(git(&["init", "-q"]).status.success());
+    let fresh = repo.join("fresh");
+    let existing = repo.join("existing");
+    std::fs::create_dir_all(&existing).unwrap();
+    std::fs::write(existing.join(".gitignore"), "scratch/").unwrap();
+
+    for dir in [&fresh, &existing] {
+        let output = Command::cargo_bin("pc")
+            .unwrap()
+            .arg("init")
+            .arg(dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::write(dir.join(".plan.toml.lock"), "").unwrap();
+        let status = git(&["status", "--porcelain", "--untracked-files=all"]);
+        let listed = String::from_utf8(status.stdout).unwrap();
+        assert!(!listed.contains(".plan.toml.lock"), "{listed}");
+        assert!(listed.contains("plan.toml"), "{listed}");
+    }
+    let ignored = git(&["check-ignore", "-q", "existing/scratch/file"]);
+    assert!(ignored.status.success(), "existing rules must survive");
+    let rules = std::fs::read_to_string(existing.join(".gitignore")).unwrap();
+    assert_eq!(rules.matches(".plan.toml.lock").count(), 1, "{rules}");
+    std::fs::remove_dir_all(&repo).unwrap();
 }
 
 /// A bare `pc init` scaffolds `.plan/`, and a bare `pc check` finds it.

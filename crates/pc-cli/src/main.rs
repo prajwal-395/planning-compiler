@@ -22,7 +22,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Scaffold a minimal valid plan directory (a `plan.toml` that passes
-    /// `pc check`). Refuses to overwrite an existing plan.
+    /// `pc check`, and a `.gitignore` entry for the `.plan.toml.lock` that
+    /// guarded MCP writes create). Refuses to overwrite an existing plan.
     Init {
         /// Directory to scaffold the plan in. Defaults to `.plan`, which
         /// every other command picks up when run without a path; the
@@ -1133,6 +1134,10 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
             std::process::exit(1);
         }
     };
+    let lock = pc_store::PlanLock::acquire(path).unwrap_or_else(|e| {
+        eprintln!("error[E000]: {e}");
+        std::process::exit(1);
+    });
     let loaded = match pc_store::load(path) {
         Ok(loaded) => loaded,
         Err(e) => {
@@ -1154,9 +1159,8 @@ fn run_record(evidence_path: &std::path::Path, path: &std::path::Path) {
         eprintln!("error[E014]: {}", conflict.message());
         std::process::exit(1);
     }
-    let plan_file = std::path::PathBuf::from(&loaded.display_path);
-    match pc_store::append_evidence(&plan_file, &record) {
-        Ok((log, line)) => {
+    match lock.append_evidence(&record) {
+        Ok((log, line, _revision)) => {
             println!(
                 "recorded {} {}={}{} to {}:{line}",
                 record.subject,
@@ -1569,6 +1573,10 @@ fn run_init(path: Option<PathBuf>, json: bool) {
             std::process::exit(1);
         }
     }
+    let ignore = path.join(".gitignore");
+    if let Err(e) = ensure_ignored(&ignore, ".plan.toml.lock") {
+        eprintln!("warning: cannot update `{}`: {e}", ignore.display());
+    }
     if json {
         println!(
             "{}",
@@ -1580,6 +1588,30 @@ fn run_init(path: Option<PathBuf>, json: bool) {
         return;
     }
     println!("initialized plan at {}", file.display());
+}
+
+/// Append `entry` to a `.gitignore` unless a line already matches it.
+fn ensure_ignored(ignore: &std::path::Path, entry: &str) -> std::io::Result<()> {
+    let existing = match std::fs::read_to_string(ignore) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    if existing.lines().any(|line| line.trim() == entry) {
+        return Ok(());
+    }
+    let separator = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(ignore)
+        .and_then(|mut f| {
+            std::io::Write::write_all(&mut f, format!("{separator}{entry}\n").as_bytes())
+        })
 }
 
 /// Handler for `pc check`.
@@ -1668,11 +1700,10 @@ fn run_schema(
     if let Some(path) = out {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
+            && let Err(e) = std::fs::create_dir_all(parent)
         {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
-                std::process::exit(1);
-            }
+            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+            std::process::exit(1);
         }
         if let Err(e) = std::fs::write(path, &text) {
             eprintln!("error[E000]: cannot write `{}`: {e}", path.display());
@@ -2139,7 +2170,7 @@ fn write_edited(loaded: &pc_store::LoadedPlan, edited: &pc_ir::PlanDoc) {
         .len()
         .saturating_sub(loaded.evidence_lines.len());
     file_doc.evidence.truncate(inline);
-    if let Err(e) = pc_store::write_plan(&plan_file, &file_doc) {
+    if let Err(e) = pc_store::write_plan_if_revision(&plan_file, &loaded.revision, &file_doc) {
         eprintln!("error[E000]: {e}");
         std::process::exit(1);
     }
@@ -2323,11 +2354,10 @@ fn run_import_tasks_axi(backlog_path: &std::path::Path, path: Option<PathBuf>) {
     }
     if let Some(parent) = file.parent()
         && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
     {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
-            std::process::exit(1);
-        }
+        eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+        std::process::exit(1);
     }
     if let Err(e) = std::fs::write(&file, &rendered) {
         eprintln!("error[E000]: cannot write `{}`: {e}", file.display());
@@ -2362,11 +2392,10 @@ fn run_export_tasks_axi(backlog_path: &std::path::Path, path: &std::path::Path) 
     let text = pc_adapter_tasks_axi::render_backlog(&backlog);
     if let Some(parent) = backlog_path.parent()
         && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
     {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
-            std::process::exit(1);
-        }
+        eprintln!("error[E000]: cannot create `{}`: {e}", parent.display());
+        std::process::exit(1);
     }
     if let Err(e) = std::fs::write(backlog_path, &text) {
         eprintln!(
