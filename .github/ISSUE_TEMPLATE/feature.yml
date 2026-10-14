@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new capability, pass, or workflow
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are discussed as planning problems: what decision
+        should the compiler help with, and how would we know it worked?
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What planning decision is hard or unsupported today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change (new pass, command, IR field, adapter)? Sketch the semantics, not just the syntax.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How would we verify this (new diagnostic code, golden fixture, benchmark scenario)?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - IR / schemas (pc-ir)
+        - Passes / selection (pc-core, pc-select)
+        - CLI (pc-cli)
+        - MCP server (pc-mcp)
+        - Adapters / sync (pc-adapter-*, pc-sync)
+        - Benchmarks (pc-bench)
+        - Docs / community
+        - Other

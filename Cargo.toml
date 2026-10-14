@@ -18,6 +18,11 @@ members = [
 edition = "2024"
 rust-version = "1.89"
 publish = false
+# Dual-licensed MIT OR Apache-2.0 (see LICENSE-MIT, LICENSE-APACHE;
+# docs/adr/0001-license-deferred.md records the earlier deferral).
+# Crates inherit this via `license.workspace = true` so one edit changes it.
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/prajwal-395/planning-compiler"
 
 [workspace.lints.clippy]
 all = "warn"

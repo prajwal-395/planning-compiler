@@ -1,8 +1,12 @@
 [package]
 name = "pc-cli"
 version = "0.1.0"
+description = "The `pc` command-line planning compiler"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
 publish.workspace = true
 
 [[bin]]

@@ -1,7 +1,21 @@
 # Contributing
 
-Steps 0-6 rules. The repo is private and unlicensed (see
-`docs/adr/0001-license-deferred.md`); do not publish to crates.io.
+Everyone is welcome. By participating you agree to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately per
+[`SECURITY.md`](SECURITY.md), never in a public issue.
+
+Licensed under `MIT OR Apache-2.0` (see `LICENSE-MIT` and `LICENSE-APACHE`).
+The crates stay `publish = false` for now, so do not publish to crates.io.
+
+## How to contribute
+
+1. For anything beyond a small fix, open an issue first (bug report or
+   feature request templates) so the design can be discussed.
+2. Fork, branch, and open a pull request against `main`. The PR template
+   lists the checks your change must pass.
+3. CI runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`,
+   `cargo-deny`, and a schema-staleness check on every push and PR. Run the
+   loop below locally before pushing.
 
 ## Loop
 
@@ -13,7 +27,6 @@ cargo deny --workspace check licenses advisories bans sources
 ```
 
 `cargo deny` needs the RustSec advisory DB on first run (network).
-`initial context.md` at the repo root is source material: never edit it.
 
 ## Adding a diagnostic
 

@@ -1,8 +1,14 @@
 [package]
 name = "pc-adapter-tasks-axi"
 version = "0.1.0"
+description = "tasks-axi backlog import and export adapter for plan compilation"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["planning", "adapter", "backlog"]
+categories = ["development-tools", "parser-implementations"]
 publish.workspace = true
 
 [dependencies]

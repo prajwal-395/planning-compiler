@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible problem with the compiler
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please fill in what you can; a minimal
+        `plan.toml` (or fixture) that reproduces the problem helps most.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit SHA, tag, or `pc` version you ran.
+      placeholder: e.g. main @ abc1234
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran and what you saw (include the diagnostic code, e.g. E008, if there is one).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What the compiler should have done instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest plan.toml / patch / commands that reproduce it. Paste inline or link a gist.
+      render: toml
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Rust version (`rustc --version`), and anything unusual about the setup.

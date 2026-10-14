@@ -37,9 +37,34 @@ v0 specifically does not:
   planned makespan only, running work stays with the execution stack),
 - model people (`docs/adr/0003-no-human-executors.md`).
 
-State is text files in the repo (`docs/adr/0002-text-files.md`). The repo
-is private and unlicensed pending a later decision
-(`docs/adr/0001-license-deferred.md`).
+State is text files in the repo (`docs/adr/0002-text-files.md`).
+
+## Install
+
+Requires Rust 1.89 or newer ([rustup](https://rustup.rs) recommended).
+
+```sh
+git clone https://github.com/prajwal-395/planning-compiler.git
+cd planning-compiler
+cargo build --workspace          # debug build; binaries at target/debug/pc and target/debug/pc-mcp
+cargo install --path crates/pc-cli   # optional: install `pc` into ~/.cargo/bin
+```
+
+## Quick example
+
+Check the project's own plan (the dogfood fixture) and compile it:
+
+```sh
+cargo run -q -p pc-cli -- check examples/self-plan/plan.toml
+cargo run -q -p pc-cli -- compile examples/self-plan/plan.toml
+```
+
+Or scaffold a fresh plan and validate it:
+
+```sh
+pc init my-plan
+pc check my-plan
+```
 
 ## Layout
 
@@ -162,3 +187,27 @@ cargo run -q -p pc-cli -- schema --patch --out schema/patch.schema.json
 
 See `CONTRIBUTING.md` for the full loop and `docs/passes.md` for the
 diagnostic catalogue.
+
+## Contributing
+
+Contributions are welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for the development loop and conventions, follow the
+[Code of Conduct](CODE_OF_CONDUCT.md), and report security issues privately
+as described in [`SECURITY.md`](SECURITY.md). Open an issue first for larger
+changes so the design can be discussed before code is written.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. The license is also recorded in every crate's `Cargo.toml`
+(inherited from `[workspace.package]`).
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this project shall be licensed as above, without
+additional terms.
+
+The crates stay `publish = false` for now, so do not publish to crates.io.

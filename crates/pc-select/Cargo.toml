@@ -1,8 +1,14 @@
 [package]
 name = "pc-select"
 version = "0.1.0"
+description = "Exact and heuristic method-selection solvers for plan compilation"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["optimization", "scheduling", "planning"]
+categories = ["algorithms", "development-tools"]
 publish.workspace = true
 
 [dependencies]

@@ -1,8 +1,14 @@
 [package]
 name = "pc-mcp"
 version = "0.1.0"
+description = "MCP server exposing the planning compiler to tool-only agents"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["planning", "mcp", "compiler"]
+categories = ["development-tools", "command-line-utilities"]
 publish.workspace = true
 
 [[bin]]

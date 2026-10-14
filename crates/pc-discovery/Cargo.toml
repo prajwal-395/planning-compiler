@@ -1,8 +1,14 @@
 [package]
 name = "pc-discovery"
 version = "0.1.0"
+description = "Deterministic capability-discovery adapters emitting propose patches"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["planning", "discovery", "capabilities"]
+categories = ["development-tools", "command-line-utilities"]
 publish.workspace = true
 
 [dependencies]

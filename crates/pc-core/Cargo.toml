@@ -1,8 +1,14 @@
 [package]
 name = "pc-core"
 version = "0.1.0"
+description = "Validation passes, method selection, scheduling, frontier, and impact analysis"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["planning", "scheduling", "optimization", "compiler"]
+categories = ["algorithms", "development-tools"]
 publish.workspace = true
 
 [dependencies]

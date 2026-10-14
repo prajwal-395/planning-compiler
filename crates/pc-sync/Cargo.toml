@@ -1,8 +1,14 @@
 [package]
 name = "pc-sync"
 version = "0.1.0"
+description = "Explicit-mapping reconciliation of external task lifecycle state"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["planning", "sync", "reconciliation"]
+categories = ["development-tools", "command-line-utilities"]
 publish.workspace = true
 
 [dependencies]
