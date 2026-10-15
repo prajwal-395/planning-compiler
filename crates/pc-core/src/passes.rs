@@ -693,7 +693,6 @@ fn check_contracts(ctx: &mut Ctx) {
             continue;
         };
         let subject = format!("method:{id}");
-        let line = ctx.locate_id(&id);
         for missing in missing_fields(task_produces, cap_produces) {
             ctx.error(
                 "E008",
@@ -701,7 +700,7 @@ fn check_contracts(ctx: &mut Ctx) {
                     "method `{id}` cannot satisfy task `{task_id}`: \
                      capability `{cap_id}` does not produce `{missing}`"
                 ),
-                line,
+                ctx.locate_id(&id),
                 subject.clone(),
             );
         }
@@ -714,7 +713,7 @@ fn check_contracts(ctx: &mut Ctx) {
                     "method `{id}` cannot run: capability `{cap_id}` \
                      consumes `{missing}` which task `{task_id}` does not provide"
                 ),
-                line,
+                ctx.locate_id(&id),
                 subject.clone(),
             );
         }
@@ -913,14 +912,13 @@ fn check_method_shapes(ctx: &mut Ctx) {
             continue;
         }
         let subject = format!("method:{}", m.id);
-        let line = ctx.locate_id(&m.id);
         match m.kind {
             pc_ir::MethodKind::Invoke => {
                 if m.capability.is_none() {
                     ctx.error(
                         "E013",
                         format!("invoke method `{}` names no capability", m.id),
-                        line,
+                        ctx.locate_id(&m.id),
                         subject.clone(),
                     );
                 }
@@ -931,7 +929,7 @@ fn check_method_shapes(ctx: &mut Ctx) {
                             "invoke method `{}` must not list subtasks or order edges",
                             m.id
                         ),
-                        line,
+                        ctx.locate_id(&m.id),
                         subject.clone(),
                     );
                 }
@@ -941,7 +939,7 @@ fn check_method_shapes(ctx: &mut Ctx) {
                     ctx.error(
                         "E013",
                         format!("decompose method `{}` must not name a capability", m.id),
-                        line,
+                        ctx.locate_id(&m.id),
                         subject.clone(),
                     );
                 }
@@ -949,7 +947,7 @@ fn check_method_shapes(ctx: &mut Ctx) {
                     ctx.error(
                         "E013",
                         format!("decompose method `{}` lists no subtasks", m.id),
-                        line,
+                        ctx.locate_id(&m.id),
                         subject.clone(),
                     );
                 }
@@ -969,7 +967,7 @@ fn check_method_shapes(ctx: &mut Ctx) {
                                     "method `{}` orders `{end}`, which is not one of its subtasks",
                                     m.id
                                 ),
-                                line,
+                                ctx.locate_id(&m.id),
                                 subject.clone(),
                             );
                         }

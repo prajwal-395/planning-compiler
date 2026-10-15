@@ -693,6 +693,66 @@ mod tests {
         assert_eq!(generate(&spec), generate(&spec));
     }
 
+    // Regression/equivalence check for the lazy source-line lookup used by
+    // validation: diagnostics and object counts stay equal for every
+    // generated workload, and release solver outcomes match the baseline.
+    #[test]
+    fn validation_preserves_benchmark_workload_results() {
+        for spec in all_scenarios() {
+            let generated = generate(&spec);
+            let text = pc_ir::to_toml(&generated).expect("generator TOML serializes");
+            let mut checked: PlanDoc = pc_ir::from_toml(&text).expect("generator TOML parses");
+            let report = pc_core::passes::check("bench.toml", &text, &mut checked, None);
+
+            assert!(
+                report.diagnostics.is_empty(),
+                "{} diagnostics: {:?}",
+                spec.name,
+                report.diagnostics
+            );
+            assert_eq!(
+                report.counts.tasks,
+                generated.task.len(),
+                "{} tasks",
+                spec.name
+            );
+            assert_eq!(
+                report.counts.methods,
+                generated.method.len(),
+                "{} methods",
+                spec.name
+            );
+            assert_eq!(
+                report.counts.capabilities,
+                generated.capability.len(),
+                "{} capabilities",
+                spec.name
+            );
+            assert_eq!(report.counts.errors, 0, "{} errors", spec.name);
+
+            let (compiled, selection) = pc_core::compile_with_objective_and_selection_duration(
+                &checked,
+                Duration::from_millis(2000),
+                pc_core::Objective::TotalEffort,
+            )
+            .unwrap_or_else(|error| panic!("{} compile: {error}", spec.name));
+            assert_eq!(compiled.root_task, "root", "{} root task", spec.name);
+            if !cfg!(debug_assertions) {
+                let expected_optimality = if spec.large { "greedy-only" } else { "optimal" };
+                let actual_optimality = match selection.optimality {
+                    pc_core::Optimality::Optimal => "optimal",
+                    pc_core::Optimality::BestFound { .. } => "best-found",
+                    pc_core::Optimality::GreedyOnly => "greedy-only",
+                };
+                assert_eq!(
+                    actual_optimality, expected_optimality,
+                    "{} release selection changed",
+                    spec.name
+                );
+            }
+        }
+    }
+
     // Defect this would catch: a runner that reports task counts or solver
     // status inconsistent with the generated plan (wrong doc measured).
     #[test]
