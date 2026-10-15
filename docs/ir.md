@@ -106,12 +106,15 @@ How measured totals render as observed ranges is owned by P5 in `passes.md`.
   optional observation count) and the expected utility of every available
   implementation under that hypothesis. Utilities and cost share one scale
   (higher is better). A missing probability means unknown, never a midpoint:
-  such models carry no EVSI. P2 check E017 requires finite sourced inputs,
+  such models carry no EVPI upper-bound interval. P2 check E017 requires
+  finite sourced inputs,
   method alternatives belonging to the task, the same alternative set under
   every hypothesis covering every accepted method (at least one), and
   bounds that admit a
   distribution summing to 1; P8
-  evaluates the EVSI interval against the prior-optimal implementation,
+  evaluates an EVPI upper bound (perfect revelation of the true hypothesis)
+  against the prior-optimal implementation, since real observations can be
+  noisy,
   reports any switch gain separately, and explains when the investigation
   outranks implementing the preferred approach (see `passes.md`).
 

@@ -1316,7 +1316,7 @@ fn check_investigations(ctx: &mut Ctx) {
                     hypothesis.id
                 ));
             }
-            // EVSI compares the same implementations under every hypothesis,
+            // EVPI compares the same implementations under every hypothesis,
             // so each hypothesis must value the same alternative set.
             match &expected_alternatives {
                 None => {

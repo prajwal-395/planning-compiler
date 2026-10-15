@@ -126,7 +126,8 @@ pub struct ProbabilityEstimate {
 #[serde(deny_unknown_fields)]
 pub struct HypothesisAlternativeValue {
     /// Method id for this task; every hypothesis in one investigation must
-    /// value the same alternative set so EVSI compares like with like.
+    /// value the same alternative set so the EVPI upper bound compares like
+    /// with like. It assumes the investigation reveals the true hypothesis.
     pub alternative: String,
     /// Expected utility if this implementation runs and the hypothesis holds.
     pub value: f64,

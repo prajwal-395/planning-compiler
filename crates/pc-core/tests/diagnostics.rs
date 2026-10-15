@@ -840,7 +840,7 @@ fn e017_accepts_unknown_probability() {
 
 #[test]
 fn e017_rejects_divergent_alternative_sets() {
-    // EVSI compares the same implementations under every hypothesis, so a
+    // EVPI compares the same implementations under every hypothesis, so a
     // hypothesis valuing a different set must fail validation.
     let (text, mut doc) = investigation_doc();
     doc.investigation[0].hypotheses[1].alternatives.pop();
@@ -891,7 +891,7 @@ fn e017_rejects_known_lows_past_one_beside_an_unknown_probability() {
 
 #[test]
 fn e017_rejects_hypotheses_missing_an_accepted_method() {
-    // P6 may select any accepted method, so EVSI needs its value under every
+    // P6 may select any accepted method, so EVPI needs its value under every
     // hypothesis; otherwise the model silently yields no VOI.
     let (text, mut doc) = investigation_doc();
     for hypothesis in &mut doc.investigation[0].hypotheses {

@@ -2304,8 +2304,8 @@ fn run_frontier(path: &std::path::Path, json: bool, selection_time_budget_ms: u6
                 voi.switch_candidates.join(", ")
             };
             println!(
-                "  value of information: EVSI [{:.3}, {:.3}] -> {} ({methods}): {}",
-                voi.evsi_low, voi.evsi_high, voi.conclusion, voi.explanation,
+                "  value of information: EVPI upper bound [{:.3}, {:.3}] -> {} ({methods}): {}",
+                voi.evpi_low, voi.evpi_high, voi.conclusion, voi.explanation,
             );
         }
         if let Some(reason) = &item.value_of_information_unknown {

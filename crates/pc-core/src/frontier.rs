@@ -118,8 +118,8 @@ pub struct FrontierItem {
 
 /// A plan question worth investigating, separate from work ready to execute.
 /// `investigation_cost` carries the explicit `investigation` cost when the
-/// task has a validated model, and `value_of_information` carries the EVSI
-/// interval when every required probability is explicit and
+/// task has a validated model, and `value_of_information` carries the EVPI
+/// upper-bound interval when every required probability is explicit and
 /// provenance-backed. Unknown probabilities stay unknown (no midpoint is
 /// fabricated), so such models carry no VOI. Change likelihood stays unknown:
 /// the IR carries no likelihood model for it.
@@ -144,8 +144,10 @@ pub struct DiscoveryItem {
     pub investigation_cost: Option<f64>,
     /// Likelihood that investigation materially changes the selected plan.
     pub material_change_likelihood: Option<f64>,
-    /// EVSI interval in utility points, when every required probability is
-    /// explicit and provenance-backed.
+    /// EVPI-based upper-bound interval in utility points, when every required
+    /// probability is explicit and provenance-backed. It assumes an
+    /// investigation reveals the true hypothesis; noisy observations are
+    /// worth no more than this bound.
     pub value_of_information: Option<ValueOfInformation>,
     /// Why the task's investigation model yields no `value_of_information`
     /// (for example an unknown probability); `None` when there is no model
@@ -158,12 +160,14 @@ pub struct DiscoveryItem {
 /// Result of evaluating an explicit investigation model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValueOfInformation {
-    /// Lower bound on expected value with information, minus the value of
-    /// the prior-optimal choice and the investigation cost.
-    pub evsi_low: f64,
-    /// Upper bound on expected value with information, minus the value of
-    /// the prior-optimal choice and the investigation cost.
-    pub evsi_high: f64,
+    /// Lower bound on the expected value under perfect information, minus the
+    /// value of the prior-optimal choice and the investigation cost. This is
+    /// an upper bound on the net value of a noisy investigation.
+    pub evpi_low: f64,
+    /// Upper bound on the expected value under perfect information, minus the
+    /// value of the prior-optimal choice and the investigation cost. This is
+    /// an upper bound on the net value of a noisy investigation.
+    pub evpi_high: f64,
     /// Lower bound on the gain from switching away from the selected method
     /// on current beliefs alone; never counted as information value.
     pub switch_gain_low: f64,
@@ -230,7 +234,8 @@ pub struct FrontierReport {
     pub blocked: Vec<FrontierItem>,
     /// Ranked information-acquisition work. Entries with an explicit
     /// `investigation` model carry its cost and, when every required
-    /// probability is explicit and provenance-backed, its EVSI interval;
+    /// probability is explicit and provenance-backed, its EVPI upper-bound
+    /// interval;
     /// unknown probabilities stay unknown and carry no VOI.
     pub discovery: Vec<DiscoveryItem>,
 }
@@ -607,7 +612,7 @@ pub fn frontier(doc: &PlanDoc, compiled: &CompiledPlan) -> FrontierReport {
     }
 }
 
-/// EVSI for `task`'s investigation model against a baseline: the `selected`
+/// EVPI upper bound for `task`'s investigation model against a baseline: the `selected`
 /// method, else (a task outside the selected plan) the `accepted` method
 /// with the highest worst-case expected value over the bounds, ties broken
 /// by id; E017 guarantees every hypothesis values each accepted method.
@@ -636,7 +641,7 @@ fn evaluate_voi(
         }
         let Some(probability) = hypothesis.probability.as_ref() else {
             return Err(format!(
-                "hypothesis `{id}` has an unknown probability, so EVSI stays unknown"
+                "hypothesis `{id}` has an unknown probability, so EVPI stays unknown"
             ));
         };
         if !probability.low.is_finite()
@@ -714,9 +719,11 @@ fn evaluate_voi(
         .collect();
     let difference =
         |a: &[f64], b: &[f64]| -> Vec<f64> { a.iter().zip(b).map(|(x, y)| x - y).collect() };
-    // EVSI(p) = E_p[max_a V] - max_a E_p[V(a)] = min_a E_p[best - V(a)].
+    // EVPI(p) = E_p[max_a V] - max_a E_p[V(a)] = min_a E_p[best - V(a)].
+    // This assumes perfect revelation of the hypothesis and bounds any
+    // investigation whose observation is noisy.
     let regret: Vec<Vec<f64>> = values.values().map(|row| difference(&best, row)).collect();
-    let evsi_low = regret
+    let evpi_low = regret
         .iter()
         .map(|row| expected_bound(&bounds, row, false))
         .fold(f64::INFINITY, f64::min);
@@ -724,7 +731,7 @@ fn evaluate_voi(
         .iter()
         .map(|row| row.iter().map(|value| -value).collect())
         .collect();
-    let evsi_high = -minimax_expectation(&bounds, &negated).ok_or_else(unsolved)?;
+    let evpi_high = -minimax_expectation(&bounds, &negated).ok_or_else(unsolved)?;
     // Switch gain(p) = max_a E_p[V(a) - V(selected)]: the gain from acting on
     // current beliefs alone, never information value.
     let advantage: Vec<(&str, Vec<f64>)> = values
@@ -767,8 +774,8 @@ fn evaluate_voi(
     } else {
         Vec::new()
     };
-    let low = evsi_low - model.cost;
-    let high = evsi_high - model.cost;
+    let low = evpi_low - model.cost;
+    let high = evpi_high - model.cost;
     let conclusion = if low > 0.0 {
         "investigation-outweighs-implementation"
     } else if high > 0.0 {
@@ -795,15 +802,15 @@ fn evaluate_voi(
         )
     };
     Ok(ValueOfInformation {
-        evsi_low: low,
-        evsi_high: high,
+        evpi_low: low,
+        evpi_high: high,
         switch_gain_low: switch_low,
         switch_gain_high: switch_high,
         preferred_method: preferred.to_string(),
         switch_candidates: switch_candidates.iter().map(ToString::to_string).collect(),
         conclusion: conclusion.to_string(),
         explanation: format!(
-            "EVSI [{low:.3}, {high:.3}] utility points over the prior-optimal choice after cost {:.3} from {}; {switch}{scope}; hypothesis probability sources: {}",
+            "EVPI upper bound [{low:.3}, {high:.3}] utility points over the prior-optimal choice after cost {:.3} from {}; assumes the investigation reveals the true hypothesis, so noisy observations are worth no more; {switch}{scope}; hypothesis probability sources: {}",
             model.cost,
             model.cost_source,
             sources.join(", ")
@@ -1804,7 +1811,7 @@ estimates = [{ metric = "duration_minutes", low = 10.0, likely = 20.0, high = 30
     /// Base plan for VOI tests: `work` selects accepted `work-keep`, with a
     /// proposed `work-try` alternative. Hypothesis `h-slow` (keep 10, try 20)
     /// and `h-fast` (keep 18, try 12) each carry probability [0.4, 0.6]. With
-    /// p = P(h-slow), pre-cost EVSI is min(10p, 6(1 - p)) in [2.4, 3.6] and
+    /// p = P(h-slow), pre-cost EVPI is min(10p, 6(1 - p)) in [2.4, 3.6] and
     /// work-try beats work-keep on current beliefs by 16p - 6 in [0.4, 3.6].
     fn voi_plan(cost: f64) -> PlanDoc {
         let text = r#"
@@ -1929,18 +1936,35 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
 
     #[test]
     fn voi_outweighs_implementation_when_gain_exceeds_cost() {
-        // Catches a missing or sign-flipped cost subtraction: EVSI [2.4, 3.6]
+        // Catches a missing or sign-flipped cost subtraction: EVPI [2.4, 3.6]
         // minus cost 1 must stay positive throughout.
         let mut plan = voi_plan(1.0);
         let voi = voi_of(&mut plan);
-        assert_interval((voi.evsi_low, voi.evsi_high), (1.4, 2.6));
+        assert_interval((voi.evpi_low, voi.evpi_high), (1.4, 2.6));
         assert_eq!(voi.conclusion, "investigation-outweighs-implementation");
         assert!(voi.explanation.contains("work-keep"), "{}", voi.explanation);
     }
 
     #[test]
+    fn voi_json_uses_evpi_field_names_and_identifies_the_upper_bound() {
+        let mut plan = voi_plan(1.0);
+        let voi = voi_of(&mut plan);
+        let json = serde_json::to_value(voi).unwrap();
+        assert!(json.get("evpi_low").is_some());
+        assert!(json.get("evpi_high").is_some());
+        assert!(json.get("evsi_low").is_none());
+        assert!(json.get("evsi_high").is_none());
+        assert!(
+            json["explanation"]
+                .as_str()
+                .unwrap()
+                .contains("EVPI upper bound")
+        );
+    }
+
+    #[test]
     fn voi_measures_information_against_the_prior_optimal_choice() {
-        // Catches measuring EVSI against the selected method: at p = 0.5,
+        // Catches measuring EVPI against the selected method: at p = 0.5,
         // E[keep] = 14 and E[try] = 16, so information is worth 19 - 16 = 3,
         // not 19 - 14 = 5; the 2 from switching is reported separately.
         let mut plan = voi_plan(0.0);
@@ -1950,7 +1974,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
             probability.high = 0.5;
         }
         let voi = voi_of(&mut plan);
-        assert_interval((voi.evsi_low, voi.evsi_high), (3.0, 3.0));
+        assert_interval((voi.evpi_low, voi.evpi_high), (3.0, 3.0));
         assert_interval((voi.switch_gain_low, voi.switch_gain_high), (2.0, 2.0));
         assert_eq!(voi.preferred_method, "work-try");
     }
@@ -1966,7 +1990,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
             hypothesis.alternatives[1].value = keep + 10.0;
         }
         let voi = voi_of(&mut plan);
-        assert_interval((voi.evsi_low, voi.evsi_high), (-1.0, -1.0));
+        assert_interval((voi.evpi_low, voi.evpi_high), (-1.0, -1.0));
         assert_interval((voi.switch_gain_low, voi.switch_gain_high), (10.0, 10.0));
         assert_eq!(voi.preferred_method, "work-try");
         assert_eq!(voi.conclusion, "switch-to-preferred-approach");
@@ -1974,11 +1998,11 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
 
     #[test]
     fn voi_may_outweigh_when_interval_straddles_cost() {
-        // Catches a collapsed point estimate: EVSI [2.4, 3.6] minus cost 3
+        // Catches a collapsed point estimate: EVPI [2.4, 3.6] minus cost 3
         // straddles zero, so the verdict must stay qualified.
         let mut plan = voi_plan(3.0);
         let voi = voi_of(&mut plan);
-        assert_interval((voi.evsi_low, voi.evsi_high), (-0.6, 0.6));
+        assert_interval((voi.evpi_low, voi.evpi_high), (-0.6, 0.6));
         assert_eq!(voi.conclusion, "investigation-may-outweigh-implementation");
     }
 
@@ -1988,7 +2012,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         // work-try still beats work-keep throughout, so switch to it.
         let mut plan = voi_plan(100.0);
         let voi = voi_of(&mut plan);
-        assert!(voi.evsi_high < 0.0);
+        assert!(voi.evpi_high < 0.0);
         assert_interval((voi.switch_gain_low, voi.switch_gain_high), (0.4, 3.6));
         assert_eq!(voi.conclusion, "switch-to-preferred-approach");
     }
@@ -1998,7 +2022,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         // Catches keeping the selected method when it is prior-optimal under
         // no allowed belief: relative to work-keep, work-try is (3, -1) and
         // work-alt is (-1, 3) with p in [0, 1], so some alternative gains at
-        // least 1 everywhere, yet neither wins throughout and EVSI <= 2 < 5.
+        // least 1 everywhere, yet neither wins throughout and EVPI <= 2 < 5.
         let mut plan = voi_plan(5.0);
         let mut alt = plan
             .method
@@ -2026,7 +2050,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
                 });
         }
         let voi = voi_of(&mut plan);
-        assert_interval((voi.evsi_low, voi.evsi_high), (-5.0, -3.0));
+        assert_interval((voi.evpi_low, voi.evpi_high), (-5.0, -3.0));
         assert_interval((voi.switch_gain_low, voi.switch_gain_high), (1.0, 3.0));
         assert_eq!(voi.preferred_method, "work-keep");
         assert_eq!(voi.switch_candidates, ["work-alt", "work-try"]);
@@ -2036,7 +2060,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
     #[test]
     fn voi_bounds_respect_probabilities_summing_to_one() {
         // Catches bounding each hypothesis independently: with [0.3, 0.9]
-        // bounds, h-fast >= 0.3 caps h-slow at 0.7, so pre-cost EVSI is
+        // bounds, h-fast >= 0.3 caps h-slow at 0.7, so pre-cost EVPI is
         // min(10p, 6(1 - p)) over p in [0.3, 0.7]: [1.8, 3.75].
         let mut plan = voi_plan(3.0);
         for hypothesis in &mut plan.investigation[0].hypotheses {
@@ -2045,14 +2069,14 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
             probability.high = 0.9;
         }
         let voi = voi_of(&mut plan);
-        assert_interval((voi.evsi_low, voi.evsi_high), (-1.2, 0.75));
+        assert_interval((voi.evpi_low, voi.evpi_high), (-1.2, 0.75));
         assert_eq!(voi.conclusion, "investigation-may-outweigh-implementation");
     }
 
     #[test]
     fn voi_stays_unknown_when_a_probability_is_unknown() {
         // Catches fabricating a midpoint for a missing probability: the
-        // cost is still reported, but no EVSI interval may appear.
+        // cost is still reported, but no EVPI interval may appear.
         let mut plan = voi_plan(1.0);
         plan.investigation[0].hypotheses[1].probability = None;
         assert!(checked(&mut plan).ok());
@@ -2063,13 +2087,13 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         assert_eq!(entry.value_of_information, None);
         assert_eq!(
             entry.value_of_information_unknown.as_deref(),
-            Some("hypothesis `h-fast` has an unknown probability, so EVSI stays unknown")
+            Some("hypothesis `h-fast` has an unknown probability, so EVPI stays unknown")
         );
     }
 
     #[test]
     fn voi_stays_unknown_when_bounds_admit_no_distribution() {
-        // Catches emitting EVSI from incoherent bounds (lows sum past 1).
+        // Catches emitting EVPI from incoherent bounds (lows sum past 1).
         let mut plan = voi_plan(1.0);
         for hypothesis in &mut plan.investigation[0].hypotheses {
             hypothesis.probability.as_mut().unwrap().low = 0.55;
@@ -2130,7 +2154,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         let entry = discovery_entry(&report, "task:work");
         assert_eq!(entry.value_of_information_unknown, None);
         let voi = entry.value_of_information.as_ref().unwrap();
-        assert_interval((voi.evsi_low, voi.evsi_high), (1.4, 2.6));
+        assert_interval((voi.evpi_low, voi.evpi_high), (1.4, 2.6));
         assert_eq!(voi.preferred_method, "work-try");
         assert!(
             voi.explanation
@@ -2158,7 +2182,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
             .value_of_information
             .clone()
             .unwrap();
-        assert_interval((voi.evsi_low, voi.evsi_high), (1.4, 2.6));
+        assert_interval((voi.evpi_low, voi.evpi_high), (1.4, 2.6));
         assert_interval((voi.switch_gain_low, voi.switch_gain_high), (0.0, 0.0));
         assert_eq!(voi.preferred_method, "work-try");
         assert!(
@@ -2197,7 +2221,7 @@ estimates = [{ metric = "duration_minutes", low = 1.0, likely = 2.0, high = 3.0,
         let report = frontier(&plan, &compiled);
         let entry = discovery_entry(&report, "task:work");
         let voi = entry.value_of_information.as_ref().unwrap();
-        assert_interval((voi.evsi_low, voi.evsi_high), (-1.0, -1.0));
+        assert_interval((voi.evpi_low, voi.evpi_high), (-1.0, -1.0));
         assert_eq!(voi.preferred_method, "work-keep");
         assert_eq!(voi.conclusion, "implement-preferred-approach");
     }

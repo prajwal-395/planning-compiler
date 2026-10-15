@@ -400,10 +400,13 @@ PC-11 evaluates value of information on that list from explicit
 `investigation` models (P2 check E017). A model names one task, an
 investigation cost with provenance, and mutually exclusive hypotheses, each
 with provenance and probability bounds plus the expected utility of every
-available implementation under that hypothesis. EVSI is the expected value
-of picking the best implementation per hypothesis minus the value of the
-prior-optimal implementation (the best expected value on current beliefs),
-minus the investigation cost; rejected methods never count. It is kept as an
+available implementation under that hypothesis. The calculation is EVPI:
+the expected value of picking the best implementation with the true hypothesis
+known, minus the value of the prior-optimal implementation (the best expected
+value on current beliefs), minus the investigation cost; rejected methods
+never count. Since benchmarks and other investigations can produce noisy
+observations, this is an upper bound on what an investigation can be worth,
+not an estimate of the value of its actual observations. It is kept as an
 interval over every distribution inside the probability bounds that sums to
 1: no midpoint is fabricated, so a model with an unknown probability carries
 no VOI, and bounds that admit no distribution summing to 1 are rejected. The
@@ -427,14 +430,15 @@ highest worst-case expected value over the probability bounds, ties broken by
 id. The explanation says the task is outside the selected plan and names every
 accepted method.
 When a model yields no value, `value_of_information_unknown` gives the reason
-(for example an unknown probability), never a bare empty value. The text prints the
-interval, conclusion, preferred method (the switch candidates instead, when
-there are any) and explanation under the entry,
-which is how the compiler explains why an investigation might outrank
-implementing the preferred approach. An explicit model is itself structured
-uncertainty, so a task carrying one stays on the discovery list even when the
-plan otherwise looks settled. Change likelihood still serializes as `null`: the IR carries
-no likelihood model for it.
+(for example an unknown probability), never a bare empty value. The text prints
+the EVPI upper-bound interval, conclusion, preferred method (the switch
+candidates instead, when there are any) and explanation under the entry,
+which is how the compiler explains how the EVPI upper-bound interval compares
+with implementing the preferred approach; the conclusion describes this
+upper bound, not the value of noisy observations. An explicit model is itself
+structured uncertainty, so a task carrying one stays on the discovery list
+even when the plan otherwise looks settled. Change likelihood still serializes
+as `null`: the IR carries no likelihood model for it.
 
 ## P9: impact/diff (step 6)
 

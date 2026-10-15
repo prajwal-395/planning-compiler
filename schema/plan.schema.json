@@ -392,7 +392,7 @@
       "description": "Utility for an implementation under one hypothesis.",
       "properties": {
         "alternative": {
-          "description": "Method id for this task; every hypothesis in one investigation must value the same alternative set so EVSI compares like with like.",
+          "description": "Method id for this task; every hypothesis in one investigation must value the same alternative set so the EVPI upper bound compares like with like. It assumes the investigation reveals the true hypothesis.",
           "type": "string"
         },
         "value": {
