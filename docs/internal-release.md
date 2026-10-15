@@ -115,8 +115,9 @@ Milestone A evidence in this checkout:
 
 - **Holds:** agents can interact through the CLI and MCP tools; decisions
   and outcomes have separate structured records and an evaluation command;
-  compiler runs record planning metrics; automated crate tests cover the
-  compiler workflows. The Ren planning example records a real decision
+  project state reconciles external task state and CI verification; compiler
+  runs record planning metrics; automated crate tests cover the compiler
+  workflows. The Ren planning example records a real decision
   sequence and is explicit that its outcome remains unobserved.
 - **Does not yet hold:** project state is not yet reconciled with CI results;
   PC-05b CI ingestion is pending. The repository contains examples and
@@ -124,9 +125,8 @@ Milestone A evidence in this checkout:
   manual test campaigns has not been established by measured ongoing use.
   Thus the complete Milestone A is not yet met.
 
-PC-09 Pareto evaluation is awaiting a captain decision, and PC-05b CI
-ingestion is still landing. They are pending and are not documented here as
-available behavior. PC-17 measured performance optimizations remain pending;
-the benchmark suite establishes measurements but does not itself optimize
-the Rust implementation. No public package or release is created by this
+PC-09 Pareto evaluation and PC-05 CI verification and drift reconciliation have
+landed and are documented above. PC-17 measured performance optimizations
+remain pending. The benchmark suite establishes measurements but does not
+itself optimize the Rust implementation. No public package or release is created by this
 internal tag.

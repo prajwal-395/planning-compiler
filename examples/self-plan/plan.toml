@@ -184,7 +184,7 @@ state = "open"
 [[task]]
 id = "PC-05"
 title = "Build project-state reconciliation"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-06"
@@ -194,7 +194,7 @@ state = "open"
 [[task]]
 id = "PC-07"
 title = "Add makespan-aware method selection"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-08"
@@ -204,7 +204,7 @@ state = "open"
 [[task]]
 id = "PC-09"
 title = "Add Pareto evaluation"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-10"
@@ -224,7 +224,7 @@ state = "open"
 [[task]]
 id = "PC-13"
 title = "Integrate external capability discovery"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-14"
@@ -239,7 +239,7 @@ state = "open"
 [[task]]
 id = "PC-16"
 title = "Create representative benchmark suite"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-17"
@@ -357,6 +357,11 @@ provenance = "agent:crewmate"
 assumptions = [
   "Retrospective accepted as step 8's first proof point (3/3 pass with documented nuances).",
   "The original two-week criteria remain historical and unmet (docs/evidence/dogfood.md, 2026-10-13 policy); continuous validation is an ongoing process outside any decomposition, and the live Ren cycle moved to PC-06.",
+  "PC-05 project-state reconciliation is done via merged https://github.com/prajwal-395/planning-compiler/pull/27 and https://github.com/prajwal-395/planning-compiler/pull/40 (external task state and CI verification/drift).",
+  "PC-07 makespan-aware method selection is done via merged https://github.com/prajwal-395/planning-compiler/pull/28.",
+  "PC-09 Pareto evaluation is done via merged https://github.com/prajwal-395/planning-compiler/pull/43.",
+  "PC-13 capability discovery is done via merged https://github.com/prajwal-395/planning-compiler/pull/38.",
+  "PC-16 benchmark suite is done via merged https://github.com/prajwal-395/planning-compiler/pull/39.",
 ]
 
 [[method]]

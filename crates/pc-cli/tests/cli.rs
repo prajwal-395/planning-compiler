@@ -851,21 +851,16 @@ fn self_plan_compiles_and_explains_accepted_work() {
             "task:post-mvp-10-rewrite",
             "task:post-mvp-11-mining",
             "task:PC-02",
-            "task:PC-05",
-            "task:PC-07",
+            "task:PC-08",
             "task:PC-10",
             "task:PC-12",
             "task:PC-14",
+            "task:PC-17",
             "task:PC-03",
             "task:PC-04",
             "task:PC-06",
-            "task:PC-08",
-            "task:PC-09",
             "task:PC-11",
-            "task:PC-13",
             "task:PC-15",
-            "task:PC-16",
-            "task:PC-17",
             "task:PC-18",
         ],
         "{report}"
@@ -888,11 +883,11 @@ fn self_plan_compiles_and_explains_accepted_work() {
             "task:post-mvp-10-rewrite",
             "task:post-mvp-11-mining",
             "task:PC-02",
-            "task:PC-05",
-            "task:PC-07",
+            "task:PC-08",
             "task:PC-10",
             "task:PC-12",
             "task:PC-14",
+            "task:PC-17",
             "method:sched-via-aries",
             "task:post-mvp-08-scheduling",
             "method:store-via-postgres",
@@ -907,7 +902,7 @@ fn self_plan_compiles_and_explains_accepted_work() {
     // only on decision recording, never on step-8 or a waiting period.
     let text = frontier(false);
     assert!(
-        text.contains("frontier: 6 ranked, 23 unestimated, 0 blocked"),
+        text.contains("frontier: 6 ranked, 18 unestimated, 0 blocked"),
         "{text}"
     );
     assert!(
@@ -949,7 +944,7 @@ fn self_plan_compile_reports_open_work() {
     );
     assert!(
         text.contains(
-            "open work: estimated weighted cost 335.323 across 2 tasks; 23 open tasks unestimated"
+            "open work: estimated weighted cost 335.323 across 2 tasks; 18 open tasks unestimated"
         ),
         "{text}"
     );
@@ -986,7 +981,7 @@ fn self_plan_compile_reports_open_work() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(unestimated.len(), 23, "{open}");
+    assert_eq!(unestimated.len(), 18, "{open}");
     assert!(unestimated.contains(&"PC-06".to_string()), "{open}");
     assert!(
         !unestimated.contains(&"continuous-validation".to_string()),
