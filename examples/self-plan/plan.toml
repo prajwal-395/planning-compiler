@@ -199,7 +199,7 @@ state = "done"
 [[task]]
 id = "PC-08"
 title = "Introduce resource-constrained planning"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-09"
@@ -209,17 +209,17 @@ state = "done"
 [[task]]
 id = "PC-10"
 title = "Separate execution and discovery frontiers"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-11"
 title = "Introduce value-of-information evaluation"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-12"
 title = "Implement capability inventory"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-13"
@@ -229,12 +229,12 @@ state = "done"
 [[task]]
 id = "PC-14"
 title = "Expand read-only MCP capabilities"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-15"
 title = "Add controlled MCP write operations"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-16"
@@ -244,7 +244,7 @@ state = "done"
 [[task]]
 id = "PC-17"
 title = "Implement measured performance optimizations"
-state = "open"
+state = "done"
 
 [[task]]
 id = "PC-18"

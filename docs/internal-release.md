@@ -105,8 +105,9 @@ are not measurements or Ren evidence.
 
 This internal release brings together decision and outcome records with
 evaluation, explicit task-state reconciliation, resource-constrained
-makespan analysis, execution and discovery frontiers with VOI, capability
-inventory and discovery, generated-plan benchmarking, and read/write MCP
+makespan analysis, execution and discovery frontiers with EVPI upper-bound
+value-of-information analysis, capability inventory and discovery,
+generated-plan benchmarking, and read/write MCP
 tools. The release includes the PC-16 benchmark suite, documented in
 [benchmarks](benchmarks.md). The guide and runner make the
 installation route and these workflows reproducible from a clean checkout.
@@ -115,18 +116,18 @@ Milestone A evidence in this checkout:
 
 - **Holds:** agents can interact through the CLI and MCP tools; decisions
   and outcomes have separate structured records and an evaluation command;
-  project state reconciles external task state and CI verification; compiler
-  runs record planning metrics; automated crate tests cover the compiler
-  workflows. The Ren planning example records a real decision
+  project state reconciles external task state and CI verification/drift;
+  compiler runs record planning metrics; automated crate tests cover the
+  compiler workflows. The Ren planning example records a real decision
   sequence and is explicit that its outcome remains unobserved.
-- **Does not yet hold:** project state is not yet reconciled with CI results;
-  PC-05b CI ingestion is pending. The repository contains examples and
-  automated tests, but the claim that the compiler is used without separate
-  manual test campaigns has not been established by measured ongoing use.
-  Thus the complete Milestone A is not yet met.
+- **Does not yet hold:** automatic CI result ingestion (PC-05b) is pending.
+  The repository contains examples and automated tests, but the claim that
+  the compiler is used without separate manual test campaigns has not been
+  established by measured ongoing use. Thus the complete Milestone A is not
+  yet met.
 
-PC-09 Pareto evaluation and PC-05 CI verification and drift reconciliation have
-landed and are documented above. PC-17 measured performance optimizations
-remain pending. The benchmark suite establishes measurements but does not
-itself optimize the Rust implementation. No public package or release is created by this
+PC-05 CI verification and drift reconciliation, PC-09 Pareto evaluation,
+and PC-17 measured performance optimizations have landed. The benchmark
+suite documents the measured improvements; it does not itself optimize the
+Rust implementation. No public package or release is created by this
 internal tag.

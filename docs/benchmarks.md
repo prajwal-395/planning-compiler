@@ -144,3 +144,18 @@ fell from 42,764 ms to 123 ms (about 348x). `flat-10000` completed before
 and after: its validation fell from 328,549 ms to 4,527 ms, and its full
 scenario from roughly 10 minutes to roughly 23 seconds. Selection outcomes
 and benchmark-generated plans are unchanged.
+
+## P0 decision-quality and overhead smoke (2026-10-16)
+
+One local debug run of `cargo run -q -p pc-cli -- bench` on the default
+six-scenario suite completed with `optimal` selection in all six scenarios
+(6/6). For a simple planning-overhead measure, sum `parse_ms`, `valid_ms`,
+`sel_ms`, `sched_ms`, and `front_ms` from that run; this excludes the
+additional incremental re-run and peak memory. The sums were 5, 52, 65, 56,
+77, and 153 ms for `flat-10`, `flat-100`, `shared-100`, `dense-100`,
+`mesh-100`, and `alts-100`, respectively (68 ms mean). This is a one-run
+smoke measurement, not an estimate of quality on live work or a stable
+latency benchmark. The scenarios are generated in memory, and `optimal`
+means the solver proved the modeled selection optimal under each scenario's
+declared utilities; it does not establish that those utilities represent a
+real project's preferences.

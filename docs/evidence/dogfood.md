@@ -272,3 +272,17 @@ Maintenance: 0.35 minutes timed for the plan and evidence edit session.
 The follow-up review session that moved this note out of the plan's
 evidence into this log was not timed, and says so instead of inventing a
 number.
+
+### Entry 4 - 2026-10-16, current implementation status
+
+The self-plan now marks PC-08, PC-10, PC-11, PC-12, PC-14, PC-15, and PC-17
+done to match the resource-constrained planner, discovery and EVPI upper-bound
+analysis, capability inventory, MCP tools, and measured validation
+optimization present in this checkout. PC-18 remains open while its release
+documentation work is under review; PC-06 remains open and no live Ren render
+was run. `continuous-validation` remains open and outside the decomposition.
+The original two-week criteria remain historical and unmet. The current
+small-suite decision-quality and planning-overhead smoke measurement is
+recorded in [benchmarks](../benchmarks.md#p0-decision-quality-and-overhead-smoke-2026-10-16).
+Maintenance: this documentation and status reconciliation was not timed;
+no changed or caught live decision is claimed from it.
