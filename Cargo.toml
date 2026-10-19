@@ -49,7 +49,7 @@ pc-discovery = { path = "crates/pc-discovery", version = "0.1.0" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = { version = "0.8", features = ["parse", "display"] }
+toml = { version = "1.1", features = ["parse", "display"] }
 schemars = "0.8"
 petgraph = "0.8"
 good_lp = { version = "1.15", default-features = false, features = ["microlp"] }
